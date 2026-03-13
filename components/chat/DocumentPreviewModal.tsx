@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Loader2, FileText, FileSpreadsheet, Maximize2, Minimize2 } from 'lucide-react';
+import { X, Loader2, FileText, FileSpreadsheet, Maximize2, Minimize2, Download } from 'lucide-react';
 
 interface DocumentPreviewModalProps {
   isOpen: boolean;
@@ -33,12 +33,71 @@ const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({ isOpen, onC
   const [loading, setLoading] = useState<'docx' | 'pdf' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [excelSheets, setExcelSheets] = useState<Array<{ name: string; rows: string[][] }>>([]);
+  const [excelLoading, setExcelLoading] = useState(false);
+  const [selectedSheet, setSelectedSheet] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     setEditedContent(data.content || '');
     setError(null);
+    setExcelSheets([]);
+    setSelectedSheet(0);
   }, [data.content]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadExcelPreview = async () => {
+      if (!isOpen || data.type !== 'excel' || !data.url) return;
+
+      setExcelLoading(true);
+      setError(null);
+
+      try {
+        const response = await fetch(data.url);
+        if (!response.ok) {
+          throw new Error(`falha ao baixar arquivo (${response.status})`);
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        const XLSX = await import('xlsx');
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+
+        const sheets = workbook.SheetNames.map((sheetName) => {
+          const sheet = workbook.Sheets[sheetName];
+          const rows = XLSX.utils.sheet_to_json<(string | number | boolean | null)[]>(sheet, {
+            header: 1,
+            raw: false,
+            defval: '',
+          });
+
+          return {
+            name: sheetName,
+            rows: rows.map((row) => row.map((cell) => String(cell ?? ''))),
+          };
+        });
+
+        if (!cancelled) {
+          setExcelSheets(sheets);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setError(`Erro ao abrir planilha: ${e.message}`);
+        }
+      } finally {
+        if (!cancelled) {
+          setExcelLoading(false);
+        }
+      }
+    };
+
+    loadExcelPreview();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, data.type, data.url]);
 
   useEffect(() => {
     if (isOpen && data.type === 'text_doc' && textareaRef.current) {
@@ -71,6 +130,31 @@ const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({ isOpen, onC
       setError(`Erro ao gerar ${fmt.toUpperCase()}: ${e.message}`);
     } finally {
       setLoading(null);
+    }
+  };
+
+  const handleDirectDownload = async () => {
+    if (!data.url) return;
+
+    try {
+      setError(null);
+      const response = await fetch(data.url);
+      if (!response.ok) {
+        throw new Error(`falha ao baixar arquivo (${response.status})`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const extension = data.type === 'excel' ? 'xlsx' : data.type === 'pdf' ? 'pdf' : '';
+      a.href = objectUrl;
+      a.download = extension ? `${data.title.replace(/\s+/g, '_')}.${extension}` : data.title.replace(/\s+/g, '_');
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (e: any) {
+      setError(`Erro ao baixar arquivo: ${e.message}`);
     }
   };
 
@@ -153,11 +237,70 @@ const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({ isOpen, onC
           )}
 
           {data.type === 'excel' && data.url && (
-            <iframe
-              src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(data.url)}`}
-              className="w-full h-full border-none bg-white"
-              title="Excel Preview"
-            />
+            <div className="h-full bg-[#141416] flex flex-col">
+              {excelLoading ? (
+                <div className="flex-1 flex items-center justify-center text-neutral-400 gap-2">
+                  <Loader2 size={16} className="animate-spin" />
+                  <span className="text-sm">Carregando planilha...</span>
+                </div>
+              ) : excelSheets.length > 0 ? (
+                <>
+                  <div className="px-4 py-3 border-b border-[#1e1e1e] bg-[#111113] flex items-center gap-2 overflow-x-auto shrink-0">
+                    {excelSheets.map((sheet, index) => (
+                      <button
+                        key={sheet.name}
+                        onClick={() => setSelectedSheet(index)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
+                          selectedSheet === index
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-[#1a1a1d] border border-[#2a2a2d] text-neutral-300 hover:bg-[#222]'
+                        }`}
+                      >
+                        {sheet.name}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex-1 overflow-auto p-4">
+                    <div className="min-w-full bg-[#0e0e11] border border-[#1e1e22] rounded-xl overflow-hidden">
+                      <table className="w-full text-sm text-left border-collapse">
+                        <tbody>
+                          {excelSheets[selectedSheet]?.rows.map((row, rowIndex) => (
+                            <tr key={`${selectedSheet}-${rowIndex}`} className="border-b border-[#1e1e22]">
+                              {row.map((cell, cellIndex) => {
+                                const Tag = rowIndex === 0 ? 'th' : 'td';
+                                return (
+                                  <Tag
+                                    key={`${selectedSheet}-${rowIndex}-${cellIndex}`}
+                                    className={`px-3 py-2 align-top min-w-[140px] ${
+                                      rowIndex === 0
+                                        ? 'bg-[#151518] text-neutral-100 font-semibold'
+                                        : 'text-neutral-300'
+                                    }`}
+                                  >
+                                    {cell || <span className="text-neutral-600"> </span>}
+                                  </Tag>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center text-neutral-500 p-8 text-center">
+                  <p className="text-sm">Não foi possível montar a prévia da planilha.</p>
+                  <button
+                    onClick={handleDirectDownload}
+                    className="mt-4 px-4 py-2 bg-[#1a1a1a] hover:bg-[#222] border border-[#2a2a2a] rounded-lg text-emerald-400 transition-colors text-sm font-medium inline-flex items-center gap-2"
+                  >
+                    <Download size={14} />
+                    Baixar arquivo
+                  </button>
+                </div>
+              )}
+            </div>
           )}
 
           {data.type === 'other' && (
@@ -177,7 +320,7 @@ const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({ isOpen, onC
           )}
         </div>
 
-        {/* Footer — word count + download buttons (text_doc only) */}
+        {/* Footer — actions */}
         {data.type === 'text_doc' && (
           <div className="flex items-center justify-between px-5 py-3 border-t border-[#1e1e1e] bg-[#111113] shrink-0">
             <span className="text-[11px] text-neutral-600 font-mono tabular-nums">
@@ -207,6 +350,18 @@ const DocumentPreviewModal: React.FC<DocumentPreviewModalProps> = ({ isOpen, onC
                 PDF
               </button>
             </div>
+          </div>
+        )}
+
+        {(data.type === 'excel' || data.type === 'pdf' || data.type === 'other') && data.url && (
+          <div className="flex items-center justify-end px-5 py-3 border-t border-[#1e1e1e] bg-[#111113] shrink-0">
+            <button
+              onClick={handleDirectDownload}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#1a1a1d] hover:bg-[#222] border border-[#2a2a2d] text-neutral-300 hover:text-white text-xs font-medium transition-all"
+            >
+              <Download size={13} />
+              Baixar
+            </button>
           </div>
         )}
 

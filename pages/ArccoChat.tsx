@@ -26,7 +26,27 @@ const FilePreviewCard: React.FC<FilePreviewCardProps> = ({ url, filename, type, 
   const { showToast } = useToast();
   const [isSaving, setIsSaving] = useState(false);
 
-  const handleDownload = () => window.open(url, '_blank');
+  const handleDownload = async () => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`falha ao baixar arquivo (${response.status})`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename || `arquivo_${Date.now()}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (err: any) {
+      console.error('Erro ao baixar arquivo:', err);
+      showToast(`Erro ao baixar arquivo: ${err.message}`, 'error');
+    }
+  };
 
   const handleSaveToVault = async () => {
     try {
