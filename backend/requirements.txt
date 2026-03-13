@@ -1,0 +1,35 @@
+# Core
+anthropic>=0.28.0
+python-dotenv>=1.0.0
+
+# FastAPI
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+
+# Web / HTTP
+httpx>=0.25.0
+beautifulsoup4>=4.12.0
+
+# Document Generation
+reportlab>=4.0.0
+python-docx>=0.8.11
+openpyxl>=3.1.0
+python-pptx>=0.6.23
+jinja2>=3.1.0
+
+# OCR
+pytesseract>=0.3.10
+Pillow>=10.0.0
+PyMuPDF>=1.24.0
+
+# Utilities
+python-multipart>=0.0.6
+PyPDF2>=3.0.0
+
+# Browser Agent (Browserbase + Playwright via CDP)
+browserbase>=1.0.0
+playwright>=1.44.0
+
+# Sandbox Execution
+e2b_code_interpreter==1.0.3
