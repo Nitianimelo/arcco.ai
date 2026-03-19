@@ -1,5 +1,20 @@
 const API_BASE = '/api/agent';
 
+export type ChatStreamEventType =
+    | 'conversation_id'
+    | 'chunk'
+    | 'error'
+    | 'steps'
+    | 'thought'
+    | 'browser_action'
+    | 'text_doc'
+    | 'file_artifact';
+
+export interface ChatStreamEvent {
+    type: ChatStreamEventType;
+    content: string;
+}
+
 export type SessionFileStatus = 'uploaded' | 'processing' | 'ready' | 'failed';
 
 export interface SessionFileItem {
@@ -94,11 +109,14 @@ export const agentApi = {
     async chat(
         messages: any[],
         systemPrompt: string,
-        onEvent?: (type: string, content: string) => void,
+        onEvent?: (type: ChatStreamEventType, content: string) => void,
         signal?: AbortSignal,
         model?: string,
         mode: 'agent' | 'normal' = 'agent',
-        sessionId?: string
+        sessionId?: string,
+        userId?: string,
+        projectId?: string | null,
+        conversationId?: string | null
     ): Promise<string> {
         const res = await fetch(`${API_BASE}/chat`, {
             method: 'POST',
@@ -109,6 +127,9 @@ export const agentApi = {
                 ...(sessionId ? { session_id: sessionId } : {}),
                 ...(model ? { model } : {}),
                 ...(systemPrompt ? { system_prompt: systemPrompt } : {}),
+                ...(userId ? { user_id: userId } : {}),
+                ...(projectId ? { project_id: projectId } : {}),
+                ...(conversationId ? { conversation_id: conversationId } : {}),
             }),
             signal,
         });
@@ -135,7 +156,7 @@ export const agentApi = {
                 for (const line of lines) {
                     if (!line.startsWith('data: ')) continue;
                     try {
-                        const event = JSON.parse(line.slice(6));
+                        const event = JSON.parse(line.slice(6)) as ChatStreamEvent;
 
                         if (onEvent) onEvent(event.type, event.content);
 

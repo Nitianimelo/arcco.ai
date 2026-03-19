@@ -3,12 +3,16 @@ import { Sidebar } from './components/Sidebar';
 import ArccoChatPage from './pages/ArccoChat';
 import { ArccoDrivePage } from './pages/ArccoDrive';
 import { AdminPage } from './pages/AdminPage';
+import ToolsStorePage from './pages/ToolsStorePage';
+import MyToolsPage from './pages/MyToolsPage';
 import { ViewState } from './types';
 import { useToast } from './components/Toast';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { supabase } from './lib/supabase';
 import { openRouterService } from './lib/openrouter';
+import { projectApi, Project } from './lib/projectApi';
+import { conversationApi } from './lib/conversationApi';
 
 function isAdminRoute(): boolean {
   return window.location.pathname === '/admin' || window.location.pathname === '/admin/';
@@ -30,6 +34,9 @@ function App() {
 
   const [userName, setUserName] = useState("Usuário");
   const [userPlan, setUserPlan] = useState("Free");
+  const [userId, setUserId] = useState(() => localStorage.getItem('arcco_user_id') || '');
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [activeProject, setActiveProject] = useState<Project | null>(null);
 
   // Authentication Check
   useEffect(() => {
@@ -67,15 +74,33 @@ function App() {
     loadApiKeys();
   }, []);
 
+  // Quando um projeto é selecionado: carrega detalhes e busca conversa existente
+  useEffect(() => {
+    if (!selectedProjectId || !userId) {
+      setActiveProject(null);
+      return;
+    }
+    projectApi.get(selectedProjectId).then(proj => setActiveProject(proj));
+    conversationApi.findByProject(userId, selectedProjectId).then(conv => {
+      if (conv) {
+        setChatSessionId(conv.id);
+      } else {
+        setChatSessionId(Date.now().toString());
+      }
+      setCurrentView('ARCCO_CHAT');
+    });
+  }, [selectedProjectId, userId]);
+
   const handleNavigate = (view: ViewState) => {
     setCurrentView(view);
   };
 
   const handleNewInteraction = () => {
+    setSelectedProjectId(null);
+    setActiveProject(null);
     setChatSessionId(Date.now().toString());
     setCurrentView('ARCCO_CHAT');
     setInitialChatIntent(null);
-    if (showToast) showToast('Nova interação iniciada', 'success');
   };
 
   const handleTriggerUpsell = (feature: string) => {
@@ -126,12 +151,25 @@ function App() {
             key={chatSessionId}
             chatSessionId={chatSessionId}
             userName={userName}
+            userId={userId}
+            projectId={selectedProjectId}
+            project={activeProject}
+            onProjectUpdated={(updated) => setActiveProject(updated)}
+            onProjectDeleted={() => {
+              setSelectedProjectId(null);
+              setActiveProject(null);
+              setChatSessionId(Date.now().toString());
+            }}
             initialMessage={initialChatIntent}
             onClearInitialMessage={() => setInitialChatIntent(null)}
           />
         );
       case 'ARCCO_DRIVE':
         return <ArccoDrivePage />;
+      case 'TOOLS_STORE':
+        return <ToolsStorePage />;
+      case 'TOOLS_MY':
+        return <MyToolsPage onNavigateToStore={() => setCurrentView('TOOLS_STORE')} />;
       default:
         return (
           <div className="flex flex-col items-center justify-center h-full text-neutral-500">
@@ -160,6 +198,9 @@ function App() {
         currentView={currentView}
         userName={userName}
         userPlan={userPlan}
+        userId={userId}
+        selectedProjectId={selectedProjectId}
+        onSelectProject={setSelectedProjectId}
         onNavigate={handleNavigate}
         onNewInteraction={handleNewInteraction}
         onLoadSession={handleLoadSession}

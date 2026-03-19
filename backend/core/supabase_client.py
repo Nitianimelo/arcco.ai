@@ -55,13 +55,27 @@ class SupabaseClient:
 
     # ── PostgREST ─────────────────────────────────────
 
-    def query(self, table: str, select: str = "*", filters: Optional[dict] = None) -> list:
-        """Query simples via PostgREST."""
+    def query(
+        self,
+        table: str,
+        select: str = "*",
+        filters: Optional[dict] = None,
+        order: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> list:
+        """Query simples via PostgREST. Suporta filtros eq., order e limit."""
         url = f"{self.url}/rest/v1/{table}?select={select}"
 
         if filters:
             for key, value in filters.items():
-                url += f"&{key}=eq.{value}"
+                if value is None:
+                    url += f"&{key}=is.null"
+                else:
+                    url += f"&{key}=eq.{value}"
+        if order:
+            url += f"&order={order}"
+        if limit:
+            url += f"&limit={limit}"
 
         with httpx.Client(timeout=30.0) as client:
             response = client.get(url, headers=self.headers)
@@ -69,6 +83,107 @@ class SupabaseClient:
                 logger.error(f"Query failed: {response.text}")
                 return []
             return response.json()
+
+    def insert(self, table: str, data: dict) -> dict:
+        """Insert de uma row via PostgREST. Retorna a row criada."""
+        url = f"{self.url}/rest/v1/{table}"
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                url,
+                headers={
+                    **self.headers,
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation",
+                },
+                json=data,
+            )
+        if response.status_code not in (200, 201):
+            raise Exception(f"Supabase insert failed ({response.status_code}): {response.text}")
+        result = response.json()
+        return result[0] if isinstance(result, list) else result
+
+    def insert_many(self, table: str, rows: list) -> list:
+        """Insert de múltiplas rows via PostgREST. Retorna as rows criadas."""
+        if not rows:
+            return []
+        url = f"{self.url}/rest/v1/{table}"
+        with httpx.Client(timeout=60.0) as client:
+            response = client.post(
+                url,
+                headers={
+                    **self.headers,
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation",
+                },
+                json=rows,
+            )
+        if response.status_code not in (200, 201):
+            raise Exception(f"Supabase insert_many failed ({response.status_code}): {response.text}")
+        return response.json()
+
+    def update(self, table: str, data: dict, filters: dict) -> list:
+        """Update de rows que atendem os filtros. Retorna rows atualizadas."""
+        url = f"{self.url}/rest/v1/{table}"
+        if filters:
+            params = "&".join(f"{k}=eq.{v}" for k, v in filters.items())
+            url = f"{url}?{params}"
+        with httpx.Client(timeout=30.0) as client:
+            response = client.patch(
+                url,
+                headers={
+                    **self.headers,
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation",
+                },
+                json=data,
+            )
+        if response.status_code not in (200, 204):
+            raise Exception(f"Supabase update failed ({response.status_code}): {response.text}")
+        return response.json() if response.status_code == 200 else []
+
+    def upsert(self, table: str, data: dict, on_conflict: str = "") -> dict:
+        """Upsert (insert or update) via PostgREST. Retorna a row resultante."""
+        url = f"{self.url}/rest/v1/{table}"
+        if on_conflict:
+            url = f"{url}?on_conflict={on_conflict}"
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                url,
+                headers={
+                    **self.headers,
+                    "Content-Type": "application/json",
+                    "Prefer": "resolution=merge-duplicates,return=representation",
+                },
+                json=data,
+            )
+        if response.status_code not in (200, 201):
+            raise Exception(f"Supabase upsert failed ({response.status_code}): {response.text}")
+        result = response.json()
+        return result[0] if isinstance(result, list) else result
+
+    def delete(self, table: str, filters: dict) -> None:
+        """Delete de rows que atendem os filtros."""
+        url = f"{self.url}/rest/v1/{table}"
+        if filters:
+            params = "&".join(f"{k}=eq.{v}" for k, v in filters.items())
+            url = f"{url}?{params}"
+        with httpx.Client(timeout=30.0) as client:
+            response = client.delete(url, headers=self.headers)
+        if response.status_code not in (200, 204):
+            raise Exception(f"Supabase delete failed ({response.status_code}): {response.text}")
+
+    def rpc(self, function_name: str, params: dict) -> list:
+        """Chama uma função RPC (stored procedure) do Supabase."""
+        url = f"{self.url}/rest/v1/rpc/{function_name}"
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(
+                url,
+                headers={**self.headers, "Content-Type": "application/json"},
+                json=params,
+            )
+        if response.status_code != 200:
+            raise Exception(f"Supabase RPC failed ({response.status_code}): {response.text}")
+        return response.json()
 
 
 _client: Optional[SupabaseClient] = None

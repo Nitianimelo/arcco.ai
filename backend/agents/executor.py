@@ -7,13 +7,28 @@ Cada função de ferramenta está isolada aqui, desacoplada do endpoint HTTP.
 import asyncio
 import io
 import logging
+import mimetypes
 import os
 import tempfile
 import time
+from pathlib import Path
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+_E2B_ARTIFACT_ROOT = "/home/user"
+_E2B_ARTIFACT_SCAN_DEPTH = 8
+_E2B_ARTIFACT_MAX_BYTES = 20 * 1024 * 1024
+_E2B_ARTIFACT_EXCLUDED_DIRS = {
+    "__pycache__",
+    ".cache",
+    ".config",
+    ".local",
+    ".npm",
+    ".venv",
+    "node_modules",
+}
 
 
 async def execute_tool(func_name: str, func_args: dict) -> str:
@@ -101,16 +116,21 @@ async def _ask_browser(args: dict) -> str:
 
     url = args.get("url", "")
     if not url:
+        logger.error("[BROWSER] URL não fornecida para o Browser Agent. Args: %s", args)
         return "Erro: URL não fornecida para o Browser Agent."
 
-    return await execute_browserbase_task(
-        url=url,
-        actions=args.get("actions", []),
-        wait_for=int(args.get("wait_for") or 0),
-        mobile=bool(args.get("mobile", False)),
-        include_tags=args.get("include_tags"),
-        exclude_tags=args.get("exclude_tags"),
-    )
+    try:
+        return await execute_browserbase_task(
+            url=url,
+            actions=args.get("actions", []),
+            wait_for=int(args.get("wait_for") or 0),
+            mobile=bool(args.get("mobile", False)),
+            include_tags=args.get("include_tags"),
+            exclude_tags=args.get("exclude_tags"),
+        )
+    except Exception as exc:
+        logger.exception("[BROWSER] Falha ao executar Browser Agent em %s", url)
+        return f"Erro ao executar Browser Agent: {exc}"
 
 
 async def _generate_pdf(args: dict) -> str:
@@ -229,6 +249,7 @@ async def _execute_python(code: str) -> str:
     try:
         from e2b_code_interpreter import Sandbox
     except ImportError:
+        logger.exception("[E2B] Pacote e2b_code_interpreter não está instalado.")
         return (
             "Erro: pacote `e2b-code-interpreter` não está instalado. "
             "Execute: pip install e2b-code-interpreter"
@@ -237,13 +258,87 @@ async def _execute_python(code: str) -> str:
     # Ensure E2B API Key is present
     e2b_api_key = os.getenv("E2B_API_KEY")
     if not e2b_api_key:
+        logger.error("[E2B] Variável E2B_API_KEY ausente; sandbox indisponível.")
         return "Erro: A variável E2B_API_KEY não está configurada no ambiente. Sandbox indisponível."
 
+    if not code or not code.strip():
+        logger.error("[E2B] Tentativa de executar código vazio.")
+        return "Erro: nenhum código Python foi fornecido para execução."
+
     try:
+        from backend.core.config import get_config
+        from backend.core.supabase_client import upload_to_supabase
+
+        config = get_config()
+
+        def snapshot_artifacts(sandbox) -> dict[str, object]:
+            entries = sandbox.files.list(_E2B_ARTIFACT_ROOT, depth=_E2B_ARTIFACT_SCAN_DEPTH)
+            snapshot: dict[str, object] = {}
+            for entry in entries:
+                entry_type = getattr(getattr(entry, "type", None), "value", getattr(entry, "type", None))
+                if entry_type != "file":
+                    continue
+
+                entry_path = str(getattr(entry, "path", "") or "")
+                if not entry_path.startswith(f"{_E2B_ARTIFACT_ROOT}/"):
+                    continue
+
+                rel_path = entry_path.removeprefix(f"{_E2B_ARTIFACT_ROOT}/")
+                parts = [part for part in Path(rel_path).parts if part not in ("", ".")]
+                if not parts:
+                    continue
+                if any(part.startswith(".") for part in parts):
+                    continue
+                if any(part in _E2B_ARTIFACT_EXCLUDED_DIRS for part in parts[:-1]):
+                    continue
+
+                snapshot[entry_path] = entry
+            return snapshot
+
+        def upload_generated_artifacts(sandbox, before_snapshot: dict[str, object]) -> list[tuple[str, str]]:
+            after_snapshot = snapshot_artifacts(sandbox)
+            uploaded: list[tuple[str, str]] = []
+
+            for path, entry in sorted(after_snapshot.items()):
+                previous = before_snapshot.get(path)
+                if previous is not None:
+                    same_size = getattr(previous, "size", None) == getattr(entry, "size", None)
+                    same_mtime = getattr(previous, "modified_time", None) == getattr(entry, "modified_time", None)
+                    if same_size and same_mtime:
+                        continue
+
+                size = int(getattr(entry, "size", 0) or 0)
+                if size <= 0 or size > _E2B_ARTIFACT_MAX_BYTES:
+                    logger.info("[E2B] Ignorando artefato %s (size=%s).", path, size)
+                    continue
+
+                rel_path = Path(path).relative_to(_E2B_ARTIFACT_ROOT)
+                safe_rel = str(rel_path).replace(os.sep, "_")
+                filename = rel_path.name
+                content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+                try:
+                    file_bytes = bytes(sandbox.files.read(path, format="bytes"))
+                    storage_name = f"python-artifacts/{safe_rel}"
+                    public_url = upload_to_supabase(
+                        config.supabase_storage_bucket,
+                        storage_name,
+                        file_bytes,
+                        content_type,
+                    )
+                    uploaded.append((filename, public_url))
+                    logger.info("[E2B] Artefato enviado ao Supabase: %s -> %s", path, public_url)
+                except Exception as exc:
+                    logger.exception("[E2B] Falha ao enviar artefato gerado '%s': %s", path, exc)
+
+            return uploaded
+
         def sync_e2b_exec():
+            logger.info("[E2B] Iniciando execução de código Python (%s chars).", len(code))
             # E2B v2 API: usar Sandbox.create() ao invés do construtor
             sandbox = Sandbox.create(api_key=e2b_api_key)
             try:
+                before_snapshot = snapshot_artifacts(sandbox)
                 execution_result = sandbox.run_code(code)
 
                 parts = []
@@ -270,14 +365,21 @@ async def _execute_python(code: str) -> str:
                         if hasattr(media, 'text') and media.text:
                             parts.append(f"RESULT: {media.text}")
 
+                uploaded_artifacts = upload_generated_artifacts(sandbox, before_snapshot)
+                if uploaded_artifacts:
+                    parts.append("Arquivos gerados:")
+                    parts.extend(f"[{filename}]({url})" for filename, url in uploaded_artifacts)
+
                 result_str = "\n".join(parts).strip()
                 return result_str if result_str else "(Código executado com sucesso sem output. Use print() para ver resultados.)"
             finally:
                 sandbox.kill()
 
         result = await asyncio.to_thread(sync_e2b_exec)
+        logger.info("[E2B] Execução concluída com %s chars de saída.", len(result))
         return result
     except Exception as e:
+        logger.exception("[E2B] Erro durante a execução do sandbox Python.")
         return f"Erro na execução (E2B Sandbox): {e}"
 
 

@@ -25,8 +25,52 @@ from typing import AsyncGenerator
 from backend.core.llm import call_openrouter, stream_openrouter
 from backend.agents import registry
 from backend.agents.executor import execute_tool
+from backend.agents.tools import SUPERVISOR_TOOLS
 
 logger = logging.getLogger(__name__)
+
+# ── Timeout para ferramentas pesadas (browser, deep_research) ────────────────
+_BROWSER_TIMEOUT = 60.0   # segundos
+_SEARCH_TIMEOUT = 30.0    # segundos
+_HEARTBEAT_INTERVAL = 5.0 # segundos
+
+
+async def _exec_with_heartbeat(coro, heartbeat_fn, timeout: float, interval: float = _HEARTBEAT_INTERVAL):
+    """
+    Executa coroutine com heartbeat SSE em tempo real e timeout global.
+    É um async generator: yield heartbeat strings enquanto a tool roda.
+    O resultado final é yielded como dict {"_result": value}.
+    Uso:
+        async for event in _exec_with_heartbeat(...):
+            if isinstance(event, dict) and "_result" in event:
+                result = event["_result"]
+            else:
+                yield event  # heartbeat SSE
+    """
+    task = asyncio.create_task(coro)
+    elapsed = 0.0
+
+    while not task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=interval)
+            break
+        except asyncio.TimeoutError:
+            elapsed += interval
+            if elapsed >= timeout:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                yield {"_result": None, "_timeout": True, "_elapsed": elapsed}
+                return
+            yield heartbeat_fn(elapsed)
+
+    try:
+        yield {"_result": task.result()}
+    except Exception as exc:
+        yield {"_result": None, "_error": str(exc)}
+
 
 # ── Mapa de Ferramentas do Supervisor ────────────────────────────────────────
 
@@ -55,12 +99,21 @@ def _extract_markdown_links(content: str) -> list[tuple[str, str]]:
     return _MARKDOWN_LINK_PATTERN.findall(content or "")
 
 
+def _extract_storage_markdown_links(content: str) -> list[tuple[str, str]]:
+    links = _extract_markdown_links(content)
+    return [
+        (label, url)
+        for label, url in links
+        if "/storage/v1/object/" in url or "/storage/v1/object/public/" in url
+    ]
+
+
 def _artifact_payload(label: str, url: str) -> str:
     return json.dumps({"filename": label, "url": url})
 
 
 async def _emit_file_artifacts(content: str) -> AsyncGenerator[str, None]:
-    md_links = _extract_markdown_links(content)
+    md_links = _extract_storage_markdown_links(content)
     if not md_links:
         return
 
@@ -87,6 +140,52 @@ async def _stream_assistant_text(messages: list, model: str) -> AsyncGenerator[s
 
     if not accumulated:
         yield sse("chunk", "Desculpe, não consegui gerar uma resposta. Tente novamente.")
+
+
+async def _call_supervisor_for_step(
+    step_messages: list,
+    supervisor_model: str,
+    tool_choice,
+    forced_tool_name: str | None = None,
+) -> dict:
+    """
+    Executa a chamada do supervisor para um passo do planner.
+    Se uma ferramenta específica foi forçada e o modelo ignorar o tool call,
+    faz uma segunda tentativa com instrução explícita para evitar falha silenciosa.
+    """
+    data = await call_openrouter(
+        messages=step_messages,
+        model=supervisor_model,
+        max_tokens=4096,
+        tools=SUPERVISOR_TOOLS,
+        tool_choice=tool_choice,
+    )
+    message = data["choices"][0]["message"]
+
+    if forced_tool_name and not message.get("tool_calls"):
+        logger.warning(
+            "[ORCHESTRATOR] Modelo ignorou tool_choice forçado '%s'. Reforçando instrução.",
+            forced_tool_name,
+        )
+        retry_messages = step_messages + [
+            {
+                "role": "system",
+                "content": (
+                    f"Você DEVE responder chamando exclusivamente a ferramenta '{forced_tool_name}'. "
+                    "Não responda em texto livre."
+                ),
+            }
+        ]
+        retry = await call_openrouter(
+            messages=retry_messages,
+            model=supervisor_model,
+            max_tokens=4096,
+            tools=SUPERVISOR_TOOLS,
+            tool_choice=tool_choice,
+        )
+        message = retry["choices"][0]["message"]
+
+    return message
 
 
 def _build_session_inventory_message(session_id: str | None) -> str | None:
@@ -354,7 +453,6 @@ async def orchestrate_and_stream(
        - Passa o `step_context` (resultado do passo anterior) para cada passo logando com clareza.
     """
 
-    from backend.agents.tools import SUPERVISOR_TOOLS
     from backend.agents.planner import generate_plan
 
     supervisor_prompt = registry.get_prompt("chat")
@@ -418,18 +516,20 @@ async def orchestrate_and_stream(
             )
 
             try:
-                data = await call_openrouter(
-                    messages=step_messages,
-                    model=supervisor_model,
-                    max_tokens=4096,
-                    tools=SUPERVISOR_TOOLS,
+                message = await _call_supervisor_for_step(
+                    step_messages=step_messages,
+                    supervisor_model=supervisor_model,
                     tool_choice=_tool_choice,
+                    forced_tool_name=_forced_tool_name,
                 )
-                message = data["choices"][0]["message"]
             except Exception as e:
                 logger.error(f"[ORCHESTRATOR] Erro no LLM (Passo {step.step}): {e}")
                 yield sse("error", f"Erro ao processar o Passo {step.step}: {e}")
                 return
+
+            supervisor_reasoning = (message.get("content") or "").strip()
+            if supervisor_reasoning:
+                yield sse("thought", supervisor_reasoning)
                 
             # Tratamento da resposta do Supervisor / Tool Call
             if message.get("tool_calls"):
@@ -453,6 +553,8 @@ async def orchestrate_and_stream(
 
                         if route == "session_file":
                             specialist_result = await execute_tool("read_session_file", func_args)
+                            async for artifact_event in _emit_file_artifacts(specialist_result):
+                                yield artifact_event
                             accumulated_context += f"\n[Passo {step.step} - session_file]: {specialist_result}"
                             yield sse(
                                 "thought",
@@ -461,12 +563,41 @@ async def orchestrate_and_stream(
 
                         elif route == "web_search":
                             query = func_args.get("query", "")
-                            specialist_result = await execute_tool("web_search", {"query": query})
+                            specialist_result = None
+                            async for event in _exec_with_heartbeat(
+                                execute_tool("web_search", {"query": query}),
+                                lambda elapsed: sse("steps", f"<step>Pesquisando na web — {int(elapsed)}s...</step>"),
+                                timeout=_SEARCH_TIMEOUT,
+                            ):
+                                if isinstance(event, dict) and "_result" in event:
+                                    if event.get("_timeout"):
+                                        specialist_result = f"Erro: Timeout de {int(_SEARCH_TIMEOUT)}s na pesquisa web. O serviço de busca pode estar indisponível."
+                                        logger.error(f"[ORCHESTRATOR] web_search timeout (planner) query={query[:60]}")
+                                    elif event.get("_error"):
+                                        specialist_result = f"Erro na pesquisa web: {event['_error']}"
+                                        logger.error(f"[ORCHESTRATOR] web_search error (planner): {event['_error']}")
+                                    else:
+                                        specialist_result = event["_result"]
+                                else:
+                                    yield event  # heartbeat SSE em tempo real
+                            if specialist_result is None:
+                                specialist_result = "Erro: pesquisa web não retornou resultado."
+                            async for artifact_event in _emit_file_artifacts(specialist_result):
+                                yield artifact_event
                             accumulated_context += f"\n[Passo {step.step} - web_search]: {specialist_result}"
                             yield sse("thought", f"Dados obtidos da web via busca: {query}")
 
                         elif route == "python":
+                            yield sse("steps", f"<step>Executando código Python (Passo {step.step})...</step>")
                             specialist_result = await execute_tool("execute_python", func_args)
+                            async for artifact_event in _emit_file_artifacts(specialist_result):
+                                yield artifact_event
+                            if specialist_result.startswith("Erro"):
+                                logger.error(
+                                    "[ORCHESTRATOR] Execução Python falhou no passo %s: %s",
+                                    step.step,
+                                    specialist_result,
+                                )
                             accumulated_context += f"\n[Passo {step.step} - python]: {specialist_result}"
                             yield sse("thought", f"Resultado do código Python: {specialist_result[:120]}...")
 
@@ -488,7 +619,28 @@ async def orchestrate_and_stream(
                             else:
                                 yield sse("thought", "Lendo a estrutura do DOM e extraindo o conteúdo principal...")
 
-                            specialist_result = await execute_tool("ask_browser", func_args)
+                            specialist_result = None
+                            async for event in _exec_with_heartbeat(
+                                execute_tool("ask_browser", func_args),
+                                lambda elapsed: sse("steps", f"<step>Navegador ativo — {int(elapsed)}s...</step>"),
+                                timeout=_BROWSER_TIMEOUT,
+                            ):
+                                if isinstance(event, dict) and "_result" in event:
+                                    if event.get("_timeout"):
+                                        specialist_result = f"Erro: Timeout de {int(_BROWSER_TIMEOUT)}s ao acessar {url}. O site pode estar lento ou inacessível."
+                                        logger.error(f"[ORCHESTRATOR] Browser timeout (planner loop) em {url}")
+                                    elif event.get("_error"):
+                                        specialist_result = f"Erro ao executar Browser Agent: {event['_error']}"
+                                        logger.error(f"[ORCHESTRATOR] Browser error (planner): {event['_error']}")
+                                    else:
+                                        specialist_result = event["_result"]
+                                else:
+                                    yield event  # heartbeat SSE em tempo real
+                            if specialist_result is None:
+                                specialist_result = f"Erro: browser não retornou resultado para {url}."
+
+                            async for artifact_event in _emit_file_artifacts(specialist_result):
+                                yield artifact_event
 
                             if specialist_result.startswith("Erro"):
                                 yield sse("browser_action", json.dumps({
@@ -516,6 +668,8 @@ async def orchestrate_and_stream(
                                     research_result = event[7:]
                                 else:
                                     yield event
+                            async for artifact_event in _emit_file_artifacts(research_result):
+                                yield artifact_event
                             accumulated_context += f"\n[Passo {step.step} - deep_research]: {research_result}"
 
                         elif is_terminal:
@@ -570,13 +724,13 @@ async def orchestrate_and_stream(
                                     specialist_result = event[7:]
                                 else:
                                     yield event
+                            async for artifact_event in _emit_file_artifacts(specialist_result):
+                                yield artifact_event
 
                             # ANTI-LEAK
                             if route in ROUTES_REQUIRING_LINK:
-                                md_links = _extract_markdown_links(specialist_result)
+                                md_links = _extract_storage_markdown_links(specialist_result)
                                 if md_links:
-                                    for label, url in md_links:
-                                        yield sse("file_artifact", _artifact_payload(label, url))
                                     links_only = "\n".join(f"[{label}]({url})" for label, url in md_links)
                                     specialist_result = f"Arquivo gerado.\n\n{links_only}"
 
@@ -591,11 +745,29 @@ async def orchestrate_and_stream(
 
             else:
                 # O LLM decidiu não usar TOOL, apenas gerou texto
-                accumulated_context += f"\n[Passo {step.step} - raciocínio]: {message.get('content', '')}"
+                fallback_content = message.get("content", "")
+                if _forced_tool_name:
+                    logger.error(
+                        "[ORCHESTRATOR] Passo %s exigia tool '%s', mas o supervisor respondeu sem tool_call. Conteúdo: %s",
+                        step.step,
+                        _forced_tool_name,
+                        fallback_content[:300],
+                    )
+                    yield sse(
+                        "thought",
+                        f"O passo {step.step} exigia a ferramenta '{_forced_tool_name}', mas o modelo não a chamou.",
+                    )
+                    accumulated_context += (
+                        f"\n[Passo {step.step} - ERRO {_forced_tool_name}]: "
+                        f"Tool call obrigatório não emitido. Resposta do modelo: {fallback_content}"
+                    )
+                else:
+                    accumulated_context += f"\n[Passo {step.step} - raciocínio]: {fallback_content}"
                 
         # Fim do loop do Planner
         # Agora geramos a resposta final conversacional consolidando o accumulated_context
         yield sse("steps", "<step>Consolidando resultados dos passos...</step>")
+        yield sse("thought", "Organizando os resultados coletados e redigindo a resposta final...")
         
         final_prompt = [
             {"role": "system", "content": supervisor_prompt},
@@ -612,6 +784,7 @@ async def orchestrate_and_stream(
                 yield event
         except Exception as exc:
             logger.error("[ORCHESTRATOR] Erro no streaming final consolidado: %s", exc)
+            yield sse("error", f"Falha ao consolidar a resposta final: {exc}")
             fallback_text = accumulated_context or "Desculpe, não consegui consolidar a resposta final."
             yield sse("chunk", fallback_text)
 
@@ -623,7 +796,7 @@ async def orchestrate_and_stream(
     if session_inventory_message:
         current_messages.append({"role": "system", "content": session_inventory_message})
     current_messages += messages
-    MAX_ITERATIONS = 5
+    MAX_ITERATIONS = 3
 
     for iteration in range(MAX_ITERATIONS):
         if iteration == 0:
@@ -689,6 +862,8 @@ async def orchestrate_and_stream(
                     file_name = func_args.get("file_name", "")
                     yield sse("steps", f"<step>Consultando anexo da sessão: {file_name[:60]}...</step>")
                     specialist_result = await execute_tool("read_session_file", func_args)
+                    async for artifact_event in _emit_file_artifacts(specialist_result):
+                        yield artifact_event
                     current_messages.append({
                         "role": "tool",
                         "tool_call_id": tool["id"],
@@ -701,17 +876,56 @@ async def orchestrate_and_stream(
                     fetch_url = func_args.get("fetch_url", "")
                     yield sse("steps", f"<step>Pesquisando: {query[:60]}...</step>")
 
-                    specialist_result = await execute_tool("web_search", {"query": query})
+                    specialist_result = None
+                    async for event in _exec_with_heartbeat(
+                        execute_tool("web_search", {"query": query}),
+                        lambda elapsed: sse("steps", f"<step>Pesquisando na web — {int(elapsed)}s...</step>"),
+                        timeout=_SEARCH_TIMEOUT,
+                    ):
+                        if isinstance(event, dict) and "_result" in event:
+                            if event.get("_timeout"):
+                                specialist_result = f"Erro: Timeout de {int(_SEARCH_TIMEOUT)}s na pesquisa web para '{query[:40]}'. O serviço de busca pode estar indisponível."
+                                logger.error(f"[ORCHESTRATOR] web_search timeout (react) query={query[:60]}")
+                            elif event.get("_error"):
+                                specialist_result = f"Erro na pesquisa web: {event['_error']}"
+                                logger.error(f"[ORCHESTRATOR] web_search error (react): {event['_error']}")
+                            else:
+                                specialist_result = event["_result"]
+                        else:
+                            yield event  # heartbeat SSE em tempo real
+                    if specialist_result is None:
+                        specialist_result = "Erro: pesquisa web não retornou resultado."
 
-                    if fetch_url:
+                    if fetch_url and not specialist_result.startswith("Erro"):
                         yield sse("steps", f"<step>Lendo página {fetch_url[:50]}...</step>")
-                        page_content = await execute_tool("web_fetch", {"url": fetch_url})
-                        specialist_result += f"\n\n---\nConteúdo detalhado de {fetch_url}:\n{page_content}"
+                        try:
+                            page_content = await asyncio.wait_for(
+                                execute_tool("web_fetch", {"url": fetch_url}),
+                                timeout=20.0,
+                            )
+                            specialist_result += f"\n\n---\nConteúdo detalhado de {fetch_url}:\n{page_content}"
+                        except asyncio.TimeoutError:
+                            specialist_result += f"\n\n---\nTimeout ao ler {fetch_url}."
+                            logger.error(f"[ORCHESTRATOR] web_fetch timeout: {fetch_url}")
+                        except Exception as exc:
+                            specialist_result += f"\n\n---\nErro ao ler {fetch_url}: {exc}"
+                    async for artifact_event in _emit_file_artifacts(specialist_result):
+                        yield artifact_event
 
                     current_messages.append({
                         "role": "tool",
                         "tool_call_id": tool["id"],
                         "content": specialist_result,
+                    })
+                    # Força o supervisor a sintetizar e responder agora —
+                    # evita que o LLM fique em loop chamando mais buscas.
+                    current_messages.append({
+                        "role": "system",
+                        "content": (
+                            "Os dados da busca foram obtidos com sucesso. "
+                            "Sintetize as informações recebidas e responda ao usuário agora de forma clara e objetiva. "
+                            "NÃO chame mais ferramentas de busca."
+                        ),
                     })
                     yield sse("steps", "<step>Dados recebidos — elaborando resposta...</step>")
 
@@ -723,6 +937,8 @@ async def orchestrate_and_stream(
                     except Exception as exc:
                         logger.error(f"[ORCHESTRATOR] Erro na execução Python: {exc}")
                         specialist_result = f"Erro ao executar Python: {exc}"
+                    async for artifact_event in _emit_file_artifacts(specialist_result):
+                        yield artifact_event
                     current_messages.append({
                         "role": "tool",
                         "tool_call_id": tool["id"],
@@ -749,11 +965,27 @@ async def orchestrate_and_stream(
                         "actions": [a.get("type", "?") for a in raw_actions] if raw_actions else []
                     }))
 
-                    try:
-                        specialist_result = await execute_tool("ask_browser", func_args)
-                    except Exception as exc:
-                        logger.error(f"[ORCHESTRATOR] Erro no Browser Agent: {exc}")
-                        specialist_result = f"Erro ao executar Browser Agent: {exc}"
+                    specialist_result = None
+                    async for event in _exec_with_heartbeat(
+                        execute_tool("ask_browser", func_args),
+                        lambda elapsed: sse("steps", f"<step>Navegador ativo — {int(elapsed)}s...</step>"),
+                        timeout=_BROWSER_TIMEOUT,
+                    ):
+                        if isinstance(event, dict) and "_result" in event:
+                            if event.get("_timeout"):
+                                specialist_result = f"Erro: Timeout de {int(_BROWSER_TIMEOUT)}s ao acessar {url}. O site pode estar lento ou inacessível."
+                                logger.error(f"[ORCHESTRATOR] Browser timeout (react loop) em {url}")
+                            elif event.get("_error"):
+                                specialist_result = f"Erro ao executar Browser Agent: {event['_error']}"
+                                logger.error(f"[ORCHESTRATOR] Browser error (react): {event['_error']}")
+                            else:
+                                specialist_result = event["_result"]
+                        else:
+                            yield event  # heartbeat SSE em tempo real
+                    if specialist_result is None:
+                        specialist_result = f"Erro: browser não retornou resultado para {url}."
+                    async for artifact_event in _emit_file_artifacts(specialist_result):
+                        yield artifact_event
 
                     if specialist_result.startswith("Erro"):
                         yield sse("browser_action", json.dumps({
@@ -761,18 +993,33 @@ async def orchestrate_and_stream(
                             "url": url,
                             "title": specialist_result[:100]
                         }))
+                        # Fallback: informar supervisor que browser está indisponível
+                        current_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool["id"],
+                            "content": specialist_result,
+                        })
+                        current_messages.append({
+                            "role": "system",
+                            "content": (
+                                "O navegador falhou ou está indisponível. "
+                                "NÃO tente usar ask_browser novamente. "
+                                "Se precisar de dados da web, use ask_web_search. "
+                                "Caso contrário, responda ao usuário com as informações disponíveis."
+                            ),
+                        })
                     else:
                         yield sse("browser_action", json.dumps({
                             "status": "done",
                             "url": url,
                             "title": "Página lida com sucesso"
                         }))
+                        current_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool["id"],
+                            "content": specialist_result,
+                        })
 
-                    current_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool["id"],
-                        "content": specialist_result,
-                    })
                     yield sse("steps", "<step>Conteúdo extraído — analisando dados...</step>")
 
                 # ── ROTA: Pesquisa Profunda (multi-step, paralelo) ──
@@ -792,6 +1039,8 @@ async def orchestrate_and_stream(
 
                     if not research_result.strip():
                         research_result = "A pesquisa profunda não retornou resultados. Tente reformular o pedido com mais detalhes."
+                    async for artifact_event in _emit_file_artifacts(research_result):
+                        yield artifact_event
 
                     current_messages.append({
                         "role": "tool",
@@ -882,10 +1131,10 @@ async def orchestrate_and_stream(
 
                     # ANTI-LEAK: Para rotas de arquivo, enviar APENAS o link pro Supervisor
                     if route in ROUTES_REQUIRING_LINK:
-                        md_links = _extract_markdown_links(specialist_result)
+                        async for artifact_event in _emit_file_artifacts(specialist_result):
+                            yield artifact_event
+                        md_links = _extract_storage_markdown_links(specialist_result)
                         if md_links:
-                            for label, url in md_links:
-                                yield sse("file_artifact", _artifact_payload(label, url))
                             links_only = "\n".join(f"[{label}]({url})" for label, url in md_links)
                             specialist_result = f"Arquivo gerado com sucesso.\n\n{links_only}"
                             logger.info("[ANTI-LEAK] Conteúdo suprimido. Apenas link enviado ao Supervisor.")

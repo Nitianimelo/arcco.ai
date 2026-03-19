@@ -18,15 +18,23 @@ import {
   Users,
   Plus,
   Folder,
+  Upload,
+  Info,
+  Loader2,
 } from 'lucide-react';
 import { ViewState, NavItem } from '../types';
-import { chatStorage, ChatSession } from '../lib/chatStorage';
+import { ChatSession } from '../lib/chatStorage';
 import { SettingsModal } from './SettingsModal';
+import { projectApi, Project } from '../lib/projectApi';
+import { conversationApi, ConversationRecord } from '../lib/conversationApi';
 
 interface SidebarProps {
   currentView: ViewState;
   userName: string;
   userPlan: string;
+  userId: string;
+  selectedProjectId?: string | null;
+  onSelectProject?: (projectId: string | null) => void;
   onNavigate: (view: ViewState) => void;
   onNewInteraction?: () => void;
   onLoadSession?: (sessionId: string) => void;
@@ -83,12 +91,12 @@ const NavButton: React.FC<NavButtonProps> = ({ item, isActive, userPlan, collaps
         <item.icon
           size={20}
           className={`transition-colors duration-200 ${isDisabled
-              ? 'text-neutral-600'
-              : isActive
-                ? 'text-indigo-400 drop-shadow-[0_0_8px_rgba(129,140,248,0.5)]'
-                : isLocked
-                  ? 'text-neutral-600'
-                  : 'text-neutral-500 group-hover:text-neutral-200'
+            ? 'text-neutral-600'
+            : isActive
+              ? 'text-indigo-400 drop-shadow-[0_0_8px_rgba(129,140,248,0.5)]'
+              : isLocked
+                ? 'text-neutral-600'
+                : 'text-neutral-500 group-hover:text-neutral-200'
             }`}
         />
       </div>
@@ -126,6 +134,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   currentView,
   userName,
   userPlan,
+  userId,
+  selectedProjectId,
+  onSelectProject,
   onNavigate,
   onNewInteraction,
   onLoadSession,
@@ -140,33 +151,79 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [showSettings, setShowSettings] = useState(false);
 
   // Projetos State
-  const [projects, setProjects] = useState<{ id: string, name: string, instructions: string }[]>([
-    { id: 'proj-1', name: 'Agente de Vendas SaaS', instructions: 'Tom direto.' }
-  ]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectInstructions, setNewProjectInstructions] = useState('');
+  const [projectFiles, setProjectFiles] = useState<File[]>([]);
+  const [newProjectTools, setNewProjectTools] = useState('');
 
-  const handleCreateProject = () => {
-    if (!newProjectName.trim()) return;
-    setProjects(prev => [{
-      id: `proj-${Date.now()}`,
-      name: newProjectName,
-      instructions: newProjectInstructions
-    }, ...prev]);
+  // Carrega projetos do backend ao montar (quando userId disponível)
+  useEffect(() => {
+    if (!userId) return;
+    setProjectsLoading(true);
+    projectApi.list(userId).then(list => {
+      setProjects(list);
+      setProjectsLoading(false);
+    });
+  }, [userId]);
+
+  const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [projectUploadStatus, setProjectUploadStatus] = useState('');
+
+  const handleCreateProject = async () => {
+    if (!newProjectName.trim() || !userId) return;
+    setIsCreatingProject(true);
+    setProjectUploadStatus('');
+
+    // 1. Cria o projeto
+    const created = await projectApi.create(userId, newProjectName, newProjectInstructions);
+    if (!created) {
+      setIsCreatingProject(false);
+      return;
+    }
+    setProjects(prev => [created, ...prev]);
+
+    // 2. Faz upload dos arquivos para o RAG do projeto (se houver)
+    if (projectFiles.length > 0) {
+      setProjectUploadStatus(`Enviando ${projectFiles.length} arquivo(s)...`);
+      for (const file of projectFiles) {
+        await projectApi.uploadFile(created.id, file);
+      }
+      setProjectUploadStatus('');
+    }
+
+    setIsCreatingProject(false);
     setShowProjectModal(false);
     setNewProjectName('');
     setNewProjectInstructions('');
+    setProjectFiles([]);
+    setNewProjectTools('');
+  };
+
+  // Carrega histórico apenas do Supabase (sem localStorage)
+  const loadSessions = () => {
+    if (!userId) {
+      setRecentSessions([]);
+      return;
+    }
+    conversationApi.list(userId).then(convs => {
+      const mapped: ChatSession[] = convs.map(c => ({
+        id: c.id,
+        title: c.title,
+        updatedAt: new Date(c.updated_at).getTime(),
+        messages: [],
+      }));
+      setRecentSessions(mapped);
+    }).catch(() => setRecentSessions([]));
   };
 
   useEffect(() => {
-    const fetchSessions = () => {
-      setRecentSessions(chatStorage.getSessions());
-    };
-    fetchSessions();
-    const interval = setInterval(fetchSessions, 2000);
+    loadSessions();
+    const interval = setInterval(loadSessions, 15000);
     return () => clearInterval(interval);
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
     onCollapsedChange?.(collapsed);
@@ -183,8 +240,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const handleDeleteSession = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    chatStorage.deleteSession(id);
-    setRecentSessions(chatStorage.getSessions());
+    conversationApi.delete(id).catch(() => {});
+    setRecentSessions(prev => prev.filter(s => s.id !== id));
   };
 
   return (
@@ -298,15 +355,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {projectsOpen && !collapsed && (
             <div className="mt-0.5 ml-3 border-l border-[#313134] pl-3 space-y-0.5 pb-1">
-              {projects.length === 0 ? (
+              {projectsLoading ? (
+                <div className="px-2 py-2 text-[11px] text-neutral-600">Carregando...</div>
+              ) : projects.length === 0 ? (
                 <div className="px-2 py-2 text-[11px] text-neutral-600">Nenhum projeto</div>
               ) : (
                 projects.map(proj => (
                   <button
                     key={proj.id}
-                    className="w-full flex items-center gap-2.5 px-2 py-2 text-sm rounded-lg transition-colors text-neutral-400 hover:text-white hover:bg-white/[0.03]"
+                    onClick={() => onSelectProject?.(selectedProjectId === proj.id ? null : proj.id)}
+                    className={`w-full flex items-center gap-2.5 px-2 py-2 text-sm rounded-lg transition-colors
+                      ${selectedProjectId === proj.id
+                        ? 'text-white bg-indigo-500/10 border border-indigo-500/30'
+                        : 'text-neutral-400 hover:text-white hover:bg-white/[0.03]'
+                      }`}
                   >
-                    <Folder size={14} className="text-indigo-400/70 flex-shrink-0" />
+                    <Folder size={14} className={selectedProjectId === proj.id ? 'text-indigo-400' : 'text-indigo-400/70'} />
                     <span className="truncate">{proj.name}</span>
                   </button>
                 ))
@@ -464,13 +528,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         onClose={() => setShowSettings(false)}
         userName={userName}
         userPlan={userPlan}
+        userId={userId}
       />
 
       {/* Modal Criar Projeto (Popup) */}
       {showProjectModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowProjectModal(false)} />
-          <div className="relative bg-[#111113] border border-[#262629] rounded-2xl shadow-2xl w-[480px] p-6">
+          <div className="relative bg-[#111113] border border-[#262629] rounded-2xl shadow-2xl w-full max-w-[480px] max-h-[90vh] overflow-y-auto p-6 m-4 scrollbar-hide">
             <h3 className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
               <Folder className="text-indigo-400" size={18} />
               Novo Projeto
@@ -489,8 +554,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   autoFocus
                 />
               </div>
+
               <div>
-                <label className="block text-xs text-neutral-500 mb-1.5 font-medium uppercase tracking-wider">Instruções</label>
+                <label className="text-xs text-neutral-500 mb-1.5 font-medium uppercase tracking-wider flex items-center gap-1.5 w-max relative group cursor-help">
+                  Instruções
+                  <Info size={14} className="opacity-70 group-hover:opacity-100 transition-opacity" />
+                  <div className="absolute left-0 bottom-full mb-2 w-64 p-2.5 bg-[#1a1a1d] border border-[#333] rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none normal-case font-normal text-xs text-neutral-300">
+                    Aqui você define como a IA deve se comportar nesse projeto, incluindo tom de voz, regras de negócio e restrições.
+                  </div>
+                </label>
                 <textarea
                   value={newProjectInstructions}
                   onChange={e => setNewProjectInstructions(e.target.value)}
@@ -498,21 +570,75 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   className="w-full h-24 bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50 resize-none"
                 />
               </div>
+
+              <div>
+                <label className="text-xs text-neutral-500 mb-1.5 font-medium uppercase tracking-wider flex items-center gap-1.5 w-max relative group cursor-help">
+                  Base de Conhecimento
+                  <Info size={14} className="opacity-70 group-hover:opacity-100 transition-opacity" />
+                  <div className="absolute left-0 bottom-full mb-2 w-64 p-2.5 bg-[#1a1a1d] border border-[#333] rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none normal-case font-normal text-xs text-neutral-300">
+                    Faça upload de documentos (PDF, planilhas) que contêm informações cruciais para a IA consultar durante o projeto.
+                  </div>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => document.getElementById('project-file-upload')?.click()}
+                  className="w-full flex flex-col items-center justify-center border border-dashed border-[#313134] hover:border-indigo-500/50 bg-[#1a1a1d] hover:bg-white/[0.02] transition-colors rounded-xl p-4 text-sm text-neutral-400 gap-2 cursor-pointer"
+                >
+                  <Upload size={20} className="text-neutral-500" />
+                  <span>Upload de arquivos para aprendizado</span>
+                  {projectFiles.length > 0 && (
+                    <span className="text-xs text-indigo-400 mt-1">{projectFiles.length} arquivo(s) selecionado(s)</span>
+                  )}
+                </button>
+                <input
+                  id="project-file-upload"
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      setProjectFiles(Array.from(e.target.files));
+                    }
+                  }}
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-neutral-500 mb-1.5 font-medium uppercase tracking-wider flex items-center gap-1.5 w-max relative group cursor-help">
+                  Ferramentas (Tools)
+                  <Info size={14} className="opacity-70 group-hover:opacity-100 transition-opacity" />
+                  <div className="absolute left-0 bottom-full mb-2 w-64 p-2.5 bg-[#1a1a1d] border border-[#333] rounded-lg shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none normal-case font-normal text-xs text-neutral-300">
+                    Selecione quais habilidades a IA terá acesso neste projeto.
+                  </div>
+                </label>
+                <input
+                  type="text"
+                  value={newProjectTools}
+                  onChange={e => setNewProjectTools(e.target.value)}
+                  placeholder="Ex: Busca Web, Manipulação de Arquivos..."
+                  className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50"
+                />
+              </div>
             </div>
 
             <div className="mt-6 flex justify-end gap-3">
+              {projectUploadStatus && (
+                <span className="text-xs text-indigo-400 mr-auto">{projectUploadStatus}</span>
+              )}
               <button
                 onClick={() => setShowProjectModal(false)}
-                className="px-4 py-2 text-sm text-neutral-400 hover:text-white transition-colors"
+                disabled={isCreatingProject}
+                className="px-4 py-2 text-sm text-neutral-400 hover:text-white transition-colors disabled:opacity-40"
               >
                 Cancelar
               </button>
               <button
                 onClick={handleCreateProject}
-                disabled={!newProjectName.trim()}
-                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-xl transition-colors"
+                disabled={!newProjectName.trim() || isCreatingProject}
+                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-xl transition-colors flex items-center gap-2"
               >
-                Criar Projeto
+                {isCreatingProject && <Loader2 size={14} className="animate-spin" />}
+                {isCreatingProject ? 'Criando...' : 'Criar Projeto'}
               </button>
             </div>
           </div>

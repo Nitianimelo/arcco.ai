@@ -159,6 +159,16 @@
     animation: browser-progress 2.5s ease-in-out infinite;
 }
 
+/* ── Cursor blink — indicador de step ativo (estilo terminal) ──────── */
+@keyframes cursor-blink {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0; }
+}
+
+.animate-cursor-blink {
+    animation: cursor-blink 1s step-end infinite;
+}
+
 /* ── Agent Thought Panel: enchantment layers ─────────────────────── */
 
 /* Step entrance — each step slides in from left with stagger */
@@ -274,4 +284,34 @@
 
 .animate-success-flash {
     animation: success-flash 1.2s ease-out;
+}
+
+/* Gallery thumbnail entrance */
+@keyframes gallery-thumb-enter {
+    from { opacity: 0; transform: scale(0.85); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.animate-gallery-thumb {
+    animation: gallery-thumb-enter 0.25s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Floating text editor panel entrance */
+@keyframes float-panel-enter {
+    from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.animate-float-panel {
+    animation: float-panel-enter 0.2s ease-out both;
+}
+
+/* Editor canvas active glow */
+@keyframes editor-glow {
+    0%, 100% { box-shadow: 0 0 0 1px rgba(217, 119, 6, 0.15); }
+    50% { box-shadow: 0 0 12px 1px rgba(217, 119, 6, 0.08); }
+}
+
+.animate-editor-glow {
+    animation: editor-glow 3s ease-in-out infinite;
 }

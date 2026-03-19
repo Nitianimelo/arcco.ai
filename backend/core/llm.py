@@ -49,24 +49,23 @@ async def get_api_key(force_refresh: bool = False) -> str:
         "Authorization": f"Bearer {supabase_key}",
     }
 
-    for table_name in ["ApiKeys", "apikeys"]:
-        try:
-            url = f"{supabase_url}/rest/v1/{table_name}?select=api_key&provider=eq.openrouter&is_active=eq.true"
-            print(f"[GET_API_KEY] Querying Supabase ({table_name})...")
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(url, headers=headers)
-                if response.status_code != 200:
-                    continue
+    try:
+        url = f"{supabase_url}/rest/v1/ApiKeys?select=api_key&provider=eq.openrouter&is_active=eq.true"
+        print("[GET_API_KEY] Querying Supabase (ApiKeys)...")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url, headers=headers)
+            if response.status_code == 200:
                 rows = response.json()
                 if rows and rows[0].get("api_key"):
                     key = rows[0]["api_key"]
                     _api_key_cache = {"key": key, "ts": now}
                     config.openrouter_api_key = key
-                    print(f"[GET_API_KEY] OK - Supabase key loaded: {key[:15]}...")
+                    print(f"[GET_API_KEY] OK - key loaded: {key[:15]}...")
                     return key
-        except Exception as e:
-            print(f"[GET_API_KEY] ERROR querying {table_name}: {e}")
-            continue
+            else:
+                print(f"[GET_API_KEY] Supabase retornou status {response.status_code}: {response.text[:200]}")
+    except Exception as e:
+        print(f"[GET_API_KEY] ERROR: {e}")
 
     # Fallback: usar key já em cache (Supabase indisponível temporariamente)
     if _api_key_cache["key"]:
@@ -79,8 +78,7 @@ async def get_api_key(force_refresh: bool = False) -> str:
 
 async def get_search_key(force_refresh: bool = False) -> str:
     """
-    Busca a API key de busca do Supabase (tabela ApiKeys) — Única Fonte da Verdade.
-    Tenta Tavily primeiro (prefixo 'tvly-'), depois Brave.
+    Busca a API key do Tavily do Supabase (tabela ApiKeys) — Única Fonte da Verdade.
     Cache de 60s para evitar chamadas excessivas.
     """
     global _search_key_cache
@@ -105,34 +103,32 @@ async def get_search_key(force_refresh: bool = False) -> str:
         "Authorization": f"Bearer {supabase_key}",
     }
 
-    for provider in ["tavily", "brave"]:
-        for table_name in ["ApiKeys", "apikeys"]:
-            try:
-                url = f"{supabase_url}/rest/v1/{table_name}?select=api_key&provider=eq.{provider}&is_active=eq.true"
-                print(f"[GET_SEARCH_KEY] Querying Supabase: provider={provider} table={table_name}")
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    response = await client.get(url, headers=headers)
-                    print(f"[GET_SEARCH_KEY] Status: {response.status_code} | Body: {response.text[:200]}")
-                    if response.status_code != 200:
-                        continue
-                    rows = response.json()
-                    if rows and rows[0].get("api_key"):
-                        key = rows[0]["api_key"]
-                        _search_key_cache = {"key": key, "ts": now}
-                        print(f"[GET_SEARCH_KEY] OK - {provider} key loaded: {key[:15]}...")
-                        return key
-                    else:
-                        print(f"[GET_SEARCH_KEY] Rows returned: {rows} — chave não encontrada para provider={provider}")
-            except Exception as e:
-                print(f"[GET_SEARCH_KEY] ERROR provider={provider} table={table_name}: {e}")
-                continue
+    try:
+        url = f"{supabase_url}/rest/v1/ApiKeys?select=api_key&provider=eq.tavily&is_active=eq.true"
+        print("[GET_SEARCH_KEY] Querying Supabase: provider=tavily")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url, headers=headers)
+            print(f"[GET_SEARCH_KEY] Status: {response.status_code} | Body: {response.text[:200]}")
+            if response.status_code == 200:
+                rows = response.json()
+                if rows and rows[0].get("api_key"):
+                    key = rows[0]["api_key"]
+                    _search_key_cache = {"key": key, "ts": now}
+                    print(f"[GET_SEARCH_KEY] OK - tavily key loaded: {key[:15]}...")
+                    return key
+                else:
+                    print("[GET_SEARCH_KEY] provider=tavily — chave não encontrada na tabela ApiKeys")
+            else:
+                print(f"[GET_SEARCH_KEY] Supabase retornou status {response.status_code}")
+    except Exception as e:
+        print(f"[GET_SEARCH_KEY] ERROR: {e}")
 
     # Fallback: stale cache se Supabase indisponível
     if _search_key_cache["key"]:
         print("[GET_SEARCH_KEY] WARN - usando cache antigo (Supabase indisponível)")
         return _search_key_cache["key"]
 
-    print("[GET_SEARCH_KEY] FATAL: Nenhuma chave de busca encontrada no Supabase (tavily/brave).")
+    print("[GET_SEARCH_KEY] FATAL: Chave Tavily não encontrada no Supabase (provider='tavily').")
     return ""
 
 
@@ -161,22 +157,19 @@ async def get_vercel_key(force_refresh: bool = False) -> str:
         "Authorization": f"Bearer {supabase_key}",
     }
 
-    for table_name in ["ApiKeys", "apikeys"]:
-        try:
-            url = f"{supabase_url}/rest/v1/{table_name}?select=api_key&provider=eq.vercel&is_active=eq.true"
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(url, headers=headers)
-                if response.status_code != 200:
-                    continue
+    try:
+        url = f"{supabase_url}/rest/v1/ApiKeys?select=api_key&provider=eq.vercel&is_active=eq.true"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url, headers=headers)
+            if response.status_code == 200:
                 rows = response.json()
                 if rows and rows[0].get("api_key"):
                     key = rows[0]["api_key"]
                     _vercel_key_cache = {"key": key, "ts": now}
                     print(f"[GET_VERCEL_KEY] OK - key loaded: {key[:20]}...")
                     return key
-        except Exception as e:
-            print(f"[GET_VERCEL_KEY] ERROR table={table_name}: {e}")
-            continue
+    except Exception as e:
+        print(f"[GET_VERCEL_KEY] ERROR: {e}")
 
     if _vercel_key_cache["key"]:
         print("[GET_VERCEL_KEY] WARN - usando cache antigo (Supabase indisponível)")
@@ -219,7 +212,7 @@ async def call_openrouter(
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=45.0) as client:
         response = await client.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={

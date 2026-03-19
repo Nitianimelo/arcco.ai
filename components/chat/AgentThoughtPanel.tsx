@@ -1,5 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { BrainCircuit, CheckCircle2, ChevronDown, Loader2, Sparkles } from 'lucide-react';
+import React, { useEffect, useState, useRef } from 'react';
 
 export interface ThoughtStep {
   label: string;
@@ -15,8 +14,77 @@ interface AgentThoughtPanelProps {
   elapsedSeconds: number;
 }
 
+// Remove emojis e caracteres Unicode desnecessários
 const stripEmoji = (text: string) =>
   text.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\u200d\ufe0f]/gu, '').trim();
+
+// ────────────────────────────────────────────────────────────
+// Step Row — linha individual do log
+// ────────────────────────────────────────────────────────────
+
+const StepRow: React.FC<{ step: ThoughtStep; isNew: boolean; delay: number }> = ({
+  step,
+  isNew,
+  delay,
+}) => {
+  const label = stripEmoji(step.label);
+
+  // Bloco de raciocínio (thought) — indentado, sem indicador
+  if (step.isThought) {
+    return (
+      <div
+        className={`pl-5 border-l border-[#242424] ${isNew ? 'animate-step-enter' : ''}`}
+        style={isNew ? { animationDelay: `${delay}ms` } : undefined}
+      >
+        <p className="text-[11px] leading-relaxed text-neutral-700 italic font-mono tracking-wide">
+          {label}
+          {step.status === 'running' && (
+            <span className="animate-cursor-blink ml-0.5 not-italic text-neutral-500">▌</span>
+          )}
+        </p>
+      </div>
+    );
+  }
+
+  // Step de ação
+  const borderClass =
+    step.status === 'running'
+      ? 'border-l-2 border-neutral-300'
+      : step.status === 'done'
+      ? 'border-l border-[#333338]'
+      : 'border-l border-[#222226]';
+
+  const textClass =
+    step.status === 'running'
+      ? 'text-neutral-100'
+      : step.status === 'done'
+      ? 'text-neutral-500'
+      : 'text-neutral-700';
+
+  return (
+    <div
+      className={`pl-4 ${borderClass} ${isNew ? 'animate-step-enter' : ''}`}
+      style={isNew ? { animationDelay: `${delay}ms` } : undefined}
+    >
+      <span className={`text-xs font-mono tracking-wide ${textClass}`}>
+        {step.status === 'done' && (
+          <span className="mr-2 text-neutral-600">✓</span>
+        )}
+        {step.status === 'pending' && (
+          <span className="mr-2 text-neutral-700">·</span>
+        )}
+        {label}
+        {step.status === 'running' && (
+          <span className="animate-cursor-blink ml-0.5 text-neutral-400">▌</span>
+        )}
+      </span>
+    </div>
+  );
+};
+
+// ────────────────────────────────────────────────────────────
+// Componente principal
+// ────────────────────────────────────────────────────────────
 
 const AgentThoughtPanel: React.FC<AgentThoughtPanelProps> = ({
   steps,
@@ -24,192 +92,78 @@ const AgentThoughtPanel: React.FC<AgentThoughtPanelProps> = ({
   onToggle,
   elapsedSeconds,
 }) => {
-  const doneCount = steps.filter(s => s.status === 'done').length;
   const isRunning = steps.some(s => s.status === 'running');
-  const allDone = doneCount === steps.length && steps.length > 0;
-
-  // Local state: whether to show full list when done (default compact)
-  const [showFullWhenDone, setShowFullWhenDone] = useState(false);
-
-  // Reset to compact when a new run starts
-  useEffect(() => {
-    if (isRunning) setShowFullWhenDone(false);
-  }, [isRunning]);
-
-  const prevCountRef = useRef(0);
-  useEffect(() => { prevCountRef.current = steps.length; }, [steps.length]);
-
-  const progress = steps.length > 0 ? (doneCount / steps.length) * 100 : 0;
+  const allDone = steps.length > 0 && steps.every(s => s.status === 'done');
+  const doneCount = steps.filter(s => s.status === 'done').length;
   const actionSteps = steps.filter(s => !s.isThought);
 
-  const headerLabel = isRunning
-    ? 'Pensando...'
-    : allDone
-    ? `Concluído em ${elapsedSeconds}s`
-    : 'Processo do Agente';
+  const [showList, setShowList] = useState(true);
+
+  // Expande automaticamente quando inicia
+  useEffect(() => {
+    if (isRunning) setShowList(true);
+  }, [isRunning]);
+
+  // Controla animação dos novos steps
+  const prevCountRef = useRef(0);
+  useEffect(() => {
+    prevCountRef.current = steps.length;
+  }, [steps.length]);
 
   const handleHeaderClick = () => {
-    if (allDone) {
-      setShowFullWhenDone(p => !p);
-    } else {
-      onToggle();
-    }
+    if (allDone) setShowList(p => !p);
+    else onToggle();
   };
 
-  const showList = allDone ? showFullWhenDone : isExpanded;
-
   return (
-    <div className={`rounded-xl border bg-[#0F0F0F] overflow-hidden my-2 w-full transition-all duration-500 ${
-      isRunning ? 'animate-border-breathe' : allDone ? 'border-emerald-500/15' : 'border-[#262626]'
+    <div className={`my-2 w-full rounded-lg border overflow-hidden transition-colors duration-500 ${
+      isRunning ? 'bg-[#111114] border-[#2e2e34]' : allDone ? 'bg-[#0f0f12] border-[#252528]' : 'bg-[#0f0f12] border-[#252528]'
     }`}>
 
-      {/* Header */}
+      {/* ── Header ───────────────────────────────────────────── */}
       <button
         onClick={handleHeaderClick}
-        className={`w-full flex items-center justify-between px-4 py-2.5 hover:bg-[#151515] transition-all group relative overflow-hidden ${
-          allDone && !isRunning ? 'animate-success-flash' : ''
-        }`}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/[0.02] transition-colors"
       >
-        <div className="flex items-center gap-2.5">
+        <span className="font-mono text-xs text-neutral-500 tracking-wide">
+          agente
+          <span className="mx-2 text-neutral-800">·</span>
           {isRunning ? (
-            <div className="w-2 h-2 rounded-full bg-indigo-400 animate-ring-pulse shrink-0" />
+            <span className="text-neutral-300">
+              pensando
+              <span className="animate-cursor-blink ml-0.5 text-neutral-400">▌</span>
+            </span>
           ) : allDone ? (
-            <CheckCircle2 size={13} className="text-emerald-500 animate-check-pop shrink-0" />
+            <span className="text-neutral-500">
+              concluído em {elapsedSeconds}s
+            </span>
           ) : (
-            <BrainCircuit size={13} className="text-indigo-400 shrink-0" />
+            <span className="text-neutral-600">iniciando</span>
           )}
+        </span>
 
-          <span className={`text-xs font-medium transition-colors ${
-            isRunning
-              ? 'shimmer-text text-indigo-300'
-              : allDone
-              ? 'text-emerald-400/80'
-              : 'text-neutral-400 group-hover:text-neutral-300'
-          }`}>
-            {headerLabel}
-          </span>
-
-          {/* Progress pill — while running */}
-          {!allDone && (
-            <span className="text-[10px] text-neutral-600 bg-[#1a1a1a] px-1.5 py-0.5 rounded-full font-mono">
-              {doneCount}/{steps.length}
-            </span>
-          )}
-
-          {/* Step count pill — when done */}
-          {allDone && (
-            <span className="text-[10px] text-neutral-600 bg-[#1a1a1a] px-1.5 py-0.5 rounded-full font-mono">
-              {actionSteps.length} etapas
-            </span>
-          )}
-        </div>
-
-        <ChevronDown
-          size={13}
-          className={`text-neutral-600 transition-transform duration-300 ${showList ? 'rotate-180' : ''}`}
-        />
+        <span className="font-mono text-[10px] text-neutral-600 tabular-nums">
+          {isRunning && steps.length > 0
+            ? `${doneCount} / ${actionSteps.length}`
+            : allDone
+            ? `${actionSteps.length} etapas`
+            : null
+          }
+        </span>
       </button>
 
-      {/* Micro progress bar — only while running */}
-      {isRunning && (
-        <div className="h-[1px] bg-[#1a1a1a] relative overflow-hidden">
-          <div
-            className="h-full bg-gradient-to-r from-indigo-500/40 via-violet-500/50 to-indigo-500/40 transition-all duration-700 ease-out"
-            style={{ width: `${Math.max(progress, 8)}%` }}
-          />
-        </div>
-      )}
-
-      {/* Compact pills — when done and list collapsed */}
-      {allDone && !showList && actionSteps.length > 0 && (
-        <div className="px-4 pb-3 pt-2 border-t border-[#1a1a1a] flex flex-wrap gap-1.5">
-          {actionSteps.map((step, i) => (
-            <span
-              key={i}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-[#161616] border border-[#262626] text-[10px] text-neutral-500 max-w-[190px]"
-              title={stripEmoji(step.label)}
-            >
-              <CheckCircle2 size={9} className="text-emerald-500/60 shrink-0" />
-              <span className="truncate">{stripEmoji(step.label)}</span>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Full steps list */}
+      {/* ── Linha divisória ──────────────────────────────────── */}
       {showList && steps.length > 0 && (
-        <div className="px-4 pb-3 pt-2 space-y-2 border-t border-[#1a1a1a] relative">
+        <div className="h-px bg-[#1e1e22]" />
+      )}
 
-          {/* Timeline line */}
-          <div className="absolute left-[22px] top-4 bottom-4 w-[1px] bg-gradient-to-b from-[#262626] via-[#262626] to-transparent pointer-events-none" />
-
+      {/* ── Lista de steps ───────────────────────────────────── */}
+      {showList && steps.length > 0 && (
+        <div className="px-5 py-3 space-y-2.5">
           {steps.map((step, i) => {
             const isNew = i >= prevCountRef.current;
-
-            if (step.isThought) {
-              return (
-                <div
-                  key={i}
-                  className={`rounded-lg border border-violet-500/20 bg-violet-500/5 px-3 py-2.5 transition-all duration-300 ml-[26px] ${
-                    step.status === 'pending' ? 'opacity-25' : 'opacity-100'
-                  } ${step.status === 'running' ? 'animate-thought-glow' : ''} ${
-                    isNew ? 'animate-step-enter' : ''
-                  }`}
-                  style={isNew ? { animationDelay: `${(i - prevCountRef.current) * 80}ms` } : undefined}
-                >
-                  <div className="flex items-center gap-1.5 mb-1.5">
-                    {step.status === 'running' ? (
-                      <Sparkles size={11} className="text-violet-400 animate-pulse" />
-                    ) : (
-                      <Sparkles size={11} className="text-violet-600" />
-                    )}
-                    <span className="text-[9px] font-semibold uppercase tracking-widest text-violet-500">
-                      Raciocínio
-                    </span>
-                  </div>
-                  <p className={`text-[11px] leading-relaxed italic whitespace-pre-wrap ${
-                    step.status === 'running' ? 'text-violet-200' : 'text-violet-400/70'
-                  }`}>
-                    {step.label}
-                  </p>
-                </div>
-              );
-            }
-
-            return (
-              <div
-                key={i}
-                className={`flex items-start gap-2.5 transition-all duration-300 relative ${
-                  step.status === 'pending' ? 'opacity-25' : 'opacity-100'
-                } ${isNew ? 'animate-step-enter' : ''}`}
-                style={isNew ? { animationDelay: `${(i - prevCountRef.current) * 80}ms` } : undefined}
-              >
-                <div className="mt-0.5 shrink-0 relative z-10">
-                  {step.status === 'done' && (
-                    <span className="animate-check-pop inline-flex">
-                      <CheckCircle2 size={13} className="text-emerald-500" />
-                    </span>
-                  )}
-                  {step.status === 'running' && (
-                    <span className="inline-flex">
-                      <Loader2 size={13} className="text-indigo-400 animate-spin" />
-                    </span>
-                  )}
-                  {step.status === 'pending' && (
-                    <div className="w-3 h-3 rounded-full border border-[#333]" />
-                  )}
-                </div>
-                <span className={`text-xs leading-relaxed transition-colors duration-300 ${
-                  step.status === 'running'
-                    ? 'text-neutral-200'
-                    : step.status === 'done'
-                    ? 'text-neutral-400'
-                    : 'text-neutral-700'
-                }`}>
-                  {stripEmoji(step.label)}
-                </span>
-              </div>
-            );
+            const delay = isNew ? (i - prevCountRef.current) * 60 : 0;
+            return <StepRow key={i} step={step} isNew={isNew} delay={delay} />;
           })}
         </div>
       )}

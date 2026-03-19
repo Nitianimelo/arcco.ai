@@ -21,6 +21,10 @@ from backend.core.config import get_config
 from backend.api import chat, router as intent_router, search, files, ocr, admin
 from backend.api import export as export_api
 from backend.api import location as location_api
+from backend.api import preferences as preferences_api
+from backend.api import conversations as conversations_api
+from backend.api import projects as projects_api
+from backend.api import tools as tools_api
 from backend.agents import registry
 
 # ── Logging ───────────────────────────────────────────
@@ -61,6 +65,10 @@ app.include_router(ocr.router, prefix="/api/agent", tags=["ocr"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(export_api.router, prefix="/api/agent", tags=["export"])
 app.include_router(location_api.router, prefix="/api/agent", tags=["location"])
+app.include_router(preferences_api.router, prefix="/api/agent", tags=["preferences"])
+app.include_router(conversations_api.router, prefix="/api/agent", tags=["conversations"])
+app.include_router(projects_api.router, prefix="/api/agent", tags=["projects"])
+app.include_router(tools_api.router, prefix="/api/agent", tags=["tools"])
 
 # ── Health Check ──────────────────────────────────────
 

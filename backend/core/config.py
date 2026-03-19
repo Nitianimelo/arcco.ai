@@ -131,23 +131,23 @@ class AgentConfig:
                 "Authorization": f"Bearer {self.supabase_key}",
             }
 
-            # Try both table name formats (CamelCase and lowercase)
-            for table_name in ["ApiKeys", "apikeys"]:
-                try:
-                    url = f"{self.supabase_url}/rest/v1/{table_name}?select=provider,api_key&is_active=eq.true"
-                    with httpx.Client(timeout=10.0) as client:
-                        response = client.get(url, headers=headers)
-                        if response.status_code != 200:
-                            continue
+            try:
+                url = f"{self.supabase_url}/rest/v1/ApiKeys?select=provider,api_key&is_active=eq.true"
+                with httpx.Client(timeout=10.0) as client:
+                    response = client.get(url, headers=headers)
+                    if response.status_code != 200:
+                        print(f"[CONFIG] Supabase ApiKeys query failed: status={response.status_code}")
+                        rows = []
+                    else:
                         rows = response.json()
-                except Exception:
-                    continue
+            except Exception as e:
+                print(f"[CONFIG] Supabase ApiKeys query error: {e}")
+                rows = []
 
-                if not rows:
-                    continue
-
+            if rows:
                 # Map provider -> api_key
                 key_map = {row["provider"]: row["api_key"] for row in rows if row.get("api_key")}
+                print(f"[CONFIG] Providers encontrados no Supabase: {list(key_map.keys())}")
 
                 if needs_openrouter and key_map.get("openrouter"):
                     self.openrouter_api_key = key_map["openrouter"]
@@ -165,13 +165,24 @@ class AgentConfig:
                     self.browserbase_project_id = key_map["browserbase_project_id"]
                     print("[CONFIG] Browserbase Project ID loaded from Supabase")
 
-                # Found keys, stop trying table names
-                break
-
             if not self.openrouter_api_key and not self.api_key:
                 print("[CONFIG] WARNING: No LLM API key found (env or Supabase). Agent will fail.")
             else:
                 print("[CONFIG] API keys ready (env + Supabase fallback)")
+
+            # Verificação explícita do Browserbase
+            if not self.browserbase_api_key:
+                print("[CONFIG] WARNING: BROWSERBASE_API_KEY não configurada. "
+                      "Browser Agent ficará indisponível. "
+                      "Adicione provider='browserbase' na tabela ApiKeys do Supabase "
+                      "ou defina BROWSERBASE_API_KEY como variável de ambiente.")
+            if not self.browserbase_project_id:
+                print("[CONFIG] WARNING: BROWSERBASE_PROJECT_ID não configurado. "
+                      "Browser Agent ficará indisponível. "
+                      "Adicione provider='browserbase_project_id' na tabela ApiKeys do Supabase "
+                      "ou defina BROWSERBASE_PROJECT_ID como variável de ambiente.")
+            if self.browserbase_api_key and self.browserbase_project_id:
+                print(f"[CONFIG] Browserbase OK — key: {self.browserbase_api_key[:15]}... project: {self.browserbase_project_id[:15]}...")
 
         except Exception as e:
             print(f"[CONFIG] WARNING: Could not load API keys from Supabase: {e}")

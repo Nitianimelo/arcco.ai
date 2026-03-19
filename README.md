@@ -96,3 +96,9 @@ O Vite sobe em `http://localhost:3000` e faz proxy para o backend em `http://loc
 - O contrato de streaming do chat é SSE. Mudanças no backend exigem alinhamento com o consumer TypeScript.
 - O registry em `backend/agents/registry.py` é a fonte de verdade dos agentes carregados em runtime.
 - O README anterior estava desatualizado e referenciava AI Studio/Gemini; este arquivo agora descreve a arquitetura real do projeto.
+
+## Documentação interna
+
+- `docs/architecture-overview.md`: mapa do app e hotspots
+- `docs/chat-sse-contract.md`: contrato de eventos entre backend e frontend
+- `docs/organization-priorities.md`: prioridades de organização sem alterar comportamento

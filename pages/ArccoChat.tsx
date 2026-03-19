@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Loader2, Sparkles, Save, Terminal, FileText, Download, ChevronDown, Paperclip, HardDrive, FileSpreadsheet, Eye, Square } from 'lucide-react';
+import { Send, Loader2, Sparkles, Save, Terminal, FileText, Download, ChevronDown, Paperclip, HardDrive, FileSpreadsheet, Eye, Square, Plus, Link, Folder, Pencil, Trash2, Upload, X, Check, AlertTriangle } from 'lucide-react';
+import { projectApi, Project, ProjectFile } from '../lib/projectApi';
 import { openRouterService } from '../lib/openrouter';
 import { agentApi, SessionFileItem, SessionFileStatus } from '../lib/api-client';
 import { supabase } from '../lib/supabase';
@@ -9,11 +10,15 @@ import AgentThoughtPanel, { ThoughtStep } from '../components/chat/AgentThoughtP
 import { BrowserAgentCard } from '../components/chat/BrowserAgentCard';
 import TextDocCard from '../components/chat/TextDocCard';
 import PresentationCard from '../components/chat/PresentationCard';
+import DesignGallery from '../components/chat/DesignGallery';
 import DocumentPreviewModal from '../components/chat/DocumentPreviewModal';
+import DesignPreviewModal from '../components/chat/DesignPreviewModal';
+import { ProjectEditModal } from '../components/chat/ProjectEditModal';
 import DotGridBackground from '../components/ui/DotGridBackground';
 import { useToast } from '../components/Toast';
 import AgentTerminal from '../components/AgentTerminal';
-import { chatStorage, ChatSession, Message } from '../lib/chatStorage';
+import { Message } from '../lib/chatStorage';
+import { conversationApi } from '../lib/conversationApi';
 
 interface FilePreviewCardProps {
   url: string;
@@ -112,6 +117,11 @@ const FilePreviewCard: React.FC<FilePreviewCardProps> = ({ url, filename, type, 
 interface ArccoChatPageProps {
   userName: string;
   chatSessionId?: string | null;
+  userId?: string;
+  projectId?: string | null;
+  project?: Project | null;
+  onProjectUpdated?: (project: Project) => void;
+  onProjectDeleted?: () => void;
   onSessionUpdate?: (session: ChatSession) => void;
   initialMessage?: string | null;
   onClearInitialMessage?: () => void;
@@ -150,6 +160,11 @@ const allSuggestions = [
 const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   userName,
   chatSessionId,
+  userId,
+  projectId,
+  project,
+  onProjectUpdated,
+  onProjectDeleted,
   onSessionUpdate,
   initialMessage,
   onClearInitialMessage,
@@ -157,6 +172,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const { showToast } = useToast();
   const [localSessionId] = useState(() => Date.now().toString());
   const effectiveSessionId = chatSessionId || localSessionId;
+  const [conversationId, setConversationId] = useState<string | null>(null);
 
   const [isApiKeyReady, setIsApiKeyReady] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -181,10 +197,86 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const [generatedFiles, setGeneratedFiles] = useState<Array<{ filename: string; url: string; type: 'pdf' | 'excel' | 'other' }>>([]);
   const [textDocArtifact, setTextDocArtifact] = useState<{ title: string; content: string } | null>(null);
   const [modalPreview, setModalPreview] = useState<{ type: 'text_doc' | 'pdf' | 'excel' | 'other'; title: string; content?: string; url?: string } | null>(null);
+  const [designPreviewHtml, setDesignPreviewHtml] = useState<string | null>(null);
+  const [showAddMenu, setShowAddMenu] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const notifiedFailedFilesRef = useRef<Set<string>>(new Set());
 
   const arccoEmblemUrl = "https://qscezcbpwvnkqoevulbw.supabase.co/storage/v1/object/public/Chipro%20calculadora/8.png";
+
+  // ── Modal de edição do projeto ───────────────────────────────────────────
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editInstructions, setEditInstructions] = useState('');
+  const [editFiles, setEditFiles] = useState<ProjectFile[]>([]);
+  const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+  const [isUpdatingProject, setIsUpdatingProject] = useState(false);
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
+  const editFileInputRef = useRef<HTMLInputElement>(null);
+
+  const openEditModal = () => {
+    if (!project) return;
+    setEditName(project.name);
+    setEditInstructions(project.instructions || '');
+    setDeleteConfirm(false);
+    setShowEditModal(true);
+    setIsLoadingFiles(true);
+    projectApi.listFiles(project.id).then(files => {
+      setEditFiles(files);
+      setIsLoadingFiles(false);
+    }).catch(() => setIsLoadingFiles(false));
+  };
+
+  const handleSaveProject = async () => {
+    if (!project || !editName.trim()) return;
+    setIsUpdatingProject(true);
+    const updated = await projectApi.update(project.id, {
+      name: editName.trim(),
+      instructions: editInstructions,
+    });
+    setIsUpdatingProject(false);
+    if (updated) {
+      onProjectUpdated?.(updated);
+      setShowEditModal(false);
+      showToast('Projeto atualizado com sucesso', 'success');
+    } else {
+      showToast('Erro ao atualizar projeto', 'error');
+    }
+  };
+
+  const handleDeleteProjectFile = async (fileId: string) => {
+    if (!project) return;
+    await projectApi.deleteFile(project.id, fileId);
+    setEditFiles(prev => prev.filter(f => f.id !== fileId));
+  };
+
+  const handleUploadProjectFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !project) return;
+    setIsUploadingFile(true);
+    const result = await projectApi.uploadFile(project.id, file);
+    if (result) {
+      setEditFiles(prev => [...prev, result as ProjectFile]);
+      showToast('Arquivo enviado. Processamento em andamento.', 'success');
+    } else {
+      showToast('Erro ao enviar arquivo', 'error');
+    }
+    setIsUploadingFile(false);
+    if (editFileInputRef.current) editFileInputRef.current.value = '';
+  };
+
+  const handleDeleteProject = async () => {
+    if (!project) return;
+    if (!deleteConfirm) { setDeleteConfirm(true); return; }
+    setIsDeletingProject(true);
+    await projectApi.delete(project.id);
+    setIsDeletingProject(false);
+    setShowEditModal(false);
+    onProjectDeleted?.();
+    showToast('Projeto excluído', 'success');
+  };
 
   // Location + Weather (IP-based, no permission needed)
   const [userLocation, setUserLocation] = useState<{ city: string; temp?: number; weatherCode?: number } | null>(null);
@@ -352,19 +444,24 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     loadChatModeConfigs();
   }, []);
 
-  // Load chat session if provided
+  // Carrega mensagens do Supabase quando chatSessionId for um UUID
   useEffect(() => {
-    if (chatSessionId) {
-      const session = chatStorage.getSession(chatSessionId);
-      if (session) {
-        setMessages(session.messages);
-      } else {
-        setMessages([]);
-      }
-    } else {
-      setMessages([]);
-    }
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatSessionId || '');
     setGeneratedFiles([]);
+    setConversationId(null);
+    setMessages([]);
+
+    if (!chatSessionId || !isUUID) return;
+
+    setConversationId(chatSessionId);
+    conversationApi.getMessages(chatSessionId).then(msgs => {
+      setMessages(msgs.map(m => ({
+        id: m.id,
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+        timestamp: m.created_at,
+      })));
+    }).catch(() => setMessages([]));
   }, [chatSessionId]);
 
   useEffect(() => {
@@ -435,6 +532,13 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     }
   }, [messages]);
 
+  // Rola para o final quando o BrowserAgentCard aparecer
+  useEffect(() => {
+    if (browserAction) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [browserAction]);
+
   useEffect(() => {
     if (initialMessage) {
       handleSendMessage(initialMessage);
@@ -451,20 +555,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     return () => clearInterval(interval);
   }, [isLoading, agentThoughts.length]);
 
-  const saveToSession = (msgs: Message[]) => {
-    if (!msgs || msgs.length === 0) return;
-    const session: ChatSession = {
-      id: chatSessionId || Date.now().toString(),
-      title: chatStorage.generateTitle(msgs),
-      updatedAt: Date.now(),
-      messages: msgs
-    };
-    chatStorage.saveSession(session);
-    if (onSessionUpdate && session.id !== chatSessionId) {
-      // It was a new session, notify parent adapter
-      onSessionUpdate(session);
-    }
-  };
+  // Histórico persiste apenas no Supabase via background task no backend
+  const saveToSession = (_msgs: Message[]) => { /* no-op */ };
 
   const selectedChatConfig = chatModeConfigs.find(cfg => cfg.slot_number === selectedChatSlot) || null;
 
@@ -613,6 +705,12 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             return;
           }
 
+          // ID da conversa emitido pelo backend antes do primeiro chunk
+          if (type === 'conversation_id') {
+            setConversationId(content);
+            return;
+          }
+
           if (type === 'chunk') {
             if (!hasStartedTalking) {
               hasStartedTalking = true;
@@ -633,7 +731,10 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
         controller.signal,
         !isAgentMode ? selectedChatConfig?.openrouter_model_id : undefined,
         isAgentMode ? 'agent' : 'normal',
-        effectiveSessionId
+        effectiveSessionId,
+        userId,
+        projectId,
+        conversationId
       );
 
       // Wait for queue to finish draining typing effect
@@ -708,7 +809,13 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     // Detecta resposta que é uma apresentação HTML completa (terminal tool generate_web_page)
     const trimmedContent = content.trim();
     if (trimmedContent.startsWith('<!DOCTYPE') || trimmedContent.toLowerCase().startsWith('<html')) {
-      return <PresentationCard html={trimmedContent} isStreaming={isLoading} />;
+      const DESIGN_SEPARATOR = '<!-- ARCCO_DESIGN_SEPARATOR -->';
+      const designs = trimmedContent.split(DESIGN_SEPARATOR).map(d => d.trim()).filter(Boolean);
+      const openDesign = (html: string) => setDesignPreviewHtml(html);
+      if (designs.length > 1) {
+        return <DesignGallery designs={designs} isStreaming={isLoading} onOpenPreview={openDesign} />;
+      }
+      return <PresentationCard html={designs[0] || trimmedContent} isStreaming={isLoading} onOpenPreview={openDesign} />;
     }
 
     // Matches closed OR unclosed code blocks (until end of string) for streaming safety
@@ -790,19 +897,47 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
       <div className="absolute -inset-0.5 bg-gradient-to-r from-neutral-700/20 to-neutral-500/20 rounded-xl blur opacity-0 group-hover:opacity-100 transition duration-500"></div>
       <div className={`relative flex items-end gap-2 bg-[#121212]/95 border border-[#333] rounded-xl px-4 py-3 shadow-2xl ${variant === 'centered' ? 'min-h-[56px]' : ''}`}>
 
-        <div className="flex items-center gap-1 pr-2 border-r border-[#333] mr-2">
+        <div className="relative flex items-center gap-1 pr-2 border-r border-[#333] mr-2">
           <input type="file" hidden ref={fileInputRef} onChange={handleFileUpload} />
           <button
-            onClick={() => !isFileLoading && fileInputRef.current?.click()}
+            onClick={() => setShowAddMenu(!showAddMenu)}
             disabled={isFileLoading}
-            className="p-1.5 text-neutral-500 hover:text-white transition-colors rounded-lg hover:bg-[#222] disabled:cursor-not-allowed"
-            title={isFileLoading ? "Enviando arquivo..." : "Anexar arquivo à sessão (máx. 25MB)"}
+            className="flex items-center justify-center gap-1.5 px-3 py-1.5 text-neutral-400 hover:text-white hover:bg-[#222] transition-colors rounded-lg disabled:cursor-not-allowed text-sm font-medium"
+            title={isFileLoading ? "Enviando arquivo..." : "Adicionar anexo ou link"}
           >
             {isFileLoading
               ? <Loader2 size={16} className="animate-spin text-indigo-400" />
-              : <Paperclip size={16} />
+              : <><Plus size={16} /> <span className="hidden sm:inline">Adicionar</span></>
             }
           </button>
+
+          {showAddMenu && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setShowAddMenu(false)} />
+              <div className="absolute bottom-[calc(100%+12px)] left-0 w-64 bg-[#1a1a1d] border border-[#333] rounded-xl shadow-2xl overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2">
+                <button
+                  onClick={() => { setShowAddMenu(false); !isFileLoading && fileInputRef.current?.click(); }}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-sm text-neutral-300 hover:text-white hover:bg-white/[0.05] transition-colors text-left"
+                >
+                  <Paperclip size={16} className="text-neutral-500" />
+                  Upload de arquivos ou fotos
+                </button>
+                <button
+                  onClick={() => {
+                    setShowAddMenu(false);
+                    const url = window.prompt("URL do site ou arquivo:");
+                    if (url && url.trim()) {
+                      setInputValue(prev => prev + (prev.endsWith(' ') || prev === '' ? '' : ' ') + url);
+                    }
+                  }}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-sm text-neutral-300 hover:text-white hover:bg-white/[0.05] transition-colors text-left"
+                >
+                  <Link size={16} className="text-neutral-500" />
+                  Url
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         <textarea
@@ -857,8 +992,25 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
       <div className="flex flex-col h-full bg-transparent text-white relative w-full">
         <DotGridBackground />
 
-        {/* Header - REFINED ROUND 7 */}
+        {/* Header */}
         <div className="h-16 border-b border-[#222] flex items-center px-6 bg-[#0a0a0a]/80 backdrop-blur-md z-10 transition-opacity duration-500">
+
+          {/* Projeto ativo — badge + botões de edição */}
+          {project && (
+            <div className="flex items-center gap-2 mr-4">
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-sm font-medium max-w-[180px]">
+                <Folder size={13} className="text-indigo-400 flex-shrink-0" />
+                <span className="truncate">{project.name}</span>
+              </div>
+              <button
+                onClick={openEditModal}
+                className="p-1.5 text-neutral-500 hover:text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-colors"
+                title="Editar projeto"
+              >
+                <Pencil size={14} />
+              </button>
+            </div>
+          )}
 
           {/* Model Selector — Dropdown minimalista */}
           <div className="relative">
@@ -922,7 +1074,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
           </div>
 
           {/* Mode Toggle — header */}
-          <div className="ml-auto">
+          <div className="ml-auto relative group">
             <button
               onClick={() => {
                 setIsAgentMode(prev => {
@@ -934,18 +1086,23 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 });
                 setShowModelDropdown(false);
               }}
-              title={isAgentMode
-                ? 'Modo Agent: pesquisa web, gera arquivos e executa tarefas complexas'
-                : 'Modo Chat: resposta direta sem ferramentas externas'}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-300 ${
-                isAgentMode
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-300 ${isAgentMode
                   ? 'text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 shadow-[0_0_12px_rgba(99,102,241,0.15)]'
                   : 'text-neutral-500 border border-[#333] hover:text-neutral-300 hover:border-neutral-600'
-              }`}
+                }`}
             >
               <Sparkles size={13} className={isAgentMode ? 'text-indigo-400' : 'opacity-50'} />
               {isAgentMode ? 'Modo Agent' : 'Modo Chat'}
             </button>
+
+            {/* Tooltip personalizado on hover */}
+            <div className="absolute right-0 top-full mt-2 w-64 p-3 bg-[#1a1a1d] border border-[#333] rounded-xl shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none">
+              <p className="text-xs text-neutral-300 leading-relaxed text-left">
+                {isAgentMode
+                  ? 'Modo agente, é utilizado para tarefas complexas, pesquisa de mercados, processamento massivo de dados.'
+                  : 'Modo chat, é para conversas e dúvidas simples que exigem pouca capacidade computacional e também é para tarefas mais rápidas.'}
+              </p>
+            </div>
           </div>
 
         </div>
@@ -975,26 +1132,45 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 </div>
 
                 {/* Greeting */}
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="animate-pulse duration-[3000ms]">
-                    <img
-                      src={arccoEmblemUrl}
-                      alt="Arcco Emblem"
-                      className="w-12 h-12 object-contain opacity-90"
-                    />
-                  </div>
-                  <h1 className="text-2xl md:text-3xl font-normal text-white tracking-tight leading-snug">
-                    {greetingTime}, {firstName}
-                  </h1>
-                </div>
-
-                {/* Subtitle — integra cidade quando disponível */}
-                <p className="text-lg md:text-xl font-normal text-neutral-500 tracking-tight leading-snug mt-1">
-                  {userLocation
-                    ? `Como está aí em ${userLocation.city}? ${greetingSubtitle}`
-                    : greetingSubtitle
-                  }
-                </p>
+                {project ? (
+                  <>
+                    <div className="flex items-center gap-3 mb-2">
+                      <div className="w-12 h-12 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
+                        <Folder size={22} className="text-indigo-400" />
+                      </div>
+                      <h1 className="text-2xl md:text-3xl font-normal text-white tracking-tight leading-snug">
+                        {project.name}
+                      </h1>
+                    </div>
+                    <p className="text-lg md:text-xl font-normal text-neutral-500 tracking-tight leading-snug mt-1">
+                      {project.instructions
+                        ? project.instructions.slice(0, 80) + (project.instructions.length > 80 ? '...' : '')
+                        : 'Como posso ajudar neste projeto hoje?'
+                      }
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-3 mb-2">
+                      <div className="animate-pulse duration-[3000ms]">
+                        <img
+                          src={arccoEmblemUrl}
+                          alt="Arcco Emblem"
+                          className="w-12 h-12 object-contain opacity-90"
+                        />
+                      </div>
+                      <h1 className="text-2xl md:text-3xl font-normal text-white tracking-tight leading-snug">
+                        {greetingTime}, {firstName}
+                      </h1>
+                    </div>
+                    <p className="text-lg md:text-xl font-normal text-neutral-500 tracking-tight leading-snug mt-1">
+                      {userLocation
+                        ? `Como está aí em ${userLocation.city}? ${greetingSubtitle}`
+                        : greetingSubtitle
+                      }
+                    </p>
+                  </>
+                )}
               </div>
 
               {renderInputArea('centered')}
@@ -1105,24 +1281,19 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   </div>
                 )}
 
-                {/* Loading — elegant orbit before first step arrives */}
+                {/* Loading — terminal indicator antes do primeiro step */}
                 {isLoading && agentThoughts.length === 0 && !isTerminalOpen && (
-                  <div className="flex items-center gap-3 ml-2 py-1">
-                    <div className="relative w-7 h-7">
-                      <div className="absolute inset-0 flex items-center justify-center">
-                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-400/60" />
-                      </div>
-                      <div className="absolute inset-0 animate-orbit">
-                        <div className="w-1 h-1 rounded-full bg-indigo-400" />
-                      </div>
-                      <div className="absolute inset-0 animate-orbit" style={{ animationDelay: '-0.6s', animationDuration: '2.2s' }}>
-                        <div className="w-1 h-1 rounded-full bg-violet-400/70" />
-                      </div>
-                      <div className="absolute inset-0 animate-orbit" style={{ animationDelay: '-1.2s', animationDuration: '2.8s' }}>
-                        <div className="w-0.5 h-0.5 rounded-full bg-indigo-300/40" />
-                      </div>
+                  <div className="ml-0 py-1">
+                    <div className="inline-flex items-center rounded-lg border border-[#2e2e34] bg-[#111114] px-4 py-3">
+                      <span className="font-mono text-xs text-neutral-600 tracking-wide">
+                        agente
+                        <span className="mx-2 text-[#2a2a2a]">·</span>
+                        <span className="text-neutral-400">
+                          pensando
+                          <span className="animate-cursor-blink ml-0.5 text-neutral-500">▌</span>
+                        </span>
+                      </span>
                     </div>
-                    <span className="text-[11px] text-neutral-600 shimmer-text">Arcco está analisando...</span>
                   </div>
                 )}
 
@@ -1158,12 +1329,45 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
         )}
       </div>
 
+      {project && (
+        <ProjectEditModal
+          project={project}
+          open={showEditModal}
+          editName={editName}
+          editInstructions={editInstructions}
+          editFiles={editFiles}
+          isLoadingFiles={isLoadingFiles}
+          isUpdatingProject={isUpdatingProject}
+          isDeletingProject={isDeletingProject}
+          deleteConfirm={deleteConfirm}
+          isUploadingFile={isUploadingFile}
+          editFileInputRef={editFileInputRef}
+          onClose={() => { setShowEditModal(false); setDeleteConfirm(false); }}
+          onEditNameChange={setEditName}
+          onEditInstructionsChange={setEditInstructions}
+          onUploadClick={() => editFileInputRef.current?.click()}
+          onUploadFile={handleUploadProjectFile}
+          onDeleteProjectFile={handleDeleteProjectFile}
+          onDeleteProject={handleDeleteProject}
+          onSaveProject={handleSaveProject}
+        />
+      )}
+
       {/* Document Preview Modal */}
       {modalPreview && (
         <DocumentPreviewModal
           isOpen={!!modalPreview}
           onClose={() => setModalPreview(null)}
           data={modalPreview}
+        />
+      )}
+
+      {/* Design Preview Modal */}
+      {designPreviewHtml && (
+        <DesignPreviewModal
+          isOpen={!!designPreviewHtml}
+          onClose={() => setDesignPreviewHtml(null)}
+          html={designPreviewHtml}
         />
       )}
     </div >

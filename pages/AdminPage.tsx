@@ -45,9 +45,12 @@ import {
   Brain,
   Code2,
   Monitor,
-  FileText
+  FileText,
+  Trash2
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { AdminUsersTab } from '../components/admin/AdminUsersTab';
+import { AdminApiKeysTab } from '../components/admin/AdminApiKeysTab';
 
 // â”€â”€ Tipos de dados â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -55,10 +58,12 @@ interface UserRow {
   id: string;
   nome: string;
   email: string;
+  senha?: string;
   plano: string;
   cpf?: string;
   content?: { telefone?: string; ocupacao?: string };
   created_at?: string;
+  updated_at?: string;
 }
 
 interface ApiKeyRow {
@@ -614,6 +619,7 @@ const PLAN_COLORS: Record<string, string> = {
 const PROVIDER_ICONS: Record<string, string> = {
   openrouter: 'ðŸ”€',
   anthropic: 'ðŸ¤–',
+  openai: '🟢',
   browserbase: 'ðŸŒ',
   browserbase_project_id: 'ðŸ—‚ï¸',
 };
@@ -631,6 +637,17 @@ function formatDate(dateStr?: string): string {
   });
 }
 
+function formatDateTime(dateStr?: string): string {
+  if (!dateStr) return 'â€”';
+  return new Date(dateStr).toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 
 // â”€â”€ Componente principal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -645,6 +662,7 @@ export const AdminPage: React.FC = () => {
   const [visibleKeys, setVisibleKeys] = useState<Set<number>>(new Set());
   const [savingPlan, setSavingPlan] = useState<string | null>(null);
   const [savedPlan, setSavedPlan] = useState<string | null>(null);
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
 
   // Form para adicionar nova API Key
   const [showAddKey, setShowAddKey] = useState(false);
@@ -835,6 +853,27 @@ export const AdminPage: React.FC = () => {
     });
   };
 
+  const deleteUser = async (user: UserRow) => {
+    const confirmed = window.confirm(`Excluir o usuário "${user.nome || user.email}"? Esta ação não pode ser desfeita.`);
+    if (!confirmed) return;
+
+    setDeletingUserId(user.id);
+    try {
+      const { error: deleteError } = await supabase
+        .from('User')
+        .delete()
+        .eq('id', user.id);
+
+      if (deleteError) throw deleteError;
+
+      setUsers(prev => prev.filter(item => item.id !== user.id));
+    } catch (err: any) {
+      window.alert(err.message || 'Erro ao excluir usuário.');
+    } finally {
+      setDeletingUserId(null);
+    }
+  };
+
   // â”€â”€ ConfiguraÃ§Ã£o das tabs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode; count: number }[] = [
@@ -933,204 +972,57 @@ export const AdminPage: React.FC = () => {
 
         {/* â”€â”€ Tab: UsuÃ¡rios â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {!loading && activeTab === 'usuarios' && (
-          <div className="bg-[#0f0f0f] border border-neutral-900 rounded-xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-neutral-900 flex items-center gap-2">
-              <Database size={15} className="text-neutral-500" />
-              <span className="text-sm font-medium text-neutral-300">Tabela: User</span>
-              <span className="ml-auto text-xs text-neutral-600">{users.length} registros</span>
-            </div>
-            {users.length === 0 ? (
-              <div className="py-16 text-center text-neutral-600 text-sm">Nenhum usuÃ¡rio encontrado</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-neutral-900">
-                      <th className="text-left px-5 py-3 text-xs font-medium text-neutral-600 uppercase tracking-wider">Nome</th>
-                      <th className="text-left px-5 py-3 text-xs font-medium text-neutral-600 uppercase tracking-wider">Email</th>
-                      <th className="text-left px-5 py-3 text-xs font-medium text-neutral-600 uppercase tracking-wider">Plano</th>
-                      <th className="text-left px-5 py-3 text-xs font-medium text-neutral-600 uppercase tracking-wider">CPF</th>
-                      <th className="text-left px-5 py-3 text-xs font-medium text-neutral-600 uppercase tracking-wider">Telefone</th>
-                      <th className="text-left px-5 py-3 text-xs font-medium text-neutral-600 uppercase tracking-wider">Cadastro</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {users.map((user, idx) => (
-                      <tr
-                        key={user.id}
-                        className={`border-b border-neutral-900/50 hover:bg-white/[0.02] transition-colors ${idx % 2 === 0 ? '' : 'bg-white/[0.01]'}`}
-                      >
-                        <td className="px-5 py-3">
-                          <div className="flex items-center gap-3">
-                            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-xs font-bold text-white shrink-0">
-                              {user.nome?.charAt(0)?.toUpperCase() || '?'}
-                            </div>
-                            <span className="text-white font-medium">{user.nome || 'â€”'}</span>
-                          </div>
-                        </td>
-                        <td className="px-5 py-3">
-                          <div className="flex items-center gap-1.5 text-neutral-400">
-                            <Mail size={12} className="text-neutral-600" />
-                            {user.email}
-                          </div>
-                        </td>
-                        <td className="px-5 py-3">
-                          {/* Dropdown de plano â€” salva imediatamente no Supabase */}
-                          <div className="flex items-center gap-2">
-                            <select
-                              value={user.plano}
-                              disabled={savingPlan === user.id}
-                              onChange={e => updateUserPlan(user.id, e.target.value as Plan)}
-                              className={`text-xs font-medium rounded-lg px-2.5 py-1.5 border outline-none cursor-pointer transition-all
-                                ${PLAN_COLORS[user.plano] || 'bg-neutral-800 text-neutral-400'}
-                                border-white/10 hover:border-white/20 disabled:opacity-60 disabled:cursor-not-allowed`}
-                            >
-                              {PLANS.map(p => (
-                                <option key={p} value={p} className="bg-[#1a1a1a] text-white capitalize">{p.charAt(0).toUpperCase() + p.slice(1)}</option>
-                              ))}
-                            </select>
-                            {savingPlan === user.id && <Loader2 size={13} className="animate-spin text-neutral-500" />}
-                            {savedPlan === user.id && <Check size={13} className="text-green-400" />}
-                          </div>
-                        </td>
-                        <td className="px-5 py-3 text-neutral-500 font-mono text-xs">{user.cpf || 'â€”'}</td>
-                        <td className="px-5 py-3 text-neutral-500 text-xs">{user.content?.telefone || 'â€”'}</td>
-                        <td className="px-5 py-3">
-                          <div className="flex items-center gap-1.5 text-neutral-600 text-xs">
-                            <Calendar size={11} />
-                            {formatDate(user.created_at)}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          <AdminUsersTab
+            users={users}
+            plans={PLANS}
+            planColors={PLAN_COLORS}
+            savingPlan={savingPlan}
+            savedPlan={savedPlan}
+            deletingUserId={deletingUserId}
+            onUpdatePlan={(userId, newPlan) => updateUserPlan(userId, newPlan as Plan)}
+            onDeleteUser={deleteUser}
+            formatDateTime={formatDateTime}
+          />
         )}
 
         {/* â”€â”€ Tab: API Keys â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {!loading && activeTab === 'apikeys' && (
-          <div className="bg-[#0f0f0f] border border-neutral-900 rounded-xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-neutral-900 flex items-center gap-2">
-              <Database size={15} className="text-neutral-500" />
-              <span className="text-sm font-medium text-neutral-300">Tabela: ApiKeys</span>
-              <span className="ml-auto text-xs text-neutral-600">{apiKeys.length} registros</span>
-              <button
-                onClick={() => setShowAddKey(v => !v)}
-                className="ml-3 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 text-xs font-medium border border-indigo-500/30 transition-all"
-              >
-                {showAddKey ? 'âœ• Cancelar' : '+ Nova Chave'}
-              </button>
-            </div>
-
-            {/* FormulÃ¡rio para adicionar nova chave */}
-            {showAddKey && (
-              <div className="px-5 py-4 border-b border-neutral-900 bg-neutral-900/30">
-                <div className="flex items-end gap-3">
-                  <div className="flex-shrink-0">
-                    <label className="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">Provider</label>
-                    <select
-                      value={newKeyProvider}
-                      onChange={e => setNewKeyProvider(e.target.value)}
-                      className="bg-[#1a1a1a] border border-neutral-800 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-indigo-500/50"
-                    >
-                      <option value="browserbase">ðŸŒ Browserbase (API Key)</option>
-                      <option value="browserbase_project_id">ðŸ—‚ï¸ Browserbase (Project ID)</option>
-                      <option value="openrouter">ðŸ”€ OpenRouter</option>
-                      <option value="anthropic">ðŸ¤– Anthropic</option>
-                    </select>
-                  </div>
-                  <div className="flex-1">
-                    <label className="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">API Key</label>
-                    <input
-                      value={newKeyValue}
-                      onChange={e => { setNewKeyValue(e.target.value); setAddKeyError(''); }}
-                      placeholder={
-                        newKeyProvider === 'browserbase' ? 'bb_live_...' :
-                        newKeyProvider === 'browserbase_project_id' ? 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' :
-                        'sk-...'
-                      }
-                      className="w-full bg-[#1a1a1a] border border-neutral-800 text-white text-sm font-mono rounded-lg px-3 py-2 outline-none focus:border-indigo-500/50"
-                    />
-                  </div>
-                  <button
-                    onClick={async () => {
-                      if (!newKeyValue.trim()) { setAddKeyError('Insira a chave'); return; }
-                      setAddingKey(true);
-                      setAddKeyError('');
-                      try {
-                        const { error } = await supabase.from('ApiKeys').insert({
-                          provider: newKeyProvider,
-                          api_key: newKeyValue.trim(),
-                          is_active: true,
-                        });
-                        if (error) throw error;
-                        setNewKeyValue('');
-                        setShowAddKey(false);
-                        fetchData(); // Recarrega a lista
-                      } catch (err: any) {
-                        setAddKeyError(err.message || 'Erro ao salvar');
-                      } finally {
-                        setAddingKey(false);
-                      }
-                    }}
-                    disabled={addingKey || !newKeyValue.trim()}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors disabled:opacity-40"
-                  >
-                    {addingKey ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-                    Salvar
-                  </button>
-                </div>
-                {addKeyError && <p className="text-xs text-red-400 mt-2">{addKeyError}</p>}
-              </div>
-            )}
-            {apiKeys.length === 0 ? (
-              <div className="py-16 text-center text-neutral-600 text-sm">Nenhuma API key encontrada</div>
-            ) : (
-              <div className="divide-y divide-neutral-900">
-                {apiKeys.map(key => (
-                  <div key={key.id} className="px-5 py-4 flex items-center gap-4 hover:bg-white/[0.02] transition-colors">
-                    <div className="w-9 h-9 rounded-lg bg-neutral-900 border border-neutral-800 flex items-center justify-center text-lg">
-                      {PROVIDER_ICONS[key.provider] || 'ðŸ”‘'}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-sm font-medium text-white capitalize">{key.provider}</span>
-                        {key.is_active ? (
-                          <span className="flex items-center gap-1 text-xs text-green-400 bg-green-500/10 border border-green-500/20 px-2 py-0.5 rounded-full">
-                            <CheckCircle size={10} /> Ativa
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-1 text-xs text-red-400 bg-red-500/10 border border-red-500/20 px-2 py-0.5 rounded-full">
-                            <XCircle size={10} /> Inativa
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <code className="text-xs font-mono text-neutral-500 bg-neutral-900 px-2 py-0.5 rounded">
-                          {visibleKeys.has(key.id) ? key.api_key : maskKey(key.api_key)}
-                        </code>
-                        <button
-                          onClick={() => toggleKeyVisibility(key.id)}
-                          className="text-neutral-600 hover:text-neutral-400 transition-colors"
-                        >
-                          {visibleKeys.has(key.id) ? <EyeOff size={13} /> : <Eye size={13} />}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="text-xs text-neutral-600 text-right">
-                      <div>Criada: {formatDate(key.created_at)}</div>
-                      {key.updated_at && key.updated_at !== key.created_at && (
-                        <div>Atualizada: {formatDate(key.updated_at)}</div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <AdminApiKeysTab
+            apiKeys={apiKeys}
+            visibleKeys={visibleKeys}
+            showAddKey={showAddKey}
+            newKeyProvider={newKeyProvider}
+            newKeyValue={newKeyValue}
+            addingKey={addingKey}
+            addKeyError={addKeyError}
+            providerIcons={PROVIDER_ICONS}
+            maskKey={maskKey}
+            formatDate={formatDate}
+            onToggleShowAddKey={() => setShowAddKey(v => !v)}
+            onNewKeyProviderChange={setNewKeyProvider}
+            onNewKeyValueChange={(value) => { setNewKeyValue(value); setAddKeyError(''); }}
+            onSaveKey={async () => {
+              if (!newKeyValue.trim()) { setAddKeyError('Insira a chave'); return; }
+              setAddingKey(true);
+              setAddKeyError('');
+              try {
+                const { error } = await supabase.from('ApiKeys').insert({
+                  provider: newKeyProvider,
+                  api_key: newKeyValue.trim(),
+                  is_active: true,
+                });
+                if (error) throw error;
+                setNewKeyValue('');
+                setShowAddKey(false);
+                fetchData();
+              } catch (err: any) {
+                setAddKeyError(err.message || 'Erro ao salvar');
+              } finally {
+                setAddingKey(false);
+              }
+            }}
+            onToggleKeyVisibility={toggleKeyVisibility}
+          />
         )}
 
         {activeTab === 'chat_normal' && (

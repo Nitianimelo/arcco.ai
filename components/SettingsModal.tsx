@@ -1,17 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Settings,
   User,
   CreditCard,
   BarChart3,
-  Globe,
   Bell,
-  Volume2,
   Check,
-  AlertCircle,
-  Folder,
+  Loader2,
 } from 'lucide-react';
+import { preferencesApi } from '../lib/preferencesApi';
 
 // ── Theme Picker ──────────────────────────────────────────────────
 const themes = [
@@ -20,13 +18,11 @@ const themes = [
   { id: 'midnight', label: 'Midnight',  desc: 'Preto OLED',       bg: '#000000', line: 'rgba(255,255,255,0.09)' },
 ];
 
-const ThemePicker: React.FC = () => {
-  const [current, setCurrent] = useState(() => localStorage.getItem('arcco_theme') || 'dark');
-
+const ThemePicker: React.FC<{ current: string; onChange: (id: string) => void }> = ({ current, onChange }) => {
   const apply = (id: string) => {
     localStorage.setItem('arcco_theme', id);
     document.documentElement.setAttribute('data-theme', id);
-    setCurrent(id);
+    onChange(id);
   };
 
   return (
@@ -77,6 +73,7 @@ interface SettingsModalProps {
   onClose: () => void;
   userName: string;
   userPlan: string;
+  userId: string;
 }
 
 // ── Toggle helper ────────────────────────────────────────
@@ -92,7 +89,51 @@ const Toggle: React.FC<{ value: boolean; onChange: (v: boolean) => void }> = ({ 
 );
 
 // ── Tab: Personalização ────────────────────────────────────────────
-const PersonalizacaoTab: React.FC<{ userName: string }> = ({ userName }) => {
+const PersonalizacaoTab: React.FC<{ userName: string; userId: string }> = ({ userName, userId }) => {
+  const [theme, setTheme] = useState(() => localStorage.getItem('arcco_theme') || 'dark');
+  const [displayName, setDisplayName] = useState(userName);
+  const [customInstructions, setCustomInstructions] = useState('');
+  const [logoUrl, setLogoUrl] = useState('');
+  const [occupation, setOccupation] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  // Carrega preferências do Supabase ao montar
+  useEffect(() => {
+    if (!userId) { setLoading(false); return; }
+    preferencesApi.get(userId).then(prefs => {
+      if (prefs.theme)               setTheme(prefs.theme);
+      if (prefs.display_name)        setDisplayName(prefs.display_name);
+      if (prefs.custom_instructions) setCustomInstructions(prefs.custom_instructions);
+      if (prefs.logo_url)            setLogoUrl(prefs.logo_url);
+      if (prefs.occupation)          setOccupation(prefs.occupation);
+      setLoading(false);
+    });
+  }, [userId]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    await preferencesApi.save(userId, {
+      theme,
+      display_name: displayName,
+      custom_instructions: customInstructions,
+      logo_url: logoUrl,
+      occupation,
+    });
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-40">
+        <Loader2 size={20} className="text-neutral-500 animate-spin" />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -101,27 +142,65 @@ const PersonalizacaoTab: React.FC<{ userName: string }> = ({ userName }) => {
       </div>
 
       <div className="space-y-4">
-        <ThemePicker />
+        <ThemePicker current={theme} onChange={setTheme} />
 
         <div>
           <label className="block text-xs text-neutral-500 mb-1.5 font-medium uppercase tracking-wider">Como a Arcco deveria te chamar</label>
-          <input type="text" defaultValue={userName} placeholder="Ex: Master, User..." className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50" />
+          <input
+            type="text"
+            value={displayName}
+            onChange={e => setDisplayName(e.target.value)}
+            placeholder="Ex: Master, User..."
+            className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50"
+          />
         </div>
         <div>
           <label className="block text-xs text-neutral-500 mb-1.5 font-medium uppercase tracking-wider">Instruções personalizadas</label>
-          <textarea placeholder="Ex: Seja objetivo, use metáforas..." className="w-full h-20 bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50 resize-none" />
+          <textarea
+            value={customInstructions}
+            onChange={e => setCustomInstructions(e.target.value)}
+            placeholder="Ex: Seja objetivo, use metáforas..."
+            className="w-full h-20 bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50 resize-none"
+          />
         </div>
         <div>
           <label className="block text-xs text-neutral-500 mb-1.5 font-medium uppercase tracking-wider">Logomarca para designs</label>
           <div className="flex gap-2">
-            <input type="text" placeholder="URL da Logo ou clique em Upload" className="flex-1 bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50" />
-            <button className="px-4 py-2.5 bg-[#262629] hover:bg-[#313134] text-white text-sm font-medium rounded-xl transition-colors">Upload</button>
+            <input
+              type="text"
+              value={logoUrl}
+              onChange={e => setLogoUrl(e.target.value)}
+              placeholder="URL da Logo"
+              className="flex-1 bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50"
+            />
           </div>
         </div>
         <div>
           <label className="block text-xs text-neutral-500 mb-1.5 font-medium uppercase tracking-wider">Ocupação</label>
-          <input type="text" placeholder="Ex: Analista, UI/UX, Founder..." className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50" />
+          <input
+            type="text"
+            value={occupation}
+            onChange={e => setOccupation(e.target.value)}
+            placeholder="Ex: Analista, UI/UX, Founder..."
+            className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50"
+          />
         </div>
+      </div>
+
+      <div className="pt-4 border-t border-[#1e1e21] flex justify-end">
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-xl transition-colors flex items-center gap-2"
+        >
+          {saving ? (
+            <><Loader2 size={14} className="animate-spin" /> Salvando...</>
+          ) : saved ? (
+            <><Check size={14} /> Salvo!</>
+          ) : (
+            'Salvar preferências'
+          )}
+        </button>
       </div>
     </div>
   );
@@ -159,14 +238,12 @@ const ContaTab: React.FC = () => (
 
 // ── Tab: Plano ────────────────────────────────────────────
 const PlanoTab: React.FC<{ userPlan: string }> = ({ userPlan }) => {
-  const plans = [
-    { id: 'free', label: 'Free', price: 'R$ 0/mês' },
-    { id: 'starter', label: 'Starter', price: 'R$ 129/mês' },
-    { id: 'ultra', label: 'Ultra', price: 'R$ 547/mês' },
-  ];
+  const normalizedPlan = userPlan.trim().toLowerCase();
+  const isStarter = normalizedPlan === 'starter';
+  const isFree = normalizedPlan === 'free';
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div>
         <h3 className="text-white font-semibold mb-1">Seu Plano</h3>
         <p className="text-neutral-500 text-sm">
@@ -174,22 +251,61 @@ const PlanoTab: React.FC<{ userPlan: string }> = ({ userPlan }) => {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-3">
-        {plans.map((plan) => {
-          const isCurrent = plan.id === userPlan.toLowerCase();
-          return (
-            <div key={plan.id} className={`flex items-center justify-between rounded-xl border p-4 transition-colors ${isCurrent ? 'border-indigo-500/40 bg-indigo-500/5' : 'border-[#2a2a2d] bg-[#1a1a1d]'}`}>
-              <div className="flex items-center gap-3">
-                <span className="text-white font-semibold">{plan.label}</span>
-                {isCurrent && <span className="text-[10px] bg-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded-full font-medium">Atual</span>}
+      <div className="relative overflow-hidden rounded-3xl border border-indigo-500/20 bg-[radial-gradient(circle_at_top_left,rgba(99,102,241,0.22),transparent_38%),linear-gradient(180deg,#1a1b22_0%,#121319_100%)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
+        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.06),transparent_35%,transparent_70%,rgba(99,102,241,0.08))]" />
+        <div className="relative flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+          <div className="space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-indigo-400/20 bg-indigo-500/[0.12] text-indigo-300 shadow-[0_0_30px_rgba(99,102,241,0.12)]">
+                <CreditCard size={18} />
               </div>
-              <div className="flex items-center gap-4">
-                <span className="text-neutral-300 font-medium">{plan.price}</span>
-                {!isCurrent && <button className="px-4 py-1.5 text-xs font-medium rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-colors">Assinar</button>}
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-xl font-semibold text-white">Starter</h4>
+                  {isStarter && (
+                    <span className="rounded-full border border-emerald-400/20 bg-emerald-500/[0.12] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
+                      Ativo
+                    </span>
+                  )}
+                </div>
+                <p className="text-sm text-neutral-400">Plano ideal para começar com a Arcco.</p>
               </div>
             </div>
-          );
-        })}
+
+            <div className="flex items-end gap-2">
+              <span className="text-4xl font-semibold tracking-tight text-white">R$ 99,90</span>
+              <span className="pb-1 text-sm text-neutral-500">/mês</span>
+            </div>
+
+            <div className="flex flex-wrap gap-2 text-xs text-neutral-300">
+              <span className="rounded-full border border-white/[0.08] bg-white/[0.06] px-3 py-1.5">Uso essencial da plataforma</span>
+              <span className="rounded-full border border-white/[0.08] bg-white/[0.06] px-3 py-1.5">Experiência completa do chat</span>
+            </div>
+          </div>
+
+          <div className="flex w-full max-w-xs flex-col gap-3">
+            <button
+              disabled={isStarter}
+              className={`w-full rounded-2xl px-5 py-3.5 text-sm font-semibold transition-all ${
+                isStarter
+                  ? 'cursor-not-allowed border border-white/10 bg-white/[0.06] text-neutral-500'
+                  : isFree
+                    ? 'bg-gradient-to-r from-indigo-500 via-indigo-400 to-sky-400 text-white shadow-[0_12px_35px_rgba(99,102,241,0.35)] hover:-translate-y-0.5 hover:shadow-[0_18px_45px_rgba(99,102,241,0.4)]'
+                    : 'border border-indigo-400/20 bg-indigo-500/10 text-indigo-200 hover:bg-indigo-500/15'
+              }`}
+            >
+              {isStarter ? 'Plano atual' : 'Assinar Starter'}
+            </button>
+
+            <div className="rounded-2xl border border-white/[0.08] bg-black/[0.15] px-4 py-3 text-sm text-neutral-400">
+              {isStarter
+                ? 'Seu acesso Starter já está ativo.'
+                : isFree
+                  ? 'Faça o upgrade para liberar o plano Starter.'
+                  : `Plano detectado: ${userPlan}.`}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -241,11 +357,8 @@ const TarefasTab: React.FC = () => (
   </div>
 );
 
-// ── Tab: Projetos ─────────────────────────────────────────
-/* TAB MOVIDA PARA A SIDEBAR (PAGE) CONFORME SOLICITADO */
-
 // ── Modal Principal ───────────────────────────────────────
-export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, userName, userPlan }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, userName, userPlan, userId }) => {
   const [activeTab, setActiveTab] = useState<Tab>('personalizacao');
 
   if (!open) return null;
@@ -304,7 +417,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, use
 
           {/* Conteúdo */}
           <div className="flex-1 overflow-y-auto p-6 scrollbar-hide">
-            {activeTab === 'personalizacao' && <PersonalizacaoTab userName={userName} />}
+            {activeTab === 'personalizacao' && <PersonalizacaoTab userName={userName} userId={userId} />}
             {activeTab === 'conta' && <ContaTab />}
             {activeTab === 'plano' && <PlanoTab userPlan={userPlan} />}
             {activeTab === 'uso' && <UsoTab />}

@@ -13,7 +13,7 @@ router = APIRouter()
 
 @router.post("/search")
 async def search_endpoint(req: SearchRequest):
-    """Busca na web via Tavily/Brave."""
+    """Busca na web via Tavily."""
     try:
         result = await search_web(
             query=req.query,

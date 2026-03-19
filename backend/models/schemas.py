@@ -23,6 +23,9 @@ class ChatRequest(BaseModel):
     system_prompt: Optional[str] = None
     session_id: Optional[str] = None
     mode: Optional[str] = "agent"
+    user_id: Optional[str] = None           # ID do usuário para contexto persistente
+    project_id: Optional[str] = None        # ID do projeto ativo (injeção de RAG + instruções)
+    conversation_id: Optional[str] = None   # ID da conversa para continuar histórico
 
 
 class ChatSSEEvent(BaseModel):
@@ -125,3 +128,96 @@ class HealthResponse(BaseModel):
     uptime_seconds: int
     sessions_active: int
     tools_available: int
+
+
+# ── Conversations ──────────────────────────────────────
+
+class ConversationCreate(BaseModel):
+    user_id: str
+    title: str = "Nova Conversa"
+    project_id: Optional[str] = None
+
+
+class ConversationResponse(BaseModel):
+    id: str
+    user_id: str
+    project_id: Optional[str] = None
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class ConversationTitleUpdate(BaseModel):
+    title: str
+
+
+class MessageCreate(BaseModel):
+    role: str  # "user" | "assistant"
+    content: str
+
+
+class MessagesBatchCreate(BaseModel):
+    messages: List[MessageCreate]
+
+
+class MessageResponse(BaseModel):
+    id: str
+    conversation_id: str
+    role: str
+    content: str
+    created_at: str
+
+
+# ── Projects ───────────────────────────────────────────
+
+class ProjectCreate(BaseModel):
+    user_id: str
+    name: str
+    instructions: str = ""
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    instructions: Optional[str] = None
+
+
+class ProjectResponse(BaseModel):
+    id: str
+    user_id: str
+    name: str
+    instructions: str
+    created_at: str
+    updated_at: str
+
+
+class ProjectFileResponse(BaseModel):
+    id: str
+    project_id: str
+    user_id: str
+    file_name: str
+    storage_path: str
+    mime_type: str
+    size_bytes: int
+    status: str  # "processing" | "ready" | "failed"
+    error_message: Optional[str] = None
+    created_at: str
+
+
+# ── Preferences ────────────────────────────────────────
+
+class PreferencesUpsert(BaseModel):
+    theme: Optional[str] = None
+    display_name: Optional[str] = None
+    custom_instructions: Optional[str] = None
+    logo_url: Optional[str] = None
+    occupation: Optional[str] = None
+
+
+class PreferencesResponse(BaseModel):
+    user_id: str
+    theme: str
+    display_name: Optional[str] = None
+    custom_instructions: Optional[str] = None
+    logo_url: Optional[str] = None
+    occupation: Optional[str] = None
+    updated_at: str

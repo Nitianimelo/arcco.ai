@@ -61,10 +61,12 @@ arcco.ai.agentV1-master/
 │   └── chat/
 │       ├── TextDocCard.tsx         # Card de documento com preview/download
 │       ├── DocumentPreviewModal.tsx # Modal popup para preview/edição de docs
+│       ├── PresentationCard.tsx    # Card compacto de design (miniatura + botão Visualizar)
+│       ├── DesignPreviewModal.tsx  # Modal popup para preview/edição/export de designs
+│       ├── DesignGallery.tsx       # Galeria de múltiplos designs (thumbnails + navegação)
 │       ├── BrowserAgentCard.tsx    # Card do browser agent (estilo Manus)
 │       ├── AgentThoughtPanel.tsx   # Painel de steps em tempo real
-│       ├── ArtifactCard.tsx        # Card de código/JSON
-│       └── PresentationCard.tsx    # Card de apresentação HTML
+│       └── ArtifactCard.tsx        # Card de código/JSON
 │
 ├── lib/
 │   ├── supabase.ts                 # Cliente Supabase frontend

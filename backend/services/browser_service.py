@@ -92,18 +92,25 @@ async def execute_browserbase_task(
         logger.error(f"[BROWSER] Falha ao criar sessão Browserbase: {exc}")
         return f"Erro ao criar sessão no Browserbase: {exc}"
 
-    # Executa toda a navegação em uma thread (sync_playwright não precisa de subprocess asyncio)
-    result = await asyncio.to_thread(
-        _run_sync_session,
-        session.connect_url,
-        session.id,
-        url,
-        actions,
-        wait_for,
-        mobile,
-        include_tags,
-        exclude_tags,
-    )
+    # Executa toda a navegação em uma thread com timeout global de 45s
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                _run_sync_session,
+                session.connect_url,
+                session.id,
+                url,
+                actions,
+                wait_for,
+                mobile,
+                include_tags,
+                exclude_tags,
+            ),
+            timeout=45.0,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"[BROWSER] Timeout global de 45s na sessão {session.id} → {url}")
+        result = f"Erro: Timeout de 45s durante navegação em {url}. O site pode estar lento ou o Browserbase sobrecarregado."
 
     # Libera a sessão
     try:
