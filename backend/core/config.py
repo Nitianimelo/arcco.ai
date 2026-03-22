@@ -36,6 +36,7 @@ class AgentConfig:
     # Browser Agent (Browserbase)
     browserbase_api_key: str = ""
     browserbase_project_id: str = ""
+    e2b_api_key: str = ""
 
     # Agent Behavior
     enable_caching: bool = True
@@ -89,6 +90,7 @@ class AgentConfig:
         self.supabase_storage_bucket = os.getenv("SUPABASE_STORAGE_BUCKET", self.supabase_storage_bucket)
         self.browserbase_api_key = os.getenv("BROWSERBASE_API_KEY", "")
         self.browserbase_project_id = os.getenv("BROWSERBASE_PROJECT_ID", "")
+        self.e2b_api_key = os.getenv("E2B_API_KEY", self.e2b_api_key)
         self.enable_caching = os.getenv("AGENT_CACHE", "true").lower() == "true"
         self.cache_ttl_seconds = int(os.getenv("AGENT_CACHE_TTL", str(self.cache_ttl_seconds)))
         self.web_timeout = float(os.getenv("WEB_TIMEOUT", str(self.web_timeout)))
@@ -118,9 +120,11 @@ class AgentConfig:
         needs_anthropic = not self.api_key
         needs_browserbase = not self.browserbase_api_key
         needs_browserbase_project = not self.browserbase_project_id
+        needs_e2b = not self.e2b_api_key
 
         if not (needs_openrouter or needs_anthropic
-                or needs_browserbase or needs_browserbase_project):
+                or needs_browserbase or needs_browserbase_project
+                or needs_e2b):
             print("[CONFIG] All API keys loaded from environment variables")
             return
 
@@ -165,6 +169,11 @@ class AgentConfig:
                     self.browserbase_project_id = key_map["browserbase_project_id"]
                     print("[CONFIG] Browserbase Project ID loaded from Supabase")
 
+                e2b_key = key_map.get("e2b") or key_map.get("e2b_api_key")
+                if needs_e2b and e2b_key:
+                    self.e2b_api_key = e2b_key
+                    print("[CONFIG] E2B API key loaded from Supabase")
+
             if not self.openrouter_api_key and not self.api_key:
                 print("[CONFIG] WARNING: No LLM API key found (env or Supabase). Agent will fail.")
             else:
@@ -183,6 +192,13 @@ class AgentConfig:
                       "ou defina BROWSERBASE_PROJECT_ID como variável de ambiente.")
             if self.browserbase_api_key and self.browserbase_project_id:
                 print(f"[CONFIG] Browserbase OK — key: {self.browserbase_api_key[:15]}... project: {self.browserbase_project_id[:15]}...")
+            if not self.e2b_api_key:
+                print("[CONFIG] WARNING: E2B_API_KEY não configurada. "
+                      "Execução Python via E2B ficará indisponível. "
+                      "Adicione provider='e2b' ou provider='e2b_api_key' na tabela ApiKeys do Supabase "
+                      "ou defina E2B_API_KEY como variável de ambiente.")
+            else:
+                print(f"[CONFIG] E2B OK — key: {self.e2b_api_key[:15]}...")
 
         except Exception as e:
             print(f"[CONFIG] WARNING: Could not load API keys from Supabase: {e}")

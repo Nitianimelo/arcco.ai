@@ -1,10 +1,11 @@
 ﻿"""
 Registry de configuraÃ§Ã£o dos agentes.
 
-ARQUITETURA DE PERSISTÃŠNCIA (3 camadas):
+ARQUITETURA DE PERSISTÃŠNCIA (4 camadas):
   1. MemÃ³ria (_REGISTRY)       â†’ acesso instantÃ¢neo durante a execuÃ§Ã£o
-  2. configs_override.json     â†’ sobrevive a restarts do servidor (salvo automaticamente)
-  3. prompts.py / tools.py     â†’ mudanÃ§a permanente no cÃ³digo-fonte (feita via admin.py)
+  2. Supabase (model)          â†’ fonte principal dos modelos dos agentes
+  3. configs_override.json     â†’ backup local / fallback
+  4. prompts.py / tools.py     â†’ mudanÃ§a permanente no cÃ³digo-fonte (feita via admin.py)
 
 FLUXO DE INICIALIZAÃ‡ÃƒO:
   initialize() â†’ carrega defaults dos arquivos .py â†’ aplica overrides do JSON
@@ -70,12 +71,16 @@ def initialize():
     _REGISTRY = {
         "chat": {
             "id": "chat",
-            "name": "Arcco Supervisor Especialista",
+            "name": "Orquestrador Supervisor",
             "module": "Arcco Chat",
-            "description": "Agente principal de conversaÃ§Ã£o e orquestraÃ§Ã£o. Analisa a intenÃ§Ã£o e delega tarefas complexas para ferramentas/agentes.",
+            "description": "Componente principal de orquestraÃ§Ã£o do modo agente. No runtime ele atua como supervisor e orquestrador.",
             "system_prompt": CHAT_SYSTEM_PROMPT,
             "model": default_model,
+            "model_source": "local",
             "tools": SUPERVISOR_TOOLS,
+            "runtime_keys": ["chat", "orchestrator", "supervisor"],
+            "supports_prompt_edit": True,
+            "supports_tools_edit": True,
         },
 
         "web_search": {
@@ -85,7 +90,11 @@ def initialize():
             "description": "Pesquisa informaÃ§Ãµes na internet via Tavily e lÃª pÃ¡ginas especÃ­ficas",
             "system_prompt": WEB_SEARCH_SYSTEM_PROMPT,
             "model": default_model,
+            "model_source": "local",
             "tools": WEB_SEARCH_TOOLS,
+            "runtime_keys": ["web_search"],
+            "supports_prompt_edit": True,
+            "supports_tools_edit": True,
         },
         "text_generator": {
             "id": "text_generator",
@@ -94,7 +103,11 @@ def initialize():
             "description": "Cria documentos brutos em texto para preview editavel e exportacao posterior",
             "system_prompt": TEXT_GENERATOR_SYSTEM_PROMPT,
             "model": default_model,
+            "model_source": "local",
             "tools": TEXT_GENERATOR_TOOLS,
+            "runtime_keys": ["text_generator"],
+            "supports_prompt_edit": True,
+            "supports_tools_edit": True,
         },
         "design_generator": {
             "id": "design_generator",
@@ -103,7 +116,11 @@ def initialize():
             "description": "Cria HTML visual e editavel para exportacao posterior em imagem, PDF ou PPTX",
             "system_prompt": DESIGN_GENERATOR_SYSTEM_PROMPT,
             "model": default_model,
+            "model_source": "local",
             "tools": DESIGN_GENERATOR_TOOLS,
+            "runtime_keys": ["design_generator"],
+            "supports_prompt_edit": True,
+            "supports_tools_edit": True,
         },
         "file_modifier": {
             "id": "file_modifier",
@@ -112,7 +129,11 @@ def initialize():
             "description": "Edita arquivos existentes (PDF, Excel, PPTX) conforme solicitaÃ§Ã£o",
             "system_prompt": FILE_MODIFIER_SYSTEM_PROMPT,
             "model": default_model,
+            "model_source": "local",
             "tools": FILE_MODIFIER_TOOLS,
+            "runtime_keys": ["file_modifier"],
+            "supports_prompt_edit": True,
+            "supports_tools_edit": True,
         },
         "qa": {
             "id": "qa",
@@ -121,7 +142,11 @@ def initialize():
             "description": "Revisa e aprova a qualidade das respostas dos especialistas",
             "system_prompt": QA_SYSTEM_PROMPT,
             "model": default_model,
+            "model_source": "local",
             "tools": [],
+            "runtime_keys": ["qa"],
+            "supports_prompt_edit": True,
+            "supports_tools_edit": False,
         },
         "planner": {
             "id": "planner",
@@ -130,12 +155,56 @@ def initialize():
             "description": "Analisa o pedido do usuário e gera um plano de execução JSON. Usa modelo pequeno e rápido para economizar tokens.",
             "system_prompt": PLANNER_SYSTEM_PROMPT,
             "model": "openai/gpt-4o-mini",
+            "model_source": "local",
             "tools": [],
+            "runtime_keys": ["planner"],
+            "supports_prompt_edit": True,
+            "supports_tools_edit": False,
+        },
+        "deep_research": {
+            "id": "deep_research",
+            "name": "Pesquisa Profunda",
+            "module": "Arcco Chat",
+            "description": "Pipeline de pesquisa multi-etapa com planejamento, coleta, sumarizaÃ§Ã£o e sÃ­ntese final.",
+            "system_prompt": "",
+            "model": default_model,
+            "model_source": "local",
+            "tools": [],
+            "runtime_keys": ["deep_research"],
+            "supports_prompt_edit": False,
+            "supports_tools_edit": False,
+        },
+        "memory": {
+            "id": "memory",
+            "name": "MemÃ³ria do UsuÃ¡rio",
+            "module": "Sistema",
+            "description": "Atualiza a memÃ³ria acumulada do usuÃ¡rio em background apÃ³s as conversas. ConfiguraÃ§Ã£o exposta apenas para o modelo.",
+            "system_prompt": "",
+            "model": "openai/gpt-4o-mini",
+            "model_source": "local",
+            "tools": [],
+            "runtime_keys": ["memory", "user_memory"],
+            "supports_prompt_edit": False,
+            "supports_tools_edit": False,
+        },
+        "intent_router": {
+            "id": "intent_router",
+            "name": "Roteador de IntenÃ§Ã£o",
+            "module": "Sistema",
+            "description": "Classificador leve usado no endpoint de roteamento para decidir a intenÃ§Ã£o da mensagem.",
+            "system_prompt": "",
+            "model": "openai/gpt-4o-mini",
+            "model_source": "local",
+            "tools": [],
+            "runtime_keys": ["intent_router", "router"],
+            "supports_prompt_edit": False,
+            "supports_tools_edit": False,
         },
     }
 
     # Aplica overrides persistidos (customizaÃ§Ãµes salvas pelo admin)
     _apply_overrides()
+    _apply_supabase_model_overrides()
     _initialized = True
     logger.info(f"[REGISTRY] Inicializado com {len(_REGISTRY)} agentes")
 
@@ -188,6 +257,29 @@ def _save_overrides():
         )
     except Exception as e:
         logger.error(f"[REGISTRY] Falha ao salvar overrides: {e}")
+
+
+def _apply_supabase_model_overrides():
+    """
+    Modelos dos agentes são carregados do Supabase e sobrepõem qualquer valor
+    vindo do JSON local. Em caso de falha, o registry continua com fallback local.
+    """
+    try:
+        from backend.services.agent_model_overrides import list_agent_model_overrides
+
+        overrides = list_agent_model_overrides()
+        applied: list[str] = []
+        for agent_id, model in overrides.items():
+            if agent_id not in _REGISTRY:
+                continue
+            _REGISTRY[agent_id]["model"] = model
+            _REGISTRY[agent_id]["model_source"] = "supabase"
+            applied.append(agent_id)
+
+        if applied:
+            logger.info(f"[REGISTRY] Modelos carregados do Supabase: {applied}")
+    except Exception as e:
+        logger.warning(f"[REGISTRY] Falha ao carregar modelos do Supabase: {e}")
 
 
 # â”€â”€ API PÃºblica â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -249,3 +341,14 @@ def update_agent(agent_id: str, data: dict) -> bool:
     logger.info(f"[REGISTRY] Agente '{agent_id}' atualizado e persistido")
     return True
 
+
+def reload_models_from_supabase() -> list[dict]:
+    """
+    Reaplica os modelos do Supabase no registry atual.
+    Mantém prompts e tools locais intactos e retorna a lista atualizada.
+    """
+    _ensure_initialized()
+    for agent in _REGISTRY.values():
+        agent["model_source"] = "local"
+    _apply_supabase_model_overrides()
+    return get_all()

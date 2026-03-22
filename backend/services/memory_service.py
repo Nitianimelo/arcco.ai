@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from backend.core.supabase_client import get_supabase_client
 from backend.core.llm import call_openrouter
+from backend.agents import registry
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ async def update_user_memory(user_id: str, conversation_text: str) -> None:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": "Atualize a memória."},
             ],
-            model="openai/gpt-4o-mini",
+            model=registry.get_model("memory"),
             max_tokens=600,
             temperature=0.1,
         )

@@ -13,9 +13,9 @@ import { preferencesApi } from '../lib/preferencesApi';
 
 // ── Theme Picker ──────────────────────────────────────────────────
 const themes = [
-  { id: 'dark',     label: 'Dark',      desc: 'Padrão',           bg: '#050505', line: 'rgba(255,255,255,0.07)' },
-  { id: 'dim',      label: 'Dim',       desc: 'Azul escuro',      bg: '#0a0f1c', line: 'rgba(160,185,255,0.08)' },
-  { id: 'midnight', label: 'Midnight',  desc: 'Preto OLED',       bg: '#000000', line: 'rgba(255,255,255,0.09)' },
+  { id: 'dark',  label: 'Dark',  desc: 'Padrão',      bg: '#050505', line: 'rgba(255,255,255,0.07)' },
+  { id: 'ghost', label: 'Ghost', desc: 'Flat dark',   bg: '#0c0c0c', line: 'transparent' },
+  { id: 'light', label: 'Light', desc: 'Clean claro', bg: '#ededef', line: 'transparent' },
 ];
 
 const ThemePicker: React.FC<{ current: string; onChange: (id: string) => void }> = ({ current, onChange }) => {
@@ -28,22 +28,24 @@ const ThemePicker: React.FC<{ current: string; onChange: (id: string) => void }>
   return (
     <div>
       <label className="block text-xs text-neutral-500 mb-2 font-medium uppercase tracking-wider">Tema da interface</label>
-      <div className="flex gap-3">
+      <div className="grid grid-cols-3 gap-3">
         {themes.map(t => (
           <button
             key={t.id}
             onClick={() => apply(t.id)}
-            className={`flex-1 flex flex-col items-center gap-2 p-3 rounded-xl border transition-all ${
+            className={`flex flex-col items-center gap-2 p-2.5 rounded-xl border transition-all ${
               current === t.id
                 ? 'border-indigo-500/50 bg-indigo-500/5'
                 : 'border-[#313134] bg-[#1a1a1d] hover:border-neutral-600'
             }`}
           >
             <div
-              className="w-full h-10 rounded-lg relative overflow-hidden"
+              className="w-full h-9 rounded-lg relative overflow-hidden"
               style={{
                 backgroundColor: t.bg,
-                backgroundImage: `linear-gradient(to right, ${t.line} 1px, transparent 1px), linear-gradient(to bottom, ${t.line} 1px, transparent 1px)`,
+                backgroundImage: t.line !== 'transparent'
+                  ? `linear-gradient(to right, ${t.line} 1px, transparent 1px), linear-gradient(to bottom, ${t.line} 1px, transparent 1px)`
+                  : 'none',
                 backgroundSize: '10px 10px',
               }}
             >
@@ -74,6 +76,7 @@ interface SettingsModalProps {
   userName: string;
   userPlan: string;
   userId: string;
+  onDisplayNameChange?: (displayName: string | null) => void;
 }
 
 // ── Toggle helper ────────────────────────────────────────
@@ -89,7 +92,7 @@ const Toggle: React.FC<{ value: boolean; onChange: (v: boolean) => void }> = ({ 
 );
 
 // ── Tab: Personalização ────────────────────────────────────────────
-const PersonalizacaoTab: React.FC<{ userName: string; userId: string }> = ({ userName, userId }) => {
+const PersonalizacaoTab: React.FC<{ userName: string; userId: string; onDisplayNameChange?: (displayName: string | null) => void }> = ({ userName, userId, onDisplayNameChange }) => {
   const [theme, setTheme] = useState(() => localStorage.getItem('arcco_theme') || 'dark');
   const [displayName, setDisplayName] = useState(userName);
   const [customInstructions, setCustomInstructions] = useState('');
@@ -114,13 +117,15 @@ const PersonalizacaoTab: React.FC<{ userName: string; userId: string }> = ({ use
 
   const handleSave = async () => {
     setSaving(true);
+    const trimmedDisplayName = displayName.trim();
     await preferencesApi.save(userId, {
       theme,
-      display_name: displayName,
+      display_name: trimmedDisplayName,
       custom_instructions: customInstructions,
       logo_url: logoUrl,
       occupation,
     });
+    onDisplayNameChange?.(trimmedDisplayName || null);
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -246,65 +251,50 @@ const PlanoTab: React.FC<{ userPlan: string }> = ({ userPlan }) => {
     <div className="space-y-6">
       <div>
         <h3 className="text-white font-semibold mb-1">Seu Plano</h3>
-        <p className="text-neutral-500 text-sm">
-          Plano atual: <span className="text-indigo-400 font-medium capitalize">{userPlan}</span>
-        </p>
+        <p className="text-neutral-500 text-sm">Gerencie sua assinatura.</p>
       </div>
 
-      <div className="relative overflow-hidden rounded-3xl border border-indigo-500/20 bg-[radial-gradient(circle_at_top_left,rgba(99,102,241,0.22),transparent_38%),linear-gradient(180deg,#1a1b22_0%,#121319_100%)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.35)]">
-        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.06),transparent_35%,transparent_70%,rgba(99,102,241,0.08))]" />
-        <div className="relative flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-          <div className="space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-indigo-400/20 bg-indigo-500/[0.12] text-indigo-300 shadow-[0_0_30px_rgba(99,102,241,0.12)]">
-                <CreditCard size={18} />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h4 className="text-xl font-semibold text-white">Starter</h4>
-                  {isStarter && (
-                    <span className="rounded-full border border-emerald-400/20 bg-emerald-500/[0.12] px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
-                      Ativo
-                    </span>
-                  )}
-                </div>
-                <p className="text-sm text-neutral-400">Plano ideal para começar com a Arcco.</p>
-              </div>
+      <div className="rounded-2xl border border-[#262629] bg-[#141416] p-5 space-y-5">
+        {/* Cabeçalho do plano */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
+              <CreditCard size={15} className="text-indigo-400" />
             </div>
-
-            <div className="flex items-end gap-2">
-              <span className="text-4xl font-semibold tracking-tight text-white">R$ 99,90</span>
-              <span className="pb-1 text-sm text-neutral-500">/mês</span>
-            </div>
-
-            <div className="flex flex-wrap gap-2 text-xs text-neutral-300">
-              <span className="rounded-full border border-white/[0.08] bg-white/[0.06] px-3 py-1.5">Uso essencial da plataforma</span>
-              <span className="rounded-full border border-white/[0.08] bg-white/[0.06] px-3 py-1.5">Experiência completa do chat</span>
+            <div>
+              <p className="text-sm font-medium text-white capitalize">{userPlan}</p>
+              <p className="text-xs text-neutral-500 mt-1">R$ 99,90 / mês</p>
             </div>
           </div>
+          {isStarter && (
+            <span className="text-[10px] font-medium uppercase tracking-wider text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-full">
+              Ativo
+            </span>
+          )}
+          {isFree && (
+            <span className="text-[10px] font-medium uppercase tracking-wider text-neutral-500 bg-white/[0.04] border border-white/[0.08] px-2.5 py-1 rounded-full">
+              Gratuito
+            </span>
+          )}
+        </div>
 
-          <div className="flex w-full max-w-xs flex-col gap-3">
-            <button
-              disabled={isStarter}
-              className={`w-full rounded-2xl px-5 py-3.5 text-sm font-semibold transition-all ${
-                isStarter
-                  ? 'cursor-not-allowed border border-white/10 bg-white/[0.06] text-neutral-500'
-                  : isFree
-                    ? 'bg-gradient-to-r from-indigo-500 via-indigo-400 to-sky-400 text-white shadow-[0_12px_35px_rgba(99,102,241,0.35)] hover:-translate-y-0.5 hover:shadow-[0_18px_45px_rgba(99,102,241,0.4)]'
-                    : 'border border-indigo-400/20 bg-indigo-500/10 text-indigo-200 hover:bg-indigo-500/15'
-              }`}
-            >
-              {isStarter ? 'Plano atual' : 'Assinar Starter'}
-            </button>
+        <div className="border-t border-[#262629]" />
 
-            <div className="rounded-2xl border border-white/[0.08] bg-black/[0.15] px-4 py-3 text-sm text-neutral-400">
-              {isStarter
-                ? 'Seu acesso Starter já está ativo.'
-                : isFree
-                  ? 'Faça o upgrade para liberar o plano Starter.'
-                  : `Plano detectado: ${userPlan}.`}
-            </div>
-          </div>
+        {/* CTA */}
+        <div className="flex items-center justify-between gap-4">
+          <p className="text-xs text-neutral-500">
+            {isStarter ? 'Seu acesso já está ativo.' : 'Faça upgrade para liberar todos os recursos.'}
+          </p>
+          <button
+            disabled={isStarter}
+            className={`flex-shrink-0 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+              isStarter
+                ? 'cursor-not-allowed text-neutral-600 bg-white/[0.03] border border-white/[0.06]'
+                : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+            }`}
+          >
+            {isStarter ? 'Plano atual' : 'Assinar Starter'}
+          </button>
         </div>
       </div>
     </div>
@@ -358,7 +348,7 @@ const TarefasTab: React.FC = () => (
 );
 
 // ── Modal Principal ───────────────────────────────────────
-export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, userName, userPlan, userId }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, userName, userPlan, userId, onDisplayNameChange }) => {
   const [activeTab, setActiveTab] = useState<Tab>('personalizacao');
 
   if (!open) return null;
@@ -417,7 +407,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, use
 
           {/* Conteúdo */}
           <div className="flex-1 overflow-y-auto p-6 scrollbar-hide">
-            {activeTab === 'personalizacao' && <PersonalizacaoTab userName={userName} userId={userId} />}
+            {activeTab === 'personalizacao' && <PersonalizacaoTab userName={userName} userId={userId} onDisplayNameChange={onDisplayNameChange} />}
             {activeTab === 'conta' && <ContaTab />}
             {activeTab === 'plano' && <PlanoTab userPlan={userPlan} />}
             {activeTab === 'uso' && <UsoTab />}

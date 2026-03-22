@@ -8,7 +8,8 @@ export type ChatStreamEventType =
     | 'thought'
     | 'browser_action'
     | 'text_doc'
-    | 'file_artifact';
+    | 'file_artifact'
+    | 'clarification';
 
 export interface ChatStreamEvent {
     type: ChatStreamEventType;
@@ -116,7 +117,8 @@ export const agentApi = {
         sessionId?: string,
         userId?: string,
         projectId?: string | null,
-        conversationId?: string | null
+        conversationId?: string | null,
+        webSearch?: boolean,
     ): Promise<string> {
         const res = await fetch(`${API_BASE}/chat`, {
             method: 'POST',
@@ -130,6 +132,7 @@ export const agentApi = {
                 ...(userId ? { user_id: userId } : {}),
                 ...(projectId ? { project_id: projectId } : {}),
                 ...(conversationId ? { conversation_id: conversationId } : {}),
+                ...(webSearch ? { web_search: true } : {}),
             }),
             signal,
         });

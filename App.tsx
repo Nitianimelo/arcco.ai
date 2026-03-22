@@ -13,9 +13,14 @@ import { supabase } from './lib/supabase';
 import { openRouterService } from './lib/openrouter';
 import { projectApi, Project } from './lib/projectApi';
 import { conversationApi } from './lib/conversationApi';
+import { preferencesApi } from './lib/preferencesApi';
 
 function isAdminRoute(): boolean {
   return window.location.pathname === '/admin' || window.location.pathname === '/admin/';
+}
+
+function getFirstName(name: string): string {
+  return name.trim().split(/\s+/)[0] || 'Usuário';
 }
 
 function App() {
@@ -33,6 +38,7 @@ function App() {
   const { showToast } = useToast();
 
   const [userName, setUserName] = useState("Usuário");
+  const [preferredDisplayName, setPreferredDisplayName] = useState<string | null>(null);
   const [userPlan, setUserPlan] = useState("Free");
   const [userId, setUserId] = useState(() => localStorage.getItem('arcco_user_id') || '');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -43,13 +49,33 @@ function App() {
     const storedUserId = localStorage.getItem('arcco_user_id');
     const storedPlan = localStorage.getItem('arcco_user_plan');
     const storedName = localStorage.getItem('arcco_user_name');
+    const cachedPrefs = preferencesApi.getCached();
 
     if (storedUserId) {
       setIsAuthenticated(true);
       if (storedPlan) setUserPlan(storedPlan);
       if (storedName) setUserName(storedName);
+      if (cachedPrefs.display_name?.trim()) {
+        setPreferredDisplayName(cachedPrefs.display_name.trim());
+      }
     }
   }, []);
+
+  useEffect(() => {
+    if (!userId) {
+      setPreferredDisplayName(null);
+      return;
+    }
+
+    preferencesApi.get(userId).then((prefs) => {
+      const trimmedDisplayName = prefs.display_name?.trim();
+      setPreferredDisplayName(trimmedDisplayName ? trimmedDisplayName : null);
+    }).catch(() => {
+      const cachedPrefs = preferencesApi.getCached();
+      const trimmedDisplayName = cachedPrefs.display_name?.trim();
+      setPreferredDisplayName(trimmedDisplayName ? trimmedDisplayName : null);
+    });
+  }, [userId]);
 
   // Load API keys from Supabase on startup
   useEffect(() => {
@@ -121,6 +147,7 @@ function App() {
   const handleLogin = (name: string, email: string) => {
     setIsAuthenticated(true);
     setUserName(name);
+    setPreferredDisplayName(null);
     localStorage.setItem('arcco_user_name', name);
 
     // Refresh plan directly from local storage after LoginPage sets it
@@ -135,8 +162,12 @@ function App() {
     localStorage.removeItem('arcco_user_plan');
     localStorage.removeItem('arcco_user_name');
     setIsAuthenticated(false);
+    setPreferredDisplayName(null);
     if (showToast) showToast('Sessão encerrada com sucesso', 'success');
   };
+
+  const greetingName = preferredDisplayName || getFirstName(userName);
+  const sidebarDisplayName = preferredDisplayName || userName;
 
   const handleLoadSession = (sessionId: string) => {
     setChatSessionId(sessionId);
@@ -150,7 +181,7 @@ function App() {
           <ArccoChatPage
             key={chatSessionId}
             chatSessionId={chatSessionId}
-            userName={userName}
+            userName={greetingName}
             userId={userId}
             projectId={selectedProjectId}
             project={activeProject}
@@ -196,7 +227,7 @@ function App() {
     <div className="flex h-screen text-white font-sans overflow-hidden selection:bg-indigo-500/30" style={{ backgroundColor: 'var(--bg-elevated)' }}>
       <Sidebar
         currentView={currentView}
-        userName={userName}
+        userName={sidebarDisplayName}
         userPlan={userPlan}
         userId={userId}
         selectedProjectId={selectedProjectId}
@@ -207,6 +238,7 @@ function App() {
         onTriggerUpsell={handleTriggerUpsell}
         onLogout={handleLogout}
         onCollapsedChange={setIsSidebarCollapsed}
+        onDisplayNameChange={setPreferredDisplayName}
       />
 
       <main className={`flex-1 relative transition-all duration-300 ${isSidebarCollapsed ? 'ml-16' : 'ml-64'}`}>

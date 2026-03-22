@@ -8,6 +8,7 @@ import logging
 
 from fastapi import APIRouter
 
+from backend.agents import registry
 from backend.models.schemas import RouteRequest, RouteResponse
 from backend.core.llm import call_openrouter
 
@@ -56,6 +57,7 @@ async def classify_with_llm(message: str) -> str:
                     'Return ONLY the intent.'
                 ),
             }],
+            model=registry.get_model("intent_router"),
             max_tokens=20,
         )
         result = data["choices"][0]["message"]["content"]

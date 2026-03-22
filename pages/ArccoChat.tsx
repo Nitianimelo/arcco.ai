@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Loader2, Sparkles, Save, Terminal, FileText, Download, ChevronDown, Paperclip, HardDrive, FileSpreadsheet, Eye, Square, Plus, Link, Folder, Pencil, Trash2, Upload, X, Check, AlertTriangle } from 'lucide-react';
+import { Send, Loader2, Sparkles, Save, FileText, Download, ChevronDown, Paperclip, HardDrive, FileSpreadsheet, Eye, Square, Plus, Link, Folder, Pencil, Trash2, Upload, X, Check, AlertTriangle, Wrench, Globe } from 'lucide-react';
 import { projectApi, Project, ProjectFile } from '../lib/projectApi';
 import { openRouterService } from '../lib/openrouter';
 import { agentApi, SessionFileItem, SessionFileStatus } from '../lib/api-client';
 import { supabase } from '../lib/supabase';
 import { driveService } from '../lib/driveService';
 import { ArtifactCard } from '../components/chat/ArtifactCard';
-import AgentThoughtPanel, { ThoughtStep } from '../components/chat/AgentThoughtPanel';
+import { ThoughtStep } from '../components/chat/AgentThoughtPanel';
 import { BrowserAgentCard } from '../components/chat/BrowserAgentCard';
 import TextDocCard from '../components/chat/TextDocCard';
+import ClarificationCard from '../components/chat/ClarificationCard';
 import PresentationCard from '../components/chat/PresentationCard';
 import DesignGallery from '../components/chat/DesignGallery';
 import DocumentPreviewModal from '../components/chat/DocumentPreviewModal';
@@ -16,7 +17,7 @@ import DesignPreviewModal from '../components/chat/DesignPreviewModal';
 import { ProjectEditModal } from '../components/chat/ProjectEditModal';
 import DotGridBackground from '../components/ui/DotGridBackground';
 import { useToast } from '../components/Toast';
-import AgentTerminal from '../components/AgentTerminal';
+// AgentTerminal removido — steps agora são inline
 import { Message } from '../lib/chatStorage';
 import { conversationApi } from '../lib/conversationApi';
 
@@ -157,6 +158,51 @@ const allSuggestions = [
   'Montar um plano de ação',
 ];
 
+const generateThinkingMessage = (text: string): string => {
+  const t = text.toLowerCase();
+  if (t.includes('email') || t.includes('e-mail') || t.includes('carta') || t.includes('comunicado'))
+    return 'Redigindo a mensagem para você...';
+  if (t.includes('planilha') || t.includes('excel') || t.includes('tabela') || (t.includes('dados') && t.includes('organiz')))
+    return 'Organizando os dados...';
+  if (t.includes('resumo') || t.includes('resumir') || t.includes('síntese') || t.includes('sintetizar'))
+    return 'Lendo e analisando o conteúdo...';
+  if (t.includes('código') || t.includes('programar') || t.includes('script') || t.includes('bug') || t.includes('função') || t.includes('react') || t.includes('python') || t.includes('javascript'))
+    return 'Analisando o código...';
+  if (t.includes('post') || t.includes('instagram') || t.includes('twitter') || t.includes('linkedin') || t.includes('marketing') || t.includes('campanha') || t.includes('conteúdo'))
+    return 'Criando o conteúdo para você...';
+  if (t.includes('apresentação') || t.includes('slides') || t.includes('pitch') || t.includes('deck') || t.includes('powerpoint'))
+    return 'Preparando a apresentação...';
+  if (t.includes('traduz') || t.includes('inglês') || t.includes('espanhol') || t.includes('francês') || t.includes('idioma'))
+    return 'Traduzindo o conteúdo...';
+  if (t.includes('proposta') || t.includes('orçamento') || t.includes('cotação') || t.includes('contrato') || t.includes('oferta'))
+    return 'Montando a proposta para você...';
+  if (t.includes('plano') || t.includes('estratégia') || t.includes('planejamento') || t.includes('roteiro') || t.includes('cronograma'))
+    return 'Elaborando o plano para você...';
+  if (t.includes('analis') || t.includes('pesquisa') || t.includes('compara') || t.includes('mercado') || t.includes('relatório'))
+    return 'Analisando as informações...';
+  if (t.includes('como ') || t.includes('por que') || t.includes('porque') || t.includes('explica') || t.includes('o que é') || t.includes('diferença') || t.includes('quando') || t.includes('onde'))
+    return 'Buscando a melhor explicação...';
+  if (t.includes('cria') || t.includes('gera') || t.includes('escreve') || t.includes('faz') || t.includes('monta') || t.includes('produz'))
+    return 'Criando o que você pediu...';
+  return 'Trabalhando na melhor resposta para você...';
+};
+
+// ── Persistência de modo por conversa ──────────────────────────────────────
+const CONV_MODE_KEY = 'arcco_conv_mode';
+const saveConvMode = (convId: string, agentMode: boolean) => {
+  try {
+    const existing = JSON.parse(localStorage.getItem(CONV_MODE_KEY) || '{}');
+    existing[convId] = agentMode;
+    localStorage.setItem(CONV_MODE_KEY, JSON.stringify(existing));
+  } catch { /* ignore */ }
+};
+const getConvMode = (convId: string): boolean | null => {
+  try {
+    const existing = JSON.parse(localStorage.getItem(CONV_MODE_KEY) || '{}');
+    return convId in existing ? existing[convId] : null;
+  } catch { return null; }
+};
+
 const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   userName,
   chatSessionId,
@@ -190,15 +236,22 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const [isThoughtsExpanded, setIsThoughtsExpanded] = useState(true);
   const [browserAction, setBrowserAction] = useState<{ status: string; url: string; title: string } | null>(null);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [showChatModelDropdown, setShowChatModelDropdown] = useState(false);
   const [chatModeConfigs, setChatModeConfigs] = useState<ChatModeConfig[]>([]);
   const [selectedChatSlot, setSelectedChatSlot] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const thoughtsStartTimeRef = useRef<number>(0);
   const [generatedFiles, setGeneratedFiles] = useState<Array<{ filename: string; url: string; type: 'pdf' | 'excel' | 'other' }>>([]);
   const [textDocArtifact, setTextDocArtifact] = useState<{ title: string; content: string } | null>(null);
+  const [clarificationQuestions, setClarificationQuestions] = useState<Array<{ type: 'choice' | 'open'; text: string; options: string[] }> | null>(null);
+  const [chatThinkingMessage, setChatThinkingMessage] = useState('');
+  const [chatThinkingVisible, setChatThinkingVisible] = useState(false);
+  const chatThinkingStartRef = useRef<number>(0);
+  const chatThinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [modalPreview, setModalPreview] = useState<{ type: 'text_doc' | 'pdf' | 'excel' | 'other'; title: string; content?: string; url?: string } | null>(null);
-  const [designPreviewHtml, setDesignPreviewHtml] = useState<string | null>(null);
+  const [designPreview, setDesignPreview] = useState<{ designs: string[]; initialIndex: number } | null>(null);
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [isSearchEnabled, setIsSearchEnabled] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const notifiedFailedFilesRef = useRef<Set<string>>(new Set());
 
@@ -360,7 +413,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     return "Madrugada produtiva! O que faremos juntos?";
   };
 
-  const firstName = userName.split(' ')[0];
+  const displayName = userName.trim() || 'Usuário';
   const [greetingTime] = useState(getGreeting());
   const [greetingSubtitle] = useState(getSubtitle());
   const [suggestionHints] = useState(() => {
@@ -431,7 +484,10 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
         const res = await fetch('/api/agent/chat-models');
         if (!res.ok) return;
         const data = await res.json();
-        const configs = (data.models || []) as ChatModeConfig[];
+        const configs = ((data.models || []) as ChatModeConfig[]).map(config => ({
+          ...config,
+          slot_number: Number(config.slot_number),
+        }));
         setChatModeConfigs(configs);
         if (configs.length > 0) {
           setSelectedChatSlot(prev => prev ?? configs[0].slot_number);
@@ -454,6 +510,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     if (!chatSessionId || !isUUID) return;
 
     setConversationId(chatSessionId);
+    const savedMode = getConvMode(chatSessionId);
+    if (savedMode !== null) setIsAgentMode(savedMode);
     conversationApi.getMessages(chatSessionId).then(msgs => {
       setMessages(msgs.map(m => ({
         id: m.id,
@@ -555,6 +613,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     return () => clearInterval(interval);
   }, [isLoading, agentThoughts.length]);
 
+
   // Histórico persiste apenas no Supabase via background task no backend
   const saveToSession = (_msgs: Message[]) => { /* no-op */ };
 
@@ -579,6 +638,16 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     setGeneratedFiles([]);
     setBrowserAction(null);
     setTextDocArtifact(null);
+    setClarificationQuestions(null);
+    if (!isAgentMode) {
+      setIsTerminalOpen(false);
+      setTerminalContent('');
+      setChatThinkingMessage(generateThinkingMessage(text));
+      // Garante visibilidade mínima do thinking panel (cancela timer anterior se houver)
+      if (chatThinkingTimerRef.current) clearTimeout(chatThinkingTimerRef.current);
+      chatThinkingStartRef.current = Date.now();
+      setChatThinkingVisible(true);
+    }
     setIsThoughtsExpanded(true);
     setElapsedSeconds(0);
     thoughtsStartTimeRef.current = Date.now();
@@ -655,6 +724,28 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             return;
           }
 
+          if (type === 'clarification') {
+            try {
+              const questions = JSON.parse(content);
+              if (Array.isArray(questions) && questions.length > 0) {
+                setClarificationQuestions(questions);
+              }
+            } catch { /* ignore parse errors */ }
+            return;
+          }
+
+          // Pre-action acknowledgement — mostra no bubble do chat (fora do terminal)
+          if (type === 'pre_action') {
+            const text = content.trim();
+            if (text) {
+              setChatThinkingMessage(text);
+              chatThinkingStartRef.current = Date.now();
+              if (chatThinkingTimerRef.current) clearTimeout(chatThinkingTimerRef.current);
+              setChatThinkingVisible(true);
+            }
+            return;
+          }
+
           // Raciocínio do LLM em texto livre (estilo ChatGPT Thinking)
           if (type === 'thought') {
             const thought = content.trim();
@@ -708,6 +799,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
           // ID da conversa emitido pelo backend antes do primeiro chunk
           if (type === 'conversation_id') {
             setConversationId(content);
+            saveConvMode(content, isAgentMode);
             return;
           }
 
@@ -718,7 +810,17 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
               setAgentThoughts(prev =>
                 prev.map(s => s.status === 'running' ? { ...s, status: 'done' as const } : s)
               );
-              // Painel gerencia seu próprio colapso ao finalizar (ver AgentThoughtPanel)
+              // Esconde thinking panel com tempo mínimo garantido de 800ms (ambos os modos)
+              if (chatThinkingStartRef.current > 0) {
+                const elapsed = Date.now() - chatThinkingStartRef.current;
+                const delay = Math.max(0, 800 - elapsed);
+                chatThinkingTimerRef.current = setTimeout(() => {
+                  setChatThinkingVisible(false);
+                  chatThinkingStartRef.current = 0;
+                }, delay);
+              }
+              // Colapsa steps inline após breve delay
+              setTimeout(() => setIsThoughtsExpanded(false), 600);
             }
 
             const cleanChunk = content.replace(/<step>[\s\S]*?(<\/step>|$)/g, '');
@@ -734,7 +836,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
         effectiveSessionId,
         userId,
         projectId,
-        conversationId
+        conversationId,
+        !isAgentMode && isSearchEnabled,
       );
 
       // Wait for queue to finish draining typing effect
@@ -764,6 +867,9 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     } finally {
       setIsLoading(false);
       abortControllerRef.current = null;
+      // Garante limpeza do thinking panel em qualquer caso (erro, abort, fim normal)
+      if (chatThinkingTimerRef.current) clearTimeout(chatThinkingTimerRef.current);
+      setChatThinkingVisible(false);
     }
   };
 
@@ -811,11 +917,12 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     if (trimmedContent.startsWith('<!DOCTYPE') || trimmedContent.toLowerCase().startsWith('<html')) {
       const DESIGN_SEPARATOR = '<!-- ARCCO_DESIGN_SEPARATOR -->';
       const designs = trimmedContent.split(DESIGN_SEPARATOR).map(d => d.trim()).filter(Boolean);
-      const openDesign = (html: string) => setDesignPreviewHtml(html);
+      const openSingleDesign = () => setDesignPreview({ designs, initialIndex: 0 });
+      const openDesignByIndex = (index: number) => setDesignPreview({ designs, initialIndex: index });
       if (designs.length > 1) {
-        return <DesignGallery designs={designs} isStreaming={isLoading} onOpenPreview={openDesign} />;
+        return <DesignGallery designs={designs} isStreaming={isLoading} onOpenPreview={openDesignByIndex} />;
       }
-      return <PresentationCard html={designs[0] || trimmedContent} isStreaming={isLoading} onOpenPreview={openDesign} />;
+      return <PresentationCard html={designs[0] || trimmedContent} isStreaming={isLoading} onOpenPreview={openSingleDesign} />;
     }
 
     // Matches closed OR unclosed code blocks (until end of string) for streaming safety
@@ -894,52 +1001,9 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
   const renderInputArea = (variant: 'centered' | 'bottom') => (
     <div className={`relative group w-full ${variant === 'centered' ? 'max-w-2xl' : 'max-w-4xl mx-auto'}`}>
-      <div className="absolute -inset-0.5 bg-gradient-to-r from-neutral-700/20 to-neutral-500/20 rounded-xl blur opacity-0 group-hover:opacity-100 transition duration-500"></div>
-      <div className={`relative flex items-end gap-2 bg-[#121212]/95 border border-[#333] rounded-xl px-4 py-3 shadow-2xl ${variant === 'centered' ? 'min-h-[56px]' : ''}`}>
-
-        <div className="relative flex items-center gap-1 pr-2 border-r border-[#333] mr-2">
-          <input type="file" hidden ref={fileInputRef} onChange={handleFileUpload} />
-          <button
-            onClick={() => setShowAddMenu(!showAddMenu)}
-            disabled={isFileLoading}
-            className="flex items-center justify-center gap-1.5 px-3 py-1.5 text-neutral-400 hover:text-white hover:bg-[#222] transition-colors rounded-lg disabled:cursor-not-allowed text-sm font-medium"
-            title={isFileLoading ? "Enviando arquivo..." : "Adicionar anexo ou link"}
-          >
-            {isFileLoading
-              ? <Loader2 size={16} className="animate-spin text-indigo-400" />
-              : <><Plus size={16} /> <span className="hidden sm:inline">Adicionar</span></>
-            }
-          </button>
-
-          {showAddMenu && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setShowAddMenu(false)} />
-              <div className="absolute bottom-[calc(100%+12px)] left-0 w-64 bg-[#1a1a1d] border border-[#333] rounded-xl shadow-2xl overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2">
-                <button
-                  onClick={() => { setShowAddMenu(false); !isFileLoading && fileInputRef.current?.click(); }}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-sm text-neutral-300 hover:text-white hover:bg-white/[0.05] transition-colors text-left"
-                >
-                  <Paperclip size={16} className="text-neutral-500" />
-                  Upload de arquivos ou fotos
-                </button>
-                <button
-                  onClick={() => {
-                    setShowAddMenu(false);
-                    const url = window.prompt("URL do site ou arquivo:");
-                    if (url && url.trim()) {
-                      setInputValue(prev => prev + (prev.endsWith(' ') || prev === '' ? '' : ' ') + url);
-                    }
-                  }}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-sm text-neutral-300 hover:text-white hover:bg-white/[0.05] transition-colors text-left"
-                >
-                  <Link size={16} className="text-neutral-500" />
-                  Url
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-
+      <div className="absolute -inset-0.5 bg-gradient-to-r from-neutral-700/20 to-neutral-500/20 rounded-[24px] blur opacity-0 group-hover:opacity-100 transition duration-500"></div>
+      <div className={`relative bg-[#121212]/95 border border-[#333] rounded-[24px] px-4 py-3 shadow-2xl ${variant === 'centered' ? 'min-h-[56px]' : ''}`}>
+        <div className="flex items-end gap-2">
         <textarea
           ref={textareaRef}
           rows={1}
@@ -957,14 +1021,100 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
           autoFocus={variant === 'centered'}
         />
 
-        <button
-          onClick={() => handleSendMessage(inputValue)}
-          disabled={isLoading || !isApiKeyReady || (!isAgentMode && !selectedChatConfig) || !inputValue.trim()}
-          className="p-2 rounded-lg text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors bg-neutral-800 hover:bg-neutral-700"
-          title={!isApiKeyReady ? 'Carregando chave de API...' : (!isAgentMode && !selectedChatConfig ? 'Configure um slot no painel admin' : undefined)}
-        >
-          <Send size={18} />
-        </button>
+        <div className="relative group/send flex-shrink-0">
+          <button
+            onClick={() => handleSendMessage(inputValue)}
+            disabled={isLoading || !isApiKeyReady || (!isAgentMode && !selectedChatConfig) || !inputValue.trim()}
+            className="p-2 rounded-lg text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors bg-neutral-800 hover:bg-neutral-700"
+          >
+            <Send size={18} />
+          </button>
+          <div className="absolute bottom-full right-0 mb-2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/send:opacity-100 group-hover/send:visible transition-all duration-150 pointer-events-none z-50 flex items-center gap-1.5">
+            {!isApiKeyReady ? 'Carregando API...' : (!isAgentMode && !selectedChatConfig) ? 'Configure um modelo no admin' : <><span>Enviar</span><kbd className="px-1 py-0.5 bg-[#252525] rounded text-[10px] text-neutral-500">↵</kbd></>}
+          </div>
+        </div>
+        </div>
+
+        <div className="mt-2 flex items-center gap-1.5">
+          <div className="relative flex items-center gap-1">
+            <input type="file" hidden ref={fileInputRef} onChange={handleFileUpload} />
+            <div className="relative group/add">
+            <button
+              onClick={() => setShowAddMenu(!showAddMenu)}
+              disabled={isFileLoading}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-full text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.03] transition-colors disabled:cursor-not-allowed"
+            >
+              {isFileLoading
+                ? <Loader2 size={13} className="animate-spin text-indigo-400" />
+                : <Plus size={14} />
+              }
+            </button>
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/add:opacity-100 group-hover/add:visible transition-all duration-150 pointer-events-none z-50">
+              {isFileLoading ? 'Enviando...' : 'Anexar arquivo ou link'}
+            </div>
+            </div>
+
+            {showAddMenu && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowAddMenu(false)} />
+                <div className="absolute bottom-[calc(100%+12px)] left-0 w-64 bg-[#1a1a1d] border border-[#333] rounded-xl shadow-2xl overflow-hidden z-50 animate-in fade-in slide-in-from-bottom-2">
+                  <button
+                    onClick={() => { setShowAddMenu(false); !isFileLoading && fileInputRef.current?.click(); }}
+                    className="w-full flex items-center gap-3 px-4 py-3 text-sm text-neutral-300 hover:text-white hover:bg-white/[0.05] transition-colors text-left"
+                  >
+                    <Paperclip size={16} className="text-neutral-500" />
+                    Upload de arquivos ou fotos
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowAddMenu(false);
+                      const url = window.prompt("URL do site ou arquivo:");
+                      if (url && url.trim()) {
+                        setInputValue(prev => prev + (prev.endsWith(' ') || prev === '' ? '' : ' ') + url);
+                      }
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-3 text-sm text-neutral-300 hover:text-white hover:bg-white/[0.05] transition-colors text-left"
+                  >
+                    <Link size={16} className="text-neutral-500" />
+                    Url
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="relative group/tools">
+            <button
+              onClick={() => showToast('Seletor de tools ainda não está conectado.', 'success')}
+              className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.03] transition-colors"
+            >
+              <Wrench size={12} />
+              <span>Tools</span>
+            </button>
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/tools:opacity-100 group-hover/tools:visible transition-all duration-150 pointer-events-none z-50">
+              Ferramentas disponíveis para o agente
+            </div>
+          </div>
+
+          {!isAgentMode && (
+            <div className="relative group/search">
+              <button
+                onClick={() => setIsSearchEnabled(p => !p)}
+                className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] transition-all duration-200 ${
+                  isSearchEnabled
+                    ? 'text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/15'
+                    : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.03]'
+                }`}
+              >
+                <Globe size={12} />
+                <span>Pesquisa</span>
+              </button>
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/search:opacity-100 group-hover/search:visible transition-all duration-150 pointer-events-none z-50">
+                {isSearchEnabled ? 'Ativo · o modelo pesquisará em tempo real na internet' : 'O modelo pesquisará em tempo real na internet'}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {attachments.length > 0 && (
@@ -993,7 +1143,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
         <DotGridBackground />
 
         {/* Header */}
-        <div className="h-16 border-b border-[#222] flex items-center px-6 bg-[#0a0a0a]/80 backdrop-blur-md z-10 transition-opacity duration-500">
+        <div className="h-16 border-b border-[#222] flex items-center px-6 bg-[#0a0a0a]/80 backdrop-blur-md relative z-20 transition-opacity duration-500">
 
           {/* Projeto ativo — badge + botões de edição */}
           {project && (
@@ -1012,62 +1162,102 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             </div>
           )}
 
-          {/* Model Selector — Dropdown minimalista */}
+          {/* Model Selector */}
           <div className="relative">
-            <button
-              onClick={() => setShowModelDropdown(p => !p)}
-              className="flex items-center gap-2 text-sm text-neutral-300 hover:text-white transition-colors"
-            >
-              <span className="font-medium">
-                {isAgentMode ? 'Arcco Pro V1' : (selectedChatConfig?.model_name || 'Selecione um modelo')}
+            <div className="flex flex-col items-start">
+              {isAgentMode ? (
+                <div className="relative group/model-agent">
+                  <button
+                    onClick={() => setShowModelDropdown(p => !p)}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-all duration-200 border ${showModelDropdown ? 'text-white bg-white/[0.05] border-[#333]' : 'text-neutral-400 hover:text-white border-transparent hover:bg-white/[0.04] hover:border-[#2a2a2a]'}`}
+                  >
+                    <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
+                    <span className="font-medium">Arcco Pro V1</span>
+                    <ChevronDown size={13} className={`text-neutral-500 transition-transform duration-200 ${showModelDropdown ? 'rotate-180' : ''}`} />
+                  </button>
+                  <div className="absolute top-full left-0 mt-2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/model-agent:opacity-100 group-hover/model-agent:visible transition-all duration-150 pointer-events-none z-50">
+                    Modelo de IA ativo
+                  </div>
+                </div>
+              ) : (
+                <div className="relative group/model-chat">
+                  <button
+                    onClick={() => setShowChatModelDropdown(p => !p)}
+                    disabled={chatModeConfigs.length === 0}
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-all duration-200 border disabled:opacity-40 disabled:cursor-not-allowed ${showChatModelDropdown ? 'text-white bg-white/[0.05] border-[#333]' : 'text-neutral-400 hover:text-white border-transparent hover:bg-white/[0.04] hover:border-[#2a2a2a]'}`}
+                  >
+                    <span className="font-medium">{selectedChatConfig?.model_name || 'Nenhum modelo'}</span>
+                    <ChevronDown size={13} className={`text-neutral-500 transition-transform duration-200 ${showChatModelDropdown ? 'rotate-180' : ''}`} />
+                  </button>
+                  <div className="absolute top-full left-0 mt-2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/model-chat:opacity-100 group-hover/model-chat:visible transition-all duration-150 pointer-events-none z-50">
+                    Selecionar modelo de resposta
+                  </div>
+                </div>
+              )}
+              <span className="text-[10px] text-neutral-700 px-3 tracking-wide">
+                {isAgentMode ? 'Agent' : 'Chat'}
               </span>
-              <ChevronDown size={14} className={`text-neutral-500 transition-transform ${showModelDropdown ? 'rotate-180' : ''}`} />
-            </button>
-            {showModelDropdown && (
+            </div>
+
+            {/* Agent mode dropdown */}
+            {isAgentMode && showModelDropdown && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowModelDropdown(false)} />
-                <div className="absolute top-full left-0 mt-2 w-56 bg-[#141414] border border-neutral-800 rounded-xl shadow-2xl z-50 overflow-hidden">
-                  {isAgentMode ? (
-                    <>
-                      <button
-                        onClick={() => setShowModelDropdown(false)}
-                        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-neutral-800/50 transition-colors"
-                      >
-                        <div className="w-2 h-2 rounded-full bg-indigo-400" />
-                        <div>
-                          <p className="text-sm font-medium text-white">Arcco Pro V1</p>
-                          <p className="text-[11px] text-neutral-500">Modelo principal</p>
-                        </div>
-                      </button>
-                      <div className="w-full flex items-center gap-3 px-4 py-3 opacity-40 cursor-not-allowed">
-                        <div className="w-2 h-2 rounded-full bg-neutral-600" />
-                        <div>
-                          <p className="text-sm font-medium text-neutral-500">Arcco Symphony</p>
-                          <p className="text-[11px] text-neutral-600">Em breve</p>
-                        </div>
+                <div className="absolute top-full left-0 mt-1.5 w-60 bg-[#111] border border-[#252525] rounded-xl shadow-2xl z-50 overflow-hidden">
+                  <div className="p-1.5">
+                    <button
+                      onClick={() => setShowModelDropdown(false)}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left bg-indigo-500/10 hover:bg-indigo-500/15 transition-colors"
+                    >
+                      <div className="flex-shrink-0 w-7 h-7 rounded-lg bg-indigo-500/20 flex items-center justify-center">
+                        <Sparkles size={12} className="text-indigo-400" />
                       </div>
-                    </>
-                  ) : chatModeConfigs.length > 0 ? (
-                    chatModeConfigs.map(config => (
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-white">Arcco Pro V1</p>
+                        <p className="text-[11px] text-neutral-500 mt-0.5">Modelo principal</p>
+                      </div>
+                      <Check size={13} className="text-indigo-400 flex-shrink-0" />
+                    </button>
+                    <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg opacity-35 cursor-not-allowed mt-0.5">
+                      <div className="flex-shrink-0 w-7 h-7 rounded-lg bg-neutral-800 flex items-center justify-center">
+                        <Sparkles size={12} className="text-neutral-600" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-neutral-400">Arcco Symphony</p>
+                        <p className="text-[11px] text-neutral-600 mt-0.5">Em breve</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Chat mode dropdown */}
+            {!isAgentMode && showChatModelDropdown && chatModeConfigs.length > 0 && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowChatModelDropdown(false)} />
+                <div className="absolute top-full left-0 mt-1.5 w-64 bg-[#111] border border-[#252525] rounded-xl shadow-2xl z-50 overflow-hidden">
+                  <div className="p-1.5">
+                    {chatModeConfigs.map(config => (
                       <button
                         key={config.slot_number}
-                        onClick={() => {
-                          setSelectedChatSlot(config.slot_number);
-                          setShowModelDropdown(false);
-                        }}
-                        className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-neutral-800/50 transition-colors ${selectedChatSlot === config.slot_number ? 'bg-indigo-500/10' : ''}`}
+                        onClick={() => { setSelectedChatSlot(config.slot_number); setShowChatModelDropdown(false); }}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${config.slot_number === selectedChatSlot
+                          ? 'bg-indigo-500/10 hover:bg-indigo-500/15'
+                          : 'hover:bg-white/[0.04]'
+                        }`}
                       >
-                        <div className={`w-2 h-2 rounded-full ${selectedChatSlot === config.slot_number ? 'bg-indigo-400' : 'bg-neutral-600'}`} />
-                        <div className="min-w-0">
-                          <p className={`text-sm font-medium truncate ${selectedChatSlot === config.slot_number ? 'text-white' : 'text-neutral-300'}`}>{config.model_name}</p>
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-sm font-medium ${config.slot_number === selectedChatSlot ? 'text-white' : 'text-neutral-300'}`}>
+                            {config.model_name}
+                          </p>
                         </div>
+                        {config.slot_number === selectedChatSlot && (
+                          <Check size={13} className="text-indigo-400 flex-shrink-0" />
+                        )}
                       </button>
-                    ))
-                  ) : (
-                    <div className="px-4 py-3 text-[11px] text-neutral-500">
-                      Nenhum modelo ativo no modo chat. Configure em /admin.
-                    </div>
-                  )}
+                    ))}
+                  </div>
                 </div>
               </>
             )}
@@ -1077,8 +1267,13 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
           <div className="ml-auto relative group">
             <button
               onClick={() => {
+                if (messages.length > 0) return;
                 setIsAgentMode(prev => {
                   const next = !prev;
+                  if (!next) {
+                    setIsTerminalOpen(false);
+                    setTerminalContent('');
+                  }
                   if (!next && !selectedChatSlot && chatModeConfigs.length > 0) {
                     setSelectedChatSlot(chatModeConfigs[0].slot_number);
                   }
@@ -1086,21 +1281,25 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 });
                 setShowModelDropdown(false);
               }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-300 ${isAgentMode
-                  ? 'text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 shadow-[0_0_12px_rgba(99,102,241,0.15)]'
-                  : 'text-neutral-500 border border-[#333] hover:text-neutral-300 hover:border-neutral-600'
-                }`}
+              disabled={messages.length > 0}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-300 border ${
+                messages.length > 0
+                  ? 'text-neutral-700 border-[#252525] cursor-not-allowed opacity-50'
+                  : 'text-neutral-500 border-[#333] hover:text-neutral-300 hover:border-neutral-600'
+              }`}
             >
-              <Sparkles size={13} className={isAgentMode ? 'text-indigo-400' : 'opacity-50'} />
-              {isAgentMode ? 'Modo Agent' : 'Modo Chat'}
+              <Sparkles size={13} className="opacity-50" />
+              {isAgentMode ? 'Modo Chat' : 'Modo Agent'}
             </button>
 
             {/* Tooltip personalizado on hover */}
             <div className="absolute right-0 top-full mt-2 w-64 p-3 bg-[#1a1a1d] border border-[#333] rounded-xl shadow-2xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50 pointer-events-none">
               <p className="text-xs text-neutral-300 leading-relaxed text-left">
-                {isAgentMode
-                  ? 'Modo agente, é utilizado para tarefas complexas, pesquisa de mercados, processamento massivo de dados.'
-                  : 'Modo chat, é para conversas e dúvidas simples que exigem pouca capacidade computacional e também é para tarefas mais rápidas.'}
+                {messages.length > 0
+                  ? 'O modo não pode ser alterado durante uma conversa.'
+                  : isAgentMode
+                    ? 'Modo chat, é para conversas e dúvidas simples que exigem pouca capacidade computacional e também é para tarefas mais rápidas.'
+                    : 'Modo agente, é utilizado para tarefas complexas, pesquisa de mercados, processamento massivo de dados.'}
               </p>
             </div>
           </div>
@@ -1134,7 +1333,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 {/* Greeting */}
                 {project ? (
                   <>
-                    <div className="flex items-center gap-3 mb-2">
+                    <div className="flex items-center gap-1.5 mb-2">
                       <div className="w-12 h-12 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
                         <Folder size={22} className="text-indigo-400" />
                       </div>
@@ -1156,11 +1355,11 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                         <img
                           src={arccoEmblemUrl}
                           alt="Arcco Emblem"
-                          className="w-12 h-12 object-contain opacity-90"
+                          className="w-[72px] h-[72px] object-contain opacity-90"
                         />
                       </div>
                       <h1 className="text-2xl md:text-3xl font-normal text-white tracking-tight leading-snug">
-                        {greetingTime}, {firstName}
+                        {greetingTime}, {displayName}
                       </h1>
                     </div>
                     <p className="text-lg md:text-xl font-normal text-neutral-500 tracking-tight leading-snug mt-1">
@@ -1198,14 +1397,14 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   return (
                     <div
                       key={msg.id}
-                      className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
+                      className={`flex items-start gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
                     >
                       {msg.role === 'assistant' && (
-                        <div className="flex-shrink-0 pt-1">
+                        <div className="flex-shrink-0 pt-0.5">
                           <img
                             src={arccoEmblemUrl}
                             alt="Arcco"
-                            className="w-7 h-7 object-contain opacity-75"
+                            className={`w-[50px] h-[50px] object-contain opacity-75 ${isStreaming ? 'animate-pulse' : ''}`}
                           />
                         </div>
                       )}
@@ -1216,23 +1415,88 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                         } ${msg.isError ? 'border border-red-500/30 bg-red-500/10' : ''} ${isStreaming ? 'animate-typing-border' : ''
                         }`}
                       >
-                        {renderContent(msg.content)}
+                        {isLastAssistant && chatThinkingVisible ? (
+                          <div className="flex flex-col gap-2.5 animate-in fade-in duration-300">
+                            <div className="flex items-center gap-2">
+                              <div className="w-3.5 h-3.5 rounded-full border-[1.5px] border-indigo-400/80 border-t-transparent animate-spin flex-shrink-0" />
+                              <span className="text-sm text-neutral-400 font-medium">Trabalhando</span>
+                            </div>
+                            <div className="pl-5 border-l border-[#2a2a2a] ml-[3px] animate-in fade-in slide-in-from-left-1 duration-500">
+                              <p className="text-xs text-neutral-600 leading-relaxed">
+                                {chatThinkingMessage}
+                              </p>
+                            </div>
+                          </div>
+                        ) : renderContent(msg.content)}
                       </div>
                     </div>
                   );
                 })}
 
-                {/* Agent Thought Panel — mostra steps do orquestrador em tempo real */}
-                {agentThoughts.length > 0 && (
-                  <div className="w-full max-w-[85%] md:max-w-[80%]">
-                    <AgentThoughtPanel
-                      steps={agentThoughts}
-                      isExpanded={isThoughtsExpanded}
-                      onToggle={() => setIsThoughtsExpanded(p => !p)}
-                      elapsedSeconds={elapsedSeconds}
-                    />
-                  </div>
-                )}
+                {/* Inline Steps — mostra steps do orquestrador inline no chat (apenas agent mode) */}
+                {isAgentMode && agentThoughts.length > 0 && (() => {
+                  const allDone = agentThoughts.every(s => s.status === 'done');
+                  const actionSteps = agentThoughts.filter(s => !s.isThought);
+                  const collapsed = allDone && !isThoughtsExpanded;
+
+                  return (
+                    <div className="w-full max-w-[85%] md:max-w-[80%] pl-[62px]">
+                      {collapsed ? (
+                        <button
+                          onClick={() => setIsThoughtsExpanded(true)}
+                          className="flex items-center gap-1.5 text-sm text-neutral-600 hover:text-neutral-400 transition-colors py-1"
+                        >
+                          <span className="text-neutral-700">&#9662;</span>
+                          <span>{actionSteps.length} etapa{actionSteps.length !== 1 ? 's' : ''} · {elapsedSeconds}s</span>
+                        </button>
+                      ) : (
+                        <div className="space-y-3 py-1">
+                          {agentThoughts.map((step, i) => {
+                            const isRunning = step.status === 'running';
+                            const label = step.label.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\u200d\ufe0f]/gu, '').trim();
+
+                            if (step.isThought) {
+                              return (
+                                <div key={i} className="flex items-start gap-2.5 animate-step-enter" style={{ animationDelay: `${i * 40}ms` }}>
+                                  <img
+                                    src={arccoEmblemUrl}
+                                    alt=""
+                                    className={`w-4 h-4 object-contain mt-0.5 flex-shrink-0 ${isRunning ? 'animate-pulse-soft' : 'opacity-30'}`}
+                                  />
+                                  <span className={`text-sm italic ${isRunning ? 'text-neutral-500 animate-pulse-soft' : 'text-neutral-700'}`}>
+                                    {label}
+                                  </span>
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <div key={i} className="flex items-start gap-2.5 animate-step-enter" style={{ animationDelay: `${i * 40}ms` }}>
+                                <img
+                                  src={arccoEmblemUrl}
+                                  alt=""
+                                  className={`w-4 h-4 object-contain mt-0.5 flex-shrink-0 ${isRunning ? 'animate-pulse-soft' : 'opacity-30'}`}
+                                />
+                                <span className={`text-sm ${isRunning ? 'text-neutral-400 animate-pulse-soft' : 'text-neutral-600'}`}>
+                                  {label}
+                                </span>
+                              </div>
+                            );
+                          })}
+                          {allDone && (
+                            <button
+                              onClick={() => setIsThoughtsExpanded(false)}
+                              className="flex items-center gap-1.5 text-sm text-neutral-600 hover:text-neutral-400 transition-colors pt-1"
+                            >
+                              <span className="text-neutral-700">&#9652;</span>
+                              <span>{actionSteps.length} etapa{actionSteps.length !== 1 ? 's' : ''} · {elapsedSeconds}s</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Browser Agent Card — mostra card estilo Manus quando o agente navega */}
                 {browserAction && (
@@ -1255,6 +1519,22 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   </div>
                 )}
 
+                {/* Clarification Card — perguntas antes de executar o pipeline */}
+                {clarificationQuestions && !isLoading && (
+                  <div className="w-full max-w-[85%] md:max-w-[80%]">
+                    <ClarificationCard
+                      questions={clarificationQuestions}
+                      onSubmit={(answers) => {
+                        const responseText = clarificationQuestions.map((q, i) =>
+                          `${q.text} ${answers[i]}`
+                        ).join('\n');
+                        setClarificationQuestions(null);
+                        handleSendMessage(responseText);
+                      }}
+                    />
+                  </div>
+                )}
+
                 {/* Text Document Artifact — botões DOCX / PDF para documentos escritos */}
                 {textDocArtifact && !isLoading && (
                   <div className="w-full max-w-[85%] md:max-w-[80%]">
@@ -1266,36 +1546,20 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   </div>
                 )}
 
-                {/* Terminal legado só aparece em Agent Mode explícito sem steps */}
-                {isTerminalOpen && agentThoughts.length === 0 && (
-                  <div className="flex gap-4 flex-row">
-                    <div className="max-w-[85%] md:max-w-[80%] w-full">
-                      <AgentTerminal
-                        isOpen={isTerminalOpen}
-                        content={terminalContent}
-                        status="Processando..."
-                        onClose={() => setIsTerminalOpen(false)}
-                        className="w-full shadow-[0_0_15px_rgba(99,102,241,0.1)] border-[#333]"
+                {/* Loading — Agent mode: aguardando primeiro step inline */}
+                {isLoading && isAgentMode && agentThoughts.length === 0 && (
+                  <div className="w-full max-w-[85%] md:max-w-[80%] pl-[62px] py-1">
+                    <div className="flex items-center gap-2 animate-step-enter">
+                      <img
+                        src={arccoEmblemUrl}
+                        alt=""
+                        className="w-4 h-4 object-contain animate-pulse-soft flex-shrink-0"
                       />
+                      <span className="text-sm text-neutral-500 animate-pulse-soft">Analisando...</span>
                     </div>
                   </div>
                 )}
 
-                {/* Loading — terminal indicator antes do primeiro step */}
-                {isLoading && agentThoughts.length === 0 && !isTerminalOpen && (
-                  <div className="ml-0 py-1">
-                    <div className="inline-flex items-center rounded-lg border border-[#2e2e34] bg-[#111114] px-4 py-3">
-                      <span className="font-mono text-xs text-neutral-600 tracking-wide">
-                        agente
-                        <span className="mx-2 text-[#2a2a2a]">·</span>
-                        <span className="text-neutral-400">
-                          pensando
-                          <span className="animate-cursor-blink ml-0.5 text-neutral-500">▌</span>
-                        </span>
-                      </span>
-                    </div>
-                  </div>
-                )}
 
                 {/* Botão Parar — aparece durante execução do agente */}
                 {isLoading && (
@@ -1310,6 +1574,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                         setIsThoughtsExpanded(false);
                       }}
                       className="flex items-center gap-2 px-5 py-2 bg-[#141414] hover:bg-[#1e1e1e] border border-[#2a2a2a] hover:border-neutral-600 rounded-full text-[11px] text-neutral-500 hover:text-neutral-300 transition-all duration-200 backdrop-blur-sm"
+                      title="Cancelar a geração da resposta"
                     >
                       <Square size={10} fill="currentColor" />
                       Parar geração
@@ -1363,11 +1628,12 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
       )}
 
       {/* Design Preview Modal */}
-      {designPreviewHtml && (
+      {designPreview && (
         <DesignPreviewModal
-          isOpen={!!designPreviewHtml}
-          onClose={() => setDesignPreviewHtml(null)}
-          html={designPreviewHtml}
+          isOpen={!!designPreview}
+          onClose={() => setDesignPreview(null)}
+          designs={designPreview.designs}
+          initialIndex={designPreview.initialIndex}
         />
       )}
     </div >

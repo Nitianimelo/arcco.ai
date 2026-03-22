@@ -30,7 +30,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.agents import registry
+from backend.services.agent_model_overrides import delete_agent_model_override, save_agent_model_override
 from backend.services.chat_models import create_chat_model, delete_chat_model, list_chat_models, update_chat_model
+from backend.services.execution_log_service import get_execution_details, list_execution_summaries
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +167,29 @@ async def list_agents():
     return {"agents": registry.get_all()}
 
 
+@router.post("/agents/reload-models")
+async def reload_agent_models():
+    """Recarrega os modelos dos agentes a partir do Supabase sem tocar em prompts/tools."""
+    agents = registry.reload_models_from_supabase()
+    return {"success": True, "agents": agents}
+
+
+@router.get("/executions")
+async def list_executions(limit: int = 100):
+    """Lista execuções recentes do sistema para o painel admin."""
+    rows = await list_execution_summaries(limit=limit)
+    return {"executions": rows}
+
+
+@router.get("/executions/{execution_id}")
+async def execution_details(execution_id: str):
+    """Retorna execução principal + agentes + logs detalhados."""
+    result = await get_execution_details(execution_id)
+    if not result.get("execution"):
+        raise HTTPException(status_code=404, detail="Execução não encontrada")
+    return result
+
+
 @router.get("/agents/{agent_id}")
 async def get_agent(agent_id: str):
     """Retorna a configuração atual de um agente específico."""
@@ -182,7 +207,7 @@ async def update_agent(agent_id: str, req: "AgentUpdateRequest"):
     O que cada campo faz:
       system_prompt → reescrito com regex em prompts.py (mudança permanente no código)
       tools         → reescrito com AST em tools.py (mudança permanente no código)
-      model         → salvo apenas no override JSON (não há constante .py para modelo)
+      model         → salvo no Supabase e refletido em memória
       name/desc     → apenas em memória e JSON override
 
     Erros parciais são coletados e retornados juntos ao final.
@@ -194,23 +219,36 @@ async def update_agent(agent_id: str, req: "AgentUpdateRequest"):
 
     errors: list[str] = []
     update_data: dict[str, Any] = {}
+    supports_prompt_edit = bool(agent.get("supports_prompt_edit", True))
+    supports_tools_edit = bool(agent.get("supports_tools_edit", True))
 
     if req.system_prompt is not None:
-        try:
-            _write_prompt_to_source(agent_id, req.system_prompt)
-            update_data["system_prompt"] = req.system_prompt
-        except Exception as e:
-            errors.append(f"prompt: {e}")
+        if supports_prompt_edit:
+            try:
+                _write_prompt_to_source(agent_id, req.system_prompt)
+                update_data["system_prompt"] = req.system_prompt
+            except Exception as e:
+                errors.append(f"prompt: {e}")
+        else:
+            update_data["system_prompt"] = agent.get("system_prompt", "")
 
     if req.tools is not None:
-        try:
-            _write_tools_to_source(agent_id, req.tools)
-            update_data["tools"] = req.tools
-        except Exception as e:
-            errors.append(f"tools: {e}")
+        if supports_tools_edit:
+            try:
+                _write_tools_to_source(agent_id, req.tools)
+                update_data["tools"] = req.tools
+            except Exception as e:
+                errors.append(f"tools: {e}")
+        else:
+            update_data["tools"] = agent.get("tools", [])
 
     if req.model is not None:
-        update_data["model"] = req.model
+        try:
+            save_agent_model_override(agent_id, req.model)
+            update_data["model"] = req.model
+            update_data["model_source"] = "supabase"
+        except Exception as e:
+            errors.append(f"model_supabase: {e}")
 
     if req.name is not None:
         update_data["name"] = req.name
@@ -257,12 +295,20 @@ async def reset_agent(agent_id: str):
         "file_modifier":  {"system_prompt": FILE_MODIFIER_SYSTEM_PROMPT,  "model": default_model, "tools": FILE_MODIFIER_TOOLS},
         "qa":             {"system_prompt": QA_SYSTEM_PROMPT,             "model": default_model, "tools": []},
         "planner":        {"system_prompt": PLANNER_SYSTEM_PROMPT,        "model": "openai/gpt-4o-mini", "tools": []},
+        "deep_research":  {"system_prompt": "",                           "model": default_model, "tools": []},
+        "memory":         {"system_prompt": "",                           "model": "openai/gpt-4o-mini", "tools": []},
+        "intent_router":  {"system_prompt": "",                           "model": "openai/gpt-4o-mini", "tools": []},
     }
 
     if agent_id not in DEFAULTS:
         raise HTTPException(status_code=404, detail=f"Agente '{agent_id}' não encontrado")
 
-    registry.update_agent(agent_id, DEFAULTS[agent_id])
+    try:
+        delete_agent_model_override(agent_id)
+    except Exception as e:
+        logger.warning(f"[ADMIN] Falha ao limpar override de modelo no Supabase para '{agent_id}': {e}")
+
+    registry.update_agent(agent_id, {**DEFAULTS[agent_id], "model_source": "local"})
     return {"success": True, "agent": registry.get_agent(agent_id)}
 
 
@@ -339,7 +385,7 @@ async def list_models():
 
 @router.get("/chat-models")
 async def get_chat_models():
-    return {"models": list_chat_models()}
+    return {"models": list_chat_models(force_refresh=True)}
 
 
 @router.post("/chat-models")

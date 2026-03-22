@@ -29,6 +29,147 @@
   --glow-secondary: rgba(139, 92, 246, 0.10);
 }
 
+/* Ghost — dark flat sem nenhuma decoração (grid ou glow) */
+[data-theme="ghost"] {
+  --bg-base: #0c0c0c;
+  --bg-sidebar: #111111;
+  --bg-elevated: #161616;
+  --dot-color: transparent;
+  --glow-primary: transparent;
+  --glow-secondary: transparent;
+}
+
+/* Light — clean claro */
+[data-theme="light"] {
+  --bg-base: #ededef;
+  --bg-sidebar: #e4e4e7;
+  --bg-elevated: #f8f8fa;
+  --dot-color: transparent;
+  /* Sombra suave nos cantos em vez de grid */
+  --glow-primary: rgba(160, 155, 180, 0.18);
+  --glow-secondary: rgba(170, 160, 190, 0.12);
+  color-scheme: light;
+
+  /* Inversão da paleta Tailwind v4 */
+  --color-white: #111111;
+  --color-neutral-50: #161616;
+  --color-neutral-100: #202020;
+  --color-neutral-200: #323232;
+  --color-neutral-300: #454545;
+  --color-neutral-400: #5c5c5c;
+  --color-neutral-500: #737373;
+  --color-neutral-600: #969696;
+  --color-neutral-700: #bcbcbc;
+  --color-neutral-800: #d8d8d8;
+  --color-neutral-900: #ebebeb;
+  --color-neutral-950: #f4f4f4;
+
+  /* Indigo ligeiramente mais saturado no fundo claro */
+  --color-indigo-400: #4f46e5;
+  --color-indigo-500: #4338ca;
+}
+
+/* Botões e elementos coloridos precisam manter texto branco */
+[data-theme="light"] .bg-indigo-600,
+[data-theme="light"] .bg-indigo-500 {
+  color: #ffffff !important;
+}
+[data-theme="light"] .bg-indigo-600:hover,
+[data-theme="light"] .hover\:bg-indigo-500:hover {
+  color: #ffffff !important;
+}
+
+/* ── Light: surfaces principais ── */
+
+/* Header semi-transparente */
+[data-theme="light"] .bg-\[\#0a0a0a\]\/80 {
+  background-color: rgba(237, 237, 239, 0.88) !important;
+}
+
+/* Modais, dropdowns principais */
+[data-theme="light"] .bg-\[\#111113\],
+[data-theme="light"] .bg-\[\#111\] {
+  background-color: #ffffff !important;
+}
+
+/* Input area do chat */
+[data-theme="light"] .bg-\[\#121212\]\/95 {
+  background-color: rgba(255, 255, 255, 0.97) !important;
+}
+[data-theme="light"] .bg-\[\#121212\] {
+  background-color: #ffffff !important;
+}
+
+/* Tooltips, dropdowns secundários */
+[data-theme="light"] .bg-\[\#1a1a1d\],
+[data-theme="light"] .bg-\[\#1a1a1a\] {
+  background-color: #f2f2f5 !important;
+}
+
+/* Cards, painéis internos */
+[data-theme="light"] .bg-\[\#141416\],
+[data-theme="light"] .bg-\[\#141414\],
+[data-theme="light"] .bg-\[\#111114\] {
+  background-color: #f6f6f9 !important;
+}
+
+/* Hover states / step pill */
+[data-theme="light"] .bg-\[\#1e1e1e\] {
+  background-color: #eaeaed !important;
+}
+
+/* User messages */
+[data-theme="light"] .bg-\[\#222\] {
+  background-color: #dddde0 !important;
+}
+
+/* Botão parar */
+[data-theme="light"] .bg-\[\#141414\]:hover,
+[data-theme="light"] .hover\:bg-\[\#1e1e1e\]:hover {
+  background-color: #e4e4e7 !important;
+}
+
+/* kbd tag, badges */
+[data-theme="light"] .bg-\[\#252525\] {
+  background-color: #e8e8eb !important;
+}
+
+/* ── Light: borders ── */
+
+[data-theme="light"] .border-\[\#333\] {
+  border-color: #c2c2c6 !important;
+}
+[data-theme="light"] .border-\[\#313134\] {
+  border-color: #c8c8cc !important;
+}
+[data-theme="light"] .border-\[\#2e2e34\] {
+  border-color: #ccccd0 !important;
+}
+[data-theme="light"] .border-\[\#2a2a2a\] {
+  border-color: #d0d0d4 !important;
+}
+[data-theme="light"] .border-\[\#262629\] {
+  border-color: #d6d6da !important;
+}
+[data-theme="light"] .border-\[\#222\] {
+  border-color: #dcdcdf !important;
+}
+[data-theme="light"] .border-\[\#1e1e21\],
+[data-theme="light"] .border-\[\#1e1e1e\] {
+  border-color: #e2e2e5 !important;
+}
+
+/* ── Light: scrollbar ── */
+[data-theme="light"] ::-webkit-scrollbar-track {
+  background: #e4e4e7;
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #bebec3;
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: #a4a4a9;
+}
+
 @theme {
     /* Clean Professional Color Palette */
     --color-background: #161618;
@@ -121,6 +262,7 @@
 ::-webkit-scrollbar-thumb:hover {
     background: #3b3b3e;
 }
+
 
 /* Remove emoji from step indicators */
 .step-emoji {
@@ -314,4 +456,26 @@
 
 .animate-editor-glow {
     animation: editor-glow 3s ease-in-out infinite;
+}
+
+/* ── Inline Steps: pulse-soft for running step logo ──────────── */
+@keyframes pulse-soft {
+    0%, 100% { opacity: 0.4; }
+    50% { opacity: 1; }
+}
+
+.animate-pulse-soft {
+    animation: pulse-soft 1.5s ease-in-out infinite;
+}
+
+/* ── Design Preview: checkerboard background ─────────────── */
+.checkerboard-bg {
+    background-image:
+        linear-gradient(45deg, #1a1a1e 25%, transparent 25%),
+        linear-gradient(-45deg, #1a1a1e 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #1a1a1e 75%),
+        linear-gradient(-45deg, transparent 75%, #1a1a1e 75%);
+    background-size: 20px 20px;
+    background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+    background-color: #141418;
 }

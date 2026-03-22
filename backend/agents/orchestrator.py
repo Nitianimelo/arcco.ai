@@ -72,6 +72,41 @@ async def _exec_with_heartbeat(coro, heartbeat_fn, timeout: float, interval: flo
         yield {"_result": None, "_error": str(exc)}
 
 
+# ── Pre-action Acknowledgement (fallback quando o modelo não gera content) ───
+
+def _build_pre_action_ack(tool_calls: list) -> str | None:
+    """Gera mensagem contextual a partir da primeira tool_call quando o LLM não produz content."""
+    if not tool_calls:
+        return None
+    tc = tool_calls[0]
+    name = tc.get("function", {}).get("name", "")
+    try:
+        args = json.loads(tc["function"].get("arguments", "{}"))
+    except (json.JSONDecodeError, KeyError):
+        args = {}
+    if name == "ask_web_search":
+        q = args.get("query", "")
+        return f"Vou pesquisar sobre {q[:80]}..." if q else "Pesquisando na web..."
+    if name == "ask_browser":
+        url = args.get("url", "")
+        return f"Acessando {url[:60]}..." if url else "Acessando o site..."
+    if name == "execute_python":
+        return "Processando com código..."
+    if name == "ask_design_generator":
+        return "Criando o design..."
+    if name == "ask_text_generator":
+        return "Redigindo o documento..."
+    if name == "deep_research":
+        q = args.get("query", "")
+        return f"Iniciando pesquisa aprofundada sobre {q[:60]}..." if q else "Iniciando pesquisa aprofundada..."
+    if name == "ask_file_modifier":
+        return "Modificando o arquivo..."
+    if name == "read_session_file":
+        fn = args.get("file_name", "")
+        return f"Consultando o arquivo {fn[:40]}..." if fn else "Consultando o arquivo anexado..."
+    return None
+
+
 # ── Mapa de Ferramentas do Supervisor ────────────────────────────────────────
 
 TOOL_MAP = {
@@ -445,6 +480,8 @@ async def orchestrate_and_stream(
     messages: list,
     model: str,
     session_id: str | None = None,
+    execution_id: str | None = None,
+    execution_logger = None,
 ) -> AsyncGenerator[str, None]:
     """
     Pipeline ReAct (Supervisor-Worker) + Roteamento Dinâmico.
@@ -465,23 +502,106 @@ async def orchestrate_and_stream(
 
     planner_model = registry.get_model("planner") or supervisor_model
 
-    yield sse("steps", "<step>A estruturar plano de execução...</step>")
+    # ── Step inicial contextual — responde imediatamente ao usuário ──
+    _short_intent = user_intent[:80].rstrip("., !?")
+    yield sse("steps", f"<step>Entendendo o pedido: {_short_intent}...</step>")
+
+    if execution_logger:
+        await execution_logger.log_event(
+            execution_id,
+            event_type="execution_started",
+            message="Orquestração iniciada",
+            raw_payload={"session_id": session_id, "model": model},
+        )
 
     # ── 1. Planejamento (Planner Output Estruturado — modelo leve) ──
-    yield sse("thought", "Analisando a complexidade do pedido e decidindo a sequência de ações...")
+    yield sse("steps", "<step>Definindo estratégia de execução...</step>")
+    planner_agent_id = None
+    if execution_logger:
+        planner_agent_id = await execution_logger.start_agent(
+            execution_id,
+            agent_key="planner",
+            agent_name="Planejador de Execução",
+            model=planner_model,
+            role="planner",
+            route="generate_plan",
+            input_payload={"user_intent": user_intent},
+        )
     plan_output = await generate_plan(user_intent, planner_model)
+    if execution_logger:
+        await execution_logger.log_event(
+            execution_id,
+            execution_agent_id=planner_agent_id,
+            event_type="planner_result",
+            message=f"Plano gerado com {len(plan_output.steps)} passo(s)",
+            raw_payload={
+                "is_complex": plan_output.is_complex,
+                "steps": [step.model_dump() for step in plan_output.steps],
+            },
+        )
+        await execution_logger.finish_agent(
+            planner_agent_id,
+            status="completed",
+            output_payload={
+                "is_complex": plan_output.is_complex,
+                "step_count": len(plan_output.steps),
+            },
+        )
     
+    # ── Acknowledgment rápido (sempre, se disponível) ──
+    if plan_output.acknowledgment:
+        yield sse("chunk", plan_output.acknowledgment)
+
+    # ── Clarificação (se necessária, pausa o pipeline) ──
+    if plan_output.needs_clarification and plan_output.questions:
+        questions_payload = [q.model_dump() for q in plan_output.questions]
+        yield sse("clarification", json.dumps(questions_payload))
+
+        if execution_logger:
+            await execution_logger.log_event(
+                execution_id,
+                event_type="clarification_requested",
+                message=f"Aguardando clarificação do usuário ({len(plan_output.questions)} perguntas)",
+                raw_payload={"questions": questions_payload, "acknowledgment": plan_output.acknowledgment},
+            )
+            await execution_logger.finish_execution(execution_id, status="awaiting_clarification")
+        return
+
     if plan_output.is_complex and plan_output.steps:
         yield sse("steps", f"<step>Plano gerado: {len(plan_output.steps)} passos identificados.</step>")
-        
+
+        # ── Fallback de segurança: garantir que pelo menos o último step é terminal ──
+        has_terminal = any(s.is_terminal for s in plan_output.steps)
+        if not has_terminal:
+            plan_output.steps[-1].is_terminal = True
+            logger.info("[ORCHESTRATOR] Nenhum step marcado como terminal. Forçando último step como terminal.")
+            if execution_logger:
+                await execution_logger.log_event(
+                    execution_id,
+                    level="warning",
+                    event_type="terminal_fallback",
+                    message=f"Planner não marcou nenhum step como terminal. Último step ({plan_output.steps[-1].action}) forçado como terminal.",
+                    raw_payload={"forced_step": plan_output.steps[-1].step, "forced_action": plan_output.steps[-1].action},
+                )
+
         # O contexto acumulado que será passado de um agente para outro
         accumulated_context = ""
         final_answer = ""
-        
+
         # ── 2. Iteração do Plano ──
         for step in plan_output.steps:
             yield sse("steps", f"<step>Passo {step.step}/{len(plan_output.steps)}: {step.detail[:50]}...</step>")
             yield sse("thought", f"Iniciando ação '{step.action}': {step.detail}")
+            if execution_logger:
+                await execution_logger.log_event(
+                    execution_id,
+                    event_type="planner_step_started",
+                    message=step.detail,
+                    raw_payload={
+                        **step.model_dump(),
+                        "accumulated_context_chars": len(accumulated_context),
+                    },
+                )
             
             # Constrói temporariamente as mensagens injetando o contexto do passo anterior
             step_messages = [{"role": "system", "content": supervisor_prompt}]
@@ -516,21 +636,58 @@ async def orchestrate_and_stream(
             )
 
             try:
+                supervisor_agent_id = None
+                if execution_logger:
+                    supervisor_agent_id = await execution_logger.start_agent(
+                        execution_id,
+                        agent_key="chat",
+                        agent_name="Arcco Supervisor Especialista",
+                        model=supervisor_model,
+                        role="supervisor",
+                        route=step.action,
+                        input_payload={"step_detail": step.detail, "forced_tool_name": _forced_tool_name},
+                    )
                 message = await _call_supervisor_for_step(
                     step_messages=step_messages,
                     supervisor_model=supervisor_model,
                     tool_choice=_tool_choice,
                     forced_tool_name=_forced_tool_name,
                 )
+                if execution_logger:
+                    await execution_logger.log_event(
+                        execution_id,
+                        execution_agent_id=supervisor_agent_id,
+                        event_type="supervisor_message",
+                        message=(message.get("content") or "")[:2000],
+                        raw_payload={"tool_calls": message.get("tool_calls", [])},
+                    )
+                    await execution_logger.finish_agent(
+                        supervisor_agent_id,
+                        status="completed",
+                        output_payload={"tool_calls": message.get("tool_calls", [])},
+                    )
             except Exception as e:
                 logger.error(f"[ORCHESTRATOR] Erro no LLM (Passo {step.step}): {e}")
+                if execution_logger:
+                    await execution_logger.log_event(
+                        execution_id,
+                        level="error",
+                        event_type="supervisor_error",
+                        message=str(e),
+                        raw_payload={"step": step.step, "detail": step.detail},
+                    )
                 yield sse("error", f"Erro ao processar o Passo {step.step}: {e}")
                 return
 
             supervisor_reasoning = (message.get("content") or "").strip()
-            if supervisor_reasoning:
-                yield sse("thought", supervisor_reasoning)
-                
+            if message.get("tool_calls"):
+                if supervisor_reasoning:
+                    yield sse("pre_action", supervisor_reasoning)
+                else:
+                    ack = _build_pre_action_ack(message["tool_calls"])
+                    if ack:
+                        yield sse("pre_action", ack)
+
             # Tratamento da resposta do Supervisor / Tool Call
             if message.get("tool_calls"):
                 for tool in message["tool_calls"]:
@@ -547,12 +704,33 @@ async def orchestrate_and_stream(
                     route = TOOL_MAP[func_name]["route"]
                     is_terminal = TOOL_MAP[func_name]["is_terminal"]
                     recent_context = [m for m in step_messages if m.get("role") in ["user", "assistant"]][-5:]
+                    tool_agent_id = None
+                    if execution_logger:
+                        tool_agent_id = await execution_logger.start_agent(
+                            execution_id,
+                            agent_key=route,
+                            agent_name=route,
+                            model=registry.get_model(route) or supervisor_model,
+                            role="specialist" if is_terminal or route == "file_modifier" else "tool",
+                            route=route,
+                            input_payload={"func_name": func_name, "func_args": func_args, "step": step.step},
+                        )
                     
                     # ── try/except protege cada tool para que um erro não mate o pipeline ──
                     try:
 
                         if route == "session_file":
                             specialist_result = await execute_tool("read_session_file", func_args)
+                            if execution_logger:
+                                await execution_logger.log_event(
+                                    execution_id,
+                                    execution_agent_id=tool_agent_id,
+                                    event_type="tool_result",
+                                    message="Leitura de arquivo da sessão concluída",
+                                    tool_name="read_session_file",
+                                    tool_args=func_args,
+                                    tool_result=str(specialist_result)[:2000],
+                                )
                             async for artifact_event in _emit_file_artifacts(specialist_result):
                                 yield artifact_event
                             accumulated_context += f"\n[Passo {step.step} - session_file]: {specialist_result}"
@@ -582,6 +760,16 @@ async def orchestrate_and_stream(
                                     yield event  # heartbeat SSE em tempo real
                             if specialist_result is None:
                                 specialist_result = "Erro: pesquisa web não retornou resultado."
+                            if execution_logger:
+                                await execution_logger.log_event(
+                                    execution_id,
+                                    execution_agent_id=tool_agent_id,
+                                    event_type="tool_result",
+                                    message=f"Pesquisa web concluída: {query[:120]}",
+                                    tool_name="web_search",
+                                    tool_args={"query": query},
+                                    tool_result=str(specialist_result)[:2000],
+                                )
                             async for artifact_event in _emit_file_artifacts(specialist_result):
                                 yield artifact_event
                             accumulated_context += f"\n[Passo {step.step} - web_search]: {specialist_result}"
@@ -597,6 +785,16 @@ async def orchestrate_and_stream(
                                     "[ORCHESTRATOR] Execução Python falhou no passo %s: %s",
                                     step.step,
                                     specialist_result,
+                                )
+                            if execution_logger:
+                                await execution_logger.log_event(
+                                    execution_id,
+                                    execution_agent_id=tool_agent_id,
+                                    event_type="tool_result",
+                                    message="Execução Python concluída",
+                                    tool_name="execute_python",
+                                    tool_args=func_args,
+                                    tool_result=str(specialist_result)[:2000],
                                 )
                             accumulated_context += f"\n[Passo {step.step} - python]: {specialist_result}"
                             yield sse("thought", f"Resultado do código Python: {specialist_result[:120]}...")
@@ -638,6 +836,16 @@ async def orchestrate_and_stream(
                                     yield event  # heartbeat SSE em tempo real
                             if specialist_result is None:
                                 specialist_result = f"Erro: browser não retornou resultado para {url}."
+                            if execution_logger:
+                                await execution_logger.log_event(
+                                    execution_id,
+                                    execution_agent_id=tool_agent_id,
+                                    event_type="tool_result",
+                                    message=f"Browser concluído para {url[:120]}",
+                                    tool_name="ask_browser",
+                                    tool_args=func_args,
+                                    tool_result=str(specialist_result)[:2000],
+                                )
 
                             async for artifact_event in _emit_file_artifacts(specialist_result):
                                 yield artifact_event
@@ -663,19 +871,31 @@ async def orchestrate_and_stream(
                             from backend.agents.deep_research import run_deep_research
                             research_query = func_args.get("query", "")
                             research_result = ""
-                            async for event in run_deep_research(research_query, supervisor_model, accumulated_context):
+                            deep_research_model = registry.get_model("deep_research") or supervisor_model
+                            async for event in run_deep_research(research_query, deep_research_model, accumulated_context):
                                 if event.startswith("RESULT:"):
                                     research_result = event[7:]
                                 else:
                                     yield event
+                            if execution_logger:
+                                await execution_logger.log_event(
+                                    execution_id,
+                                    execution_agent_id=tool_agent_id,
+                                    event_type="tool_result",
+                                    message=f"Pesquisa profunda concluída: {research_query[:120]}",
+                                    tool_name="deep_research",
+                                    tool_args=func_args,
+                                    tool_result=str(research_result)[:2000],
+                                )
                             async for artifact_event in _emit_file_artifacts(research_result):
                                 yield artifact_event
                             accumulated_context += f"\n[Passo {step.step} - deep_research]: {research_result}"
 
                         elif is_terminal:
-                            # Rota Terminal encerra o loop enviando direto à UI
+                            # Ferramentas que PODEM ser terminais (text_generator, design_generator)
+                            # O planner decide via step.is_terminal se este step encerra o pipeline
                             if route == "text_generator":
-                                content = f"Título sugerido: {func_args.get('title_hint', '')}\nContexto Prédio: {accumulated_context}\nInstruções: {func_args.get('instructions', '')}"
+                                content = f"Título sugerido: {func_args.get('title_hint', '')}\nContexto Prévio: {accumulated_context}\nInstruções: {func_args.get('instructions', '')}"
                             elif route == "design_generator":
                                 content = f"Contexto Prévio:\n{accumulated_context}\n\nInstruções: {func_args.get('instructions', '')}"
                             else:
@@ -687,21 +907,79 @@ async def orchestrate_and_stream(
                             route_tools = registry.get_tools(route)
 
                             final_result = await _run_terminal_one_shot(temp_msgs, route_model, route_prompt, route_tools)
+                            if execution_logger:
+                                await execution_logger.log_event(
+                                    execution_id,
+                                    execution_agent_id=tool_agent_id,
+                                    event_type="terminal_result" if step.is_terminal else "intermediate_result",
+                                    message=f"Resultado {'terminal' if step.is_terminal else 'intermediário'} gerado por {route}",
+                                    raw_payload={"preview": final_result[:2000], "is_terminal": step.is_terminal},
+                                )
 
-                            if route == "text_generator":
-                                doc_match = _DOC_TAG_RE.search(final_result)
-                                if doc_match:
-                                    doc_title = doc_match.group(1).strip()
-                                    doc_content = doc_match.group(2).strip()
-                                    yield sse("text_doc", json.dumps({"title": doc_title, "content": doc_content}))
-                                    final_result = _DOC_TAG_RE.sub(doc_content, final_result)
+                            if step.is_terminal:
+                                # ── TERMINAL: envia direto ao frontend e para o pipeline ──
+                                if route == "text_generator":
+                                    doc_match = _DOC_TAG_RE.search(final_result)
+                                    if doc_match:
+                                        doc_title = doc_match.group(1).strip()
+                                        doc_content = doc_match.group(2).strip()
+                                        yield sse("text_doc", json.dumps({"title": doc_title, "content": doc_content}))
+                                        final_result = _DOC_TAG_RE.sub(doc_content, final_result)
 
-                            chunk_size = 40
-                            for i in range(0, len(final_result), chunk_size):
-                                yield sse("chunk", final_result[i:i + chunk_size])
+                                chunk_size = 40
+                                for i in range(0, len(final_result), chunk_size):
+                                    yield sse("chunk", final_result[i:i + chunk_size])
+                                if execution_logger:
+                                    await execution_logger.finish_agent(
+                                        tool_agent_id,
+                                        status="completed",
+                                        output_payload={"preview": final_result[:2000]},
+                                    )
 
-                            # Já enviou pro usuário, termina por aqui
-                            return
+                                # Já enviou pro usuário, termina por aqui
+                                remaining_steps = [s.step for s in plan_output.steps if s.step > step.step]
+                                if execution_logger:
+                                    await execution_logger.log_event(
+                                        execution_id,
+                                        event_type="pipeline_terminated",
+                                        message=f"Pipeline encerrado no step {step.step}/{len(plan_output.steps)} ({route}, terminal).",
+                                        raw_payload={
+                                            "terminal_step": step.step,
+                                            "terminal_route": route,
+                                            "skipped_steps": remaining_steps,
+                                            "accumulated_context_chars": len(accumulated_context),
+                                        },
+                                    )
+                                return
+                            else:
+                                # ── NÃO-TERMINAL: acumula resultado e continua pro próximo step ──
+                                if route == "text_generator":
+                                    doc_match = _DOC_TAG_RE.search(final_result)
+                                    if doc_match:
+                                        yield sse("text_doc", json.dumps({
+                                            "title": doc_match.group(1).strip(),
+                                            "content": doc_match.group(2).strip(),
+                                        }))
+
+                                accumulated_context += f"\n[Passo {step.step} - {route}]: {final_result}"
+                                yield sse("thought", f"Passo {step.step} ({route}) concluído. Resultado acumulado para o próximo passo.")
+                                if execution_logger:
+                                    await execution_logger.finish_agent(
+                                        tool_agent_id,
+                                        status="completed",
+                                        output_payload={"preview": final_result[:2000]},
+                                    )
+                                    await execution_logger.log_event(
+                                        execution_id,
+                                        event_type="context_accumulated",
+                                        message=f"Step {step.step} ({route}) acumulou resultado. Contexto total: {len(accumulated_context)} chars.",
+                                        raw_payload={
+                                            "step": step.step,
+                                            "route": route,
+                                            "result_chars": len(final_result),
+                                            "accumulated_context_chars": len(accumulated_context),
+                                        },
+                                    )
                         else:
                             # File Modifier (Não-Terminal)
                             file_url = func_args.get("file_url")
@@ -724,6 +1002,14 @@ async def orchestrate_and_stream(
                                     specialist_result = event[7:]
                                 else:
                                     yield event
+                            if execution_logger:
+                                await execution_logger.log_event(
+                                    execution_id,
+                                    execution_agent_id=tool_agent_id,
+                                    event_type="specialist_result",
+                                    message=f"Especialista {route} concluído",
+                                    raw_payload={"preview": specialist_result[:2000]},
+                                )
                             async for artifact_event in _emit_file_artifacts(specialist_result):
                                 yield artifact_event
 
@@ -735,6 +1021,21 @@ async def orchestrate_and_stream(
                                     specialist_result = f"Arquivo gerado.\n\n{links_only}"
 
                             accumulated_context += f"\n[Passo {step.step} - file_modifier]: {specialist_result}"
+                            if execution_logger:
+                                await execution_logger.finish_agent(
+                                    tool_agent_id,
+                                    status="completed",
+                                    output_payload={"preview": specialist_result[:2000]},
+                                )
+
+                        if execution_logger and route in {"session_file", "web_search", "python", "browser", "deep_research"}:
+                            success_preview = locals().get("specialist_result") or locals().get("research_result") or ""
+                            await execution_logger.finish_agent(
+                                tool_agent_id,
+                                status="failed" if str(success_preview).startswith("Erro") else "completed",
+                                output_payload={"preview": str(success_preview)[:2000]},
+                                error_text=str(success_preview)[:2000] if str(success_preview).startswith("Erro") else None,
+                            )
 
                     except Exception as tool_exc:
                         # Captura qualquer erro (ImportError, timeout, etc.) sem matar o pipeline
@@ -742,6 +1043,21 @@ async def orchestrate_and_stream(
                         error_msg = f"Ferramenta '{func_name}' falhou: {tool_exc}"
                         accumulated_context += f"\n[Passo {step.step} - ERRO {route}]: {error_msg}"
                         yield sse("thought", f"Erro no passo {step.step}: {error_msg}")
+                        if execution_logger:
+                            await execution_logger.log_event(
+                                execution_id,
+                                execution_agent_id=tool_agent_id,
+                                level="error",
+                                event_type="tool_error",
+                                message=error_msg,
+                                tool_name=func_name,
+                                tool_args=func_args,
+                            )
+                            await execution_logger.finish_agent(
+                                tool_agent_id,
+                                status="failed",
+                                error_text=error_msg,
+                            )
 
             else:
                 # O LLM decidiu não usar TOOL, apenas gerou texto
@@ -761,6 +1077,18 @@ async def orchestrate_and_stream(
                         f"\n[Passo {step.step} - ERRO {_forced_tool_name}]: "
                         f"Tool call obrigatório não emitido. Resposta do modelo: {fallback_content}"
                     )
+                    if execution_logger:
+                        await execution_logger.log_event(
+                            execution_id,
+                            level="error",
+                            event_type="step_skipped",
+                            message=f"Step {step.step} ignorado: supervisor não chamou '{_forced_tool_name}'. Respondeu em texto.",
+                            raw_payload={
+                                "step": step.step,
+                                "expected_tool": _forced_tool_name,
+                                "supervisor_response": fallback_content[:500],
+                            },
+                        )
                 else:
                     accumulated_context += f"\n[Passo {step.step} - raciocínio]: {fallback_content}"
                 
@@ -782,8 +1110,21 @@ async def orchestrate_and_stream(
         try:
             async for event in _stream_assistant_text(final_prompt, supervisor_model):
                 yield event
+            if execution_logger:
+                await execution_logger.log_event(
+                    execution_id,
+                    event_type="final_response_generated",
+                    message="Resposta final consolidada enviada ao usuário",
+                )
         except Exception as exc:
             logger.error("[ORCHESTRATOR] Erro no streaming final consolidado: %s", exc)
+            if execution_logger:
+                await execution_logger.log_event(
+                    execution_id,
+                    level="error",
+                    event_type="final_response_error",
+                    message=str(exc),
+                )
             yield sse("error", f"Falha ao consolidar a resposta final: {exc}")
             fallback_text = accumulated_context or "Desculpe, não consegui consolidar a resposta final."
             yield sse("chunk", fallback_text)
@@ -792,6 +1133,12 @@ async def orchestrate_and_stream(
 
     # ── 3. Fallback / Sem Planejamento Complexo (Execução Normal ReAct) ──
     yield sse("thought", "Pedido direto. Respondendo ou acionando a ferramenta aplicável.")
+    if execution_logger:
+        await execution_logger.log_event(
+            execution_id,
+            event_type="direct_mode_started",
+            message="Fluxo ReAct sem plano complexo iniciado",
+        )
     current_messages = [{"role": "system", "content": supervisor_prompt}]
     if session_inventory_message:
         current_messages.append({"role": "system", "content": session_inventory_message})
@@ -822,10 +1169,16 @@ async def orchestrate_and_stream(
 
         current_messages.append(message)
 
-        # Emite raciocínio do Supervisor quando ele pensa antes de chamar uma ferramenta
+        # Pre-action Acknowledgement — texto do modelo ou fallback contextual
+        # Emitido como "pre_action" para o frontend exibir no bubble do assistente
         supervisor_reasoning = (message.get("content") or "").strip()
-        if supervisor_reasoning and message.get("tool_calls"):
-            yield sse("thought", supervisor_reasoning)
+        if message.get("tool_calls"):
+            if supervisor_reasoning:
+                yield sse("pre_action", supervisor_reasoning)
+            else:
+                ack = _build_pre_action_ack(message["tool_calls"])
+                if ack:
+                    yield sse("pre_action", ack)
 
         # ── O Supervisor decidiu usar uma Ferramenta? ────────────────────
         if message.get("tool_calls"):
@@ -853,6 +1206,17 @@ async def orchestrate_and_stream(
 
                 route = TOOL_MAP[func_name]["route"]
                 is_terminal = TOOL_MAP[func_name]["is_terminal"]
+                react_agent_id = None
+                if execution_logger:
+                    react_agent_id = await execution_logger.start_agent(
+                        execution_id,
+                        agent_key=route,
+                        agent_name=route,
+                        model=registry.get_model(route) or model,
+                        role="specialist" if is_terminal or route == "file_modifier" else "tool",
+                        route=route,
+                        input_payload={"func_name": func_name, "func_args": func_args, "iteration": iteration},
+                    )
 
                 # Contexto recente para sub-agentes
                 recent_context = [m for m in messages if m.get("role") in ["user", "assistant"]][-5:]
@@ -862,6 +1226,16 @@ async def orchestrate_and_stream(
                     file_name = func_args.get("file_name", "")
                     yield sse("steps", f"<step>Consultando anexo da sessão: {file_name[:60]}...</step>")
                     specialist_result = await execute_tool("read_session_file", func_args)
+                    if execution_logger:
+                        await execution_logger.log_event(
+                            execution_id,
+                            execution_agent_id=react_agent_id,
+                            event_type="tool_result",
+                            message="Leitura de anexo concluída",
+                            tool_name="read_session_file",
+                            tool_args=func_args,
+                            tool_result=str(specialist_result)[:2000],
+                        )
                     async for artifact_event in _emit_file_artifacts(specialist_result):
                         yield artifact_event
                     current_messages.append({
@@ -895,6 +1269,16 @@ async def orchestrate_and_stream(
                             yield event  # heartbeat SSE em tempo real
                     if specialist_result is None:
                         specialist_result = "Erro: pesquisa web não retornou resultado."
+                    if execution_logger:
+                        await execution_logger.log_event(
+                            execution_id,
+                            execution_agent_id=react_agent_id,
+                            event_type="tool_result",
+                            message=f"Pesquisa web concluída: {query[:120]}",
+                            tool_name="web_search",
+                            tool_args=func_args,
+                            tool_result=str(specialist_result)[:2000],
+                        )
 
                     if fetch_url and not specialist_result.startswith("Erro"):
                         yield sse("steps", f"<step>Lendo página {fetch_url[:50]}...</step>")
@@ -917,6 +1301,12 @@ async def orchestrate_and_stream(
                         "tool_call_id": tool["id"],
                         "content": specialist_result,
                     })
+                    if execution_logger:
+                        await execution_logger.finish_agent(
+                            react_agent_id,
+                            status="completed",
+                            output_payload={"preview": specialist_result[:2000]},
+                        )
                     # Força o supervisor a sintetizar e responder agora —
                     # evita que o LLM fique em loop chamando mais buscas.
                     current_messages.append({
@@ -939,12 +1329,29 @@ async def orchestrate_and_stream(
                         specialist_result = f"Erro ao executar Python: {exc}"
                     async for artifact_event in _emit_file_artifacts(specialist_result):
                         yield artifact_event
+                    if execution_logger:
+                        await execution_logger.log_event(
+                            execution_id,
+                            execution_agent_id=react_agent_id,
+                            event_type="tool_result",
+                            message="Execução Python concluída",
+                            tool_name="execute_python",
+                            tool_args=func_args,
+                            tool_result=str(specialist_result)[:2000],
+                        )
                     current_messages.append({
                         "role": "tool",
                         "tool_call_id": tool["id"],
                         "content": specialist_result,
                     })
                     yield sse("steps", "<step>Código executado — integrando resultado...</step>")
+                    if execution_logger:
+                        await execution_logger.finish_agent(
+                            react_agent_id,
+                            status="completed" if not specialist_result.startswith("Erro") else "failed",
+                            output_payload={"preview": specialist_result[:2000]},
+                            error_text=specialist_result if specialist_result.startswith("Erro") else None,
+                        )
 
                 # ── ROTA: Browser (direto, sem sub-agente, sem QA) ──
                 elif route == "browser":
@@ -984,6 +1391,16 @@ async def orchestrate_and_stream(
                             yield event  # heartbeat SSE em tempo real
                     if specialist_result is None:
                         specialist_result = f"Erro: browser não retornou resultado para {url}."
+                    if execution_logger:
+                        await execution_logger.log_event(
+                            execution_id,
+                            execution_agent_id=react_agent_id,
+                            event_type="tool_result",
+                            message=f"Browser concluído para {url[:120]}",
+                            tool_name="ask_browser",
+                            tool_args=func_args,
+                            tool_result=str(specialist_result)[:2000],
+                        )
                     async for artifact_event in _emit_file_artifacts(specialist_result):
                         yield artifact_event
 
@@ -1021,6 +1438,13 @@ async def orchestrate_and_stream(
                         })
 
                     yield sse("steps", "<step>Conteúdo extraído — analisando dados...</step>")
+                    if execution_logger:
+                        await execution_logger.finish_agent(
+                            react_agent_id,
+                            status="completed" if not specialist_result.startswith("Erro") else "failed",
+                            output_payload={"preview": specialist_result[:2000]},
+                            error_text=specialist_result if specialist_result.startswith("Erro") else None,
+                        )
 
                 # ── ROTA: Pesquisa Profunda (multi-step, paralelo) ──
                 elif route == "deep_research":
@@ -1031,7 +1455,8 @@ async def orchestrate_and_stream(
                     yield sse("steps", f"<step>Iniciando pesquisa profunda: {research_query[:60]}...</step>")
 
                     research_result = ""
-                    async for event in run_deep_research(research_query, supervisor_model, research_context):
+                    deep_research_model = registry.get_model("deep_research") or supervisor_model
+                    async for event in run_deep_research(research_query, deep_research_model, research_context):
                         if event.startswith("RESULT:"):
                             research_result = event[7:]
                         else:
@@ -1047,6 +1472,21 @@ async def orchestrate_and_stream(
                         "tool_call_id": tool["id"],
                         "content": research_result,
                     })
+                    if execution_logger:
+                        await execution_logger.log_event(
+                            execution_id,
+                            execution_agent_id=react_agent_id,
+                            event_type="tool_result",
+                            message=f"Pesquisa profunda concluída: {research_query[:120]}",
+                            tool_name="deep_research",
+                            tool_args=func_args,
+                            tool_result=str(research_result)[:2000],
+                        )
+                        await execution_logger.finish_agent(
+                            react_agent_id,
+                            status="completed",
+                            output_payload={"preview": research_result[:2000]},
+                        )
                     yield sse("steps", "<step>Pesquisa profunda concluída — preparando resposta...</step>")
 
                 # ── ROTA: Terminal (text_generator, design_generator) ──
@@ -1062,7 +1502,10 @@ async def orchestrate_and_stream(
                         step_message = "Construindo design editável e preparando preview..."
                         content = (
                             f"Título sugerido: {func_args.get('title_hint', '')}\n"
-                            f"Instruções: {func_args.get('instructions', '')}\n"
+                            "Instruções: Gere por padrão uma peça quadrada 1:1, alinhada, centralizada, "
+                            "contida em um único canvas e pronta para preview/exportação. "
+                            "Só fuja do formato quadrado se o usuário pedir explicitamente outro formato. "
+                            f"{func_args.get('instructions', '')}\n"
                             f"Contexto: {func_args.get('content_brief', '')}\n"
                             f"Direção visual: {func_args.get('design_direction', '')}"
                         )
@@ -1080,6 +1523,14 @@ async def orchestrate_and_stream(
                     final_result = await _run_terminal_one_shot(
                         temp_msgs, route_model, route_prompt, route_tools
                     )
+                    if execution_logger:
+                        await execution_logger.log_event(
+                            execution_id,
+                            execution_agent_id=react_agent_id,
+                            event_type="terminal_result",
+                            message=f"Resultado terminal gerado por {route}",
+                            raw_payload={"preview": final_result[:2000]},
+                        )
 
                     if route == "text_generator":
                         doc_match = _DOC_TAG_RE.search(final_result)
@@ -1092,6 +1543,12 @@ async def orchestrate_and_stream(
                     chunk_size = 40
                     for i in range(0, len(final_result), chunk_size):
                         yield sse("chunk", final_result[i:i + chunk_size])
+                    if execution_logger:
+                        await execution_logger.finish_agent(
+                            react_agent_id,
+                            status="completed",
+                            output_payload={"preview": final_result[:2000]},
+                        )
 
                     # Proteção do frontend: encerra o loop do Supervisor
                     return
@@ -1144,6 +1601,19 @@ async def orchestrate_and_stream(
                         "tool_call_id": tool["id"],
                         "content": specialist_result,
                     })
+                    if execution_logger:
+                        await execution_logger.log_event(
+                            execution_id,
+                            execution_agent_id=react_agent_id,
+                            event_type="specialist_result",
+                            message=f"Especialista {route} concluído",
+                            raw_payload={"preview": specialist_result[:2000]},
+                        )
+                        await execution_logger.finish_agent(
+                            react_agent_id,
+                            status="completed",
+                            output_payload={"preview": specialist_result[:2000]},
+                        )
 
                     yield sse("steps", "<step>Integrando resultado do especialista...</step>")
 

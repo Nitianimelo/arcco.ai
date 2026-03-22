@@ -28,6 +28,18 @@ interface AdminApiKeysTabProps {
   onToggleKeyVisibility: (id: number) => void;
 }
 
+const SUGGESTED_PROVIDERS = [
+  'browserbase',
+  'browserbase_project_id',
+  'openrouter',
+  'anthropic',
+  'openai',
+  'tavily',
+  'firecrawl',
+  'e2b',
+  'e2b_api_key',
+];
+
 export const AdminApiKeysTab: React.FC<AdminApiKeysTabProps> = ({
   apiKeys,
   visibleKeys,
@@ -64,17 +76,18 @@ export const AdminApiKeysTab: React.FC<AdminApiKeysTabProps> = ({
           <div className="flex items-end gap-3">
             <div className="flex-shrink-0">
               <label className="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">Provider</label>
-              <select
+              <input
+                list="apikey-provider-suggestions"
                 value={newKeyProvider}
                 onChange={(e) => onNewKeyProviderChange(e.target.value)}
+                placeholder="ex: e2b"
                 className="bg-[#1a1a1a] border border-neutral-800 text-white text-sm rounded-lg px-3 py-2 outline-none focus:border-indigo-500/50"
-              >
-                <option value="browserbase">ðŸŒ Browserbase (API Key)</option>
-                <option value="browserbase_project_id">ðŸ—‚ï¸ Browserbase (Project ID)</option>
-                <option value="openrouter">ðŸ”€ OpenRouter</option>
-                <option value="anthropic">ðŸ¤– Anthropic</option>
-                <option value="openai">🟢 OpenAI</option>
-              </select>
+              />
+              <datalist id="apikey-provider-suggestions">
+                {SUGGESTED_PROVIDERS.map((provider) => (
+                  <option key={provider} value={provider} />
+                ))}
+              </datalist>
             </div>
             <div className="flex-1">
               <label className="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">API Key</label>

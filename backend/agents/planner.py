@@ -18,10 +18,31 @@ class PlanStep(BaseModel):
     step: int = Field(description="Step number (1-indexed)")
     action: str = Field(description="Action type: 'web_search', 'python', 'browser', 'file_modifier', 'text_generator', 'design_generator', 'deep_research', or 'direct_answer'")
     detail: str = Field(description="A detailed description of what this step needs to accomplish.")
+    is_terminal: bool = Field(
+        default=False,
+        description="True ONLY for the LAST step that produces the final deliverable for the user. When True, the result is sent directly to the frontend and the pipeline stops. All preceding steps MUST be False."
+    )
+
+class ClarificationQuestion(BaseModel):
+    type: str = Field(description="'choice' for multiple-choice options or 'open' for free text input")
+    text: str = Field(description="The question to ask the user")
+    options: List[str] = Field(default_factory=list, description="Options for 'choice' type. Empty for 'open' type.")
 
 class PlannerOutput(BaseModel):
     is_complex: bool = Field(description="True if the request requires multiple steps or tools; False if it can be answered directly.")
     steps: List[PlanStep] = Field(description="List of steps to execute. If is_complex is False, this can be empty or have a single 'direct_answer' step.")
+    acknowledgment: str = Field(
+        default="",
+        description="Short natural phrase confirming what the agent will do. Always fill this. Ex: 'Ok, vou pesquisar barbearias na Maraponga, Fortaleza.'"
+    )
+    needs_clarification: bool = Field(
+        default=False,
+        description="True if the request is ambiguous and needs user clarification before executing. False for clear/specific requests."
+    )
+    questions: List[ClarificationQuestion] = Field(
+        default_factory=list,
+        description="Clarification questions for the user. Max 3. Only when needs_clarification is true."
+    )
 
 async def generate_plan(user_intent: str, model: str) -> PlannerOutput:
     """

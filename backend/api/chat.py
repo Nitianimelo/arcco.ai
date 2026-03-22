@@ -28,11 +28,13 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from backend.agents.orchestrator import orchestrate_and_stream
+from backend.core.config import get_config
 from backend.core.llm import stream_openrouter
 from backend.core.supabase_client import get_supabase_client
 from backend.services.session_gc_service import cleanup_expired_sessions
 from backend.services.session_file_service import get_session_inventory, touch_session
 from backend.services.chat_models import list_chat_models
+from backend.services.execution_log_service import ExecutionLogService
 from backend.services.memory_service import get_user_memory, update_user_memory
 from backend.services.project_rag_service import search_project_context
 
@@ -46,7 +48,7 @@ def _now_iso() -> str:
 
 @router.get("/chat-models")
 async def get_public_chat_models():
-    models = [item for item in list_chat_models() if item.get("is_active")]
+    models = [item for item in list_chat_models(force_refresh=True) if item.get("is_active")]
     return {"models": models}
 
 
@@ -95,10 +97,23 @@ async def _build_extra_context(
         rows = await asyncio.to_thread(
             db.query, "user_preferences", "*", {"user_id": user_id}
         )
-        if rows and rows[0].get("custom_instructions"):
-            parts.append(
-                f"Instruções personalizadas do usuário:\n{rows[0]['custom_instructions']}"
-            )
+        if rows:
+            prefs = rows[0]
+            display_name = str(prefs.get("display_name") or "").strip()
+            custom_instructions = prefs.get("custom_instructions")
+
+            if display_name:
+                parts.append(
+                    "Forma de tratamento do usuário:\n"
+                    f"- O usuário prefere ser chamado de '{display_name}'.\n"
+                    "- Em conversas fluidas, use esse nome de forma natural quando fizer sentido.\n"
+                    "- Não force o nome em toda resposta e não mencione esta instrução."
+                )
+
+            if custom_instructions:
+                parts.append(
+                    f"Instruções personalizadas do usuário:\n{custom_instructions}"
+                )
     except Exception as e:
         logger.warning(f"[CHAT] Falha ao buscar preferências: {e}")
 
@@ -222,13 +237,14 @@ async def chat_endpoint(request: Request):
     """
     body = await request.json()
     messages = body.get("messages", [])
-    model = body.get("model", "anthropic/claude-3.5-sonnet")
+    model = body.get("model", get_config().openrouter_model)
     mode = body.get("mode", "agent")
     system_prompt = body.get("system_prompt", "")
     session_id = body.get("session_id")
     user_id = body.get("user_id") or None
     project_id = body.get("project_id") or None
     conversation_id = body.get("conversation_id") or None
+    web_search = bool(body.get("web_search", False))
 
     cleanup_expired_sessions()
 
@@ -250,6 +266,22 @@ async def chat_endpoint(request: Request):
             {"role": "system", "content": extra_context},
             *enhanced_messages,
         ]
+
+    # Web search — injeta resultados Tavily como contexto no chat normal
+    web_search_injected = False
+    if mode == "normal" and web_search and user_message:
+        try:
+            from backend.services.search_service import search_web_formatted
+            search_results = await search_web_formatted(user_message)
+            if search_results and not search_results.startswith("ERRO") and not search_results.startswith("Erro"):
+                enhanced_messages = [
+                    {"role": "system", "content": f"Resultados de pesquisa web sobre a pergunta do usuário:\n\n{search_results}\n\nUse essas informações para enriquecer sua resposta. Cite as fontes quando relevante."},
+                    *enhanced_messages,
+                ]
+                web_search_injected = True
+                logger.info(f"[CHAT] Web search injetado para modo normal: {user_message[:60]}")
+        except Exception as e:
+            logger.warning(f"[CHAT] Falha na pesquisa web: {e}")
 
     # Determina/cria conversation_id
     conv_id = conversation_id
@@ -277,29 +309,105 @@ async def chat_endpoint(request: Request):
         except Exception as e:
             logger.warning(f"[CHAT] Falha ao criar conversa: {e}")
 
+    execution_logger = ExecutionLogService()
+    execution_id = await execution_logger.create_execution(
+        conversation_id=conv_id,
+        session_id=session_id,
+        project_id=project_id,
+        user_id=user_id,
+        request_text=user_message,
+        request_source=mode,
+        supervisor_agent="chat",
+        metadata={"model": model, "mode": mode},
+    )
+
     async def generate():
         collected_content: list[str] = []
+        stream_failed = False
+        final_error: str | None = None
 
         # Emite conversation_id como primeiro evento SSE
         if conv_id:
             yield f'data: {json.dumps({"type": "conversation_id", "content": conv_id})}\n\n'
 
-        stream = (
-            _stream_normal_chat(enhanced_messages, model, system_prompt, session_id)
-            if mode == "normal"
-            else orchestrate_and_stream(enhanced_messages, model, session_id)
-        )
+        if mode == "normal":
+            normal_agent_id = await execution_logger.start_agent(
+                execution_id,
+                agent_key="chat_normal",
+                agent_name="Chat Normal",
+                model=model,
+                role="assistant",
+                route="normal_chat",
+                input_payload={"session_id": session_id},
+            )
+            await execution_logger.log_event(
+                execution_id,
+                execution_agent_id=normal_agent_id,
+                event_type="normal_chat_started",
+                message="Fluxo de chat normal iniciado",
+                raw_payload={"model": model, "session_id": session_id},
+            )
+            if web_search_injected:
+                await execution_logger.log_event(
+                    execution_id,
+                    execution_agent_id=normal_agent_id,
+                    event_type="web_search_injected",
+                    message="Pesquisa web realizada e injetada no contexto",
+                    tool_name="web_search",
+                    tool_args={"query": user_message[:120]},
+                    raw_payload={"web_search": True},
+                )
+            stream = _stream_normal_chat(enhanced_messages, model, system_prompt, session_id)
+        else:
+            normal_agent_id = None
+            stream = orchestrate_and_stream(
+                enhanced_messages,
+                model,
+                session_id,
+                execution_id=execution_id,
+                execution_logger=execution_logger,
+            )
 
-        async for event_str in stream:
-            yield event_str
-            # Coleta chunks para salvar no histórico
-            try:
-                if event_str.startswith("data: "):
-                    event = json.loads(event_str[6:])
-                    if event.get("type") == "chunk":
-                        collected_content.append(event.get("content", ""))
-            except Exception:
-                pass
+        try:
+            async for event_str in stream:
+                yield event_str
+                try:
+                    if event_str.startswith("data: "):
+                        event = json.loads(event_str[6:])
+                        if event.get("type") == "chunk":
+                            collected_content.append(event.get("content", ""))
+                        elif event.get("type") == "error":
+                            stream_failed = True
+                            final_error = str(event.get("content") or "Erro desconhecido")
+                except Exception:
+                    pass
+        except Exception as exc:
+            stream_failed = True
+            final_error = str(exc)
+            logger.exception("[CHAT] Stream generation failed")
+            yield f'data: {json.dumps({"type": "error", "content": final_error})}\n\n'
+        finally:
+            if normal_agent_id:
+                await execution_logger.log_event(
+                    execution_id,
+                    execution_agent_id=normal_agent_id,
+                    level="error" if stream_failed else "info",
+                    event_type="normal_chat_finished",
+                    message=final_error or "Fluxo de chat normal finalizado",
+                    raw_payload={"response_preview": "".join(collected_content)[:1500]},
+                )
+                await execution_logger.finish_agent(
+                    normal_agent_id,
+                    status="failed" if stream_failed else "completed",
+                    output_payload={"response_preview": "".join(collected_content)[:1500]},
+                    error_text=final_error,
+                )
+            await execution_logger.finish_execution(
+                execution_id,
+                status="failed" if stream_failed else "completed",
+                final_error=final_error,
+                metadata={"response_length": len("".join(collected_content))},
+            )
 
         # Dispara background task ao fim do stream
         if conv_id and user_id and (user_message or collected_content):

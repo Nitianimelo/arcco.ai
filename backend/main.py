@@ -102,6 +102,7 @@ async def health():
 async def startup():
     print("[ARCCO] ========== BUILD_VERSION=2.1.0-debug ==========")
     print(f"[ARCCO] openrouter_api_key loaded: {bool(config.openrouter_api_key)}")
+    print(f"[ARCCO] e2b_api_key loaded: {bool(config.e2b_api_key)}")
     print(f"[ARCCO] supabase_url: {config.supabase_url[:40] if config.supabase_url else 'EMPTY'}")
     logger.info("Arcco AI Backend starting...")
 

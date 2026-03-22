@@ -76,6 +76,7 @@ interface ApiKeyRow {
 }
 
 type Tab = 'usuarios' | 'apikeys' | 'orquestracao' | 'chat_normal';
+type ExtendedTab = Tab | 'logs';
 
 // ConfiguraÃ§Ã£o de um agente Python (retornada pelo backend)
 interface AgentConfig {
@@ -85,6 +86,10 @@ interface AgentConfig {
   description: string;
   system_prompt: string;
   model: string;        // ID do modelo OpenRouter (ex: "openai/gpt-4o")
+  model_source?: string;
+  runtime_keys?: string[];
+  supports_prompt_edit?: boolean;
+  supports_tools_edit?: boolean;
   tools: any[];         // Ferramentas no formato OpenAI/OpenRouter
 }
 
@@ -121,6 +126,9 @@ const AGENT_ICONS: Record<string, React.ReactNode> = {
   text_generator: <FileText size={15} />,
   design_generator: <Monitor size={15} />,
   file_modifier: <Wrench size={15} />,
+  deep_research: <Database size={15} />,
+  memory: <Database size={15} />,
+  intent_router: <GitBranch size={15} />,
   design: <Cpu size={15} />,
   dev: <Code2 size={15} />,
   qa: <CheckCircle size={15} />,
@@ -264,6 +272,9 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, models, loadingModels, onS
   const [resetting, setResetting] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const supportsPromptEdit = agent.supports_prompt_edit !== false;
+  const supportsToolsEdit = agent.supports_tools_edit !== false;
+  const runtimeKeys = agent.runtime_keys || [agent.id];
 
   const selectedModel = models.find(m => m.id === model);
 
@@ -279,7 +290,7 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, models, loadingModels, onS
     // Valida JSON das tools antes de enviar
     let parsedTools;
     try {
-      parsedTools = JSON.parse(toolsJson);
+      parsedTools = supportsToolsEdit ? JSON.parse(toolsJson) : agent.tools;
       setToolsError('');
     } catch {
       setToolsError('JSON invÃ¡lido â€” corrija antes de salvar');
@@ -288,7 +299,10 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, models, loadingModels, onS
     setSaving(true);
     setSaveError('');
     try {
-      await onSave(agent.id, { name, description, system_prompt: prompt, model, tools: parsedTools });
+      const payload: Partial<AgentConfig> = { name, description, model };
+      if (supportsPromptEdit) payload.system_prompt = prompt;
+      if (supportsToolsEdit) payload.tools = parsedTools;
+      await onSave(agent.id, payload);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e: any) {
@@ -331,15 +345,23 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, models, loadingModels, onS
                 nÃ£o salvo
               </span>
             )}
+            <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
+              agent.model_source === 'supabase'
+                ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20'
+                : 'text-neutral-400 bg-neutral-800 border-neutral-700'
+            }`}>
+              modelo: {agent.model_source === 'supabase' ? 'supabase' : 'local'}
+            </span>
           </div>
           <p className="text-xs text-neutral-500 truncate">{description}</p>
+          <p className="text-[11px] text-neutral-700 mt-1 truncate">Runtime: {runtimeKeys.join(', ')}</p>
         </div>
         {/* Info resumida visÃ­vel sem expandir */}
         <div className="flex items-center gap-3 shrink-0 text-xs text-neutral-600">
           {selectedModel && (
             <span className="hidden lg:block text-green-500/70">{fmtPrice(selectedModel.pricing.prompt_1m)}/1M</span>
           )}
-          <span>{agent.tools.length} tools</span>
+          <span>{supportsToolsEdit ? `${agent.tools.length} tools` : 'modelo apenas'}</span>
           <div className="text-neutral-600">{expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}</div>
         </div>
       </button>
@@ -392,24 +414,40 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, models, loadingModels, onS
           <div>
             <label className="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">
               System Prompt
-              <span className="ml-2 normal-case font-normal text-neutral-700">{prompt.length} chars</span>
+              {supportsPromptEdit ? (
+                <span className="ml-2 normal-case font-normal text-neutral-700">{prompt.length} chars</span>
+              ) : (
+                <span className="ml-2 normal-case font-normal text-neutral-700">nao exposto neste runtime</span>
+              )}
             </label>
-            <textarea
-              value={prompt}
-              onChange={e => setPrompt(e.target.value)}
-              rows={14}
-              className="w-full bg-[#1a1a1a] border border-neutral-800 text-neutral-200 text-xs font-mono rounded-lg px-4 py-3 outline-none focus:border-indigo-500/50 transition-colors resize-y leading-relaxed"
-              spellCheck={false}
-            />
+            {supportsPromptEdit ? (
+              <textarea
+                value={prompt}
+                onChange={e => setPrompt(e.target.value)}
+                rows={14}
+                className="w-full bg-[#1a1a1a] border border-neutral-800 text-neutral-200 text-xs font-mono rounded-lg px-4 py-3 outline-none focus:border-indigo-500/50 transition-colors resize-y leading-relaxed"
+                spellCheck={false}
+              />
+            ) : (
+              <div className="flex items-center gap-2 px-4 py-3 bg-neutral-900/50 border border-neutral-800 rounded-lg text-xs text-neutral-600">
+                <XCircle size={13} /> Este componente usa uma instruÃ§Ã£o interna do backend. Aqui vocÃª configura apenas o modelo.
+              </div>
+            )}
           </div>
 
           {/* Tools â€” JSON raw editÃ¡vel. Agentes sem tools mostram aviso em vez do editor */}
           <div>
             <label className="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">
               Tools (JSON)
-              <span className="ml-2 normal-case font-normal text-neutral-700">{agent.tools.length} definidas</span>
+              <span className="ml-2 normal-case font-normal text-neutral-700">
+                {supportsToolsEdit ? `${agent.tools.length} definidas` : 'nao expostas neste runtime'}
+              </span>
             </label>
-            {agent.tools.length === 0 && toolsJson === '[]' ? (
+            {!supportsToolsEdit ? (
+              <div className="flex items-center gap-2 px-4 py-3 bg-neutral-900/50 border border-neutral-800 rounded-lg text-xs text-neutral-600">
+                <XCircle size={13} /> Este componente nÃ£o usa tools editÃ¡veis no painel.
+              </div>
+            ) : agent.tools.length === 0 && toolsJson === '[]' ? (
               <div className="flex items-center gap-2 px-4 py-3 bg-neutral-900/50 border border-neutral-800 rounded-lg text-xs text-neutral-600">
                 <XCircle size={13} /> Este agente nÃ£o usa ferramentas (design/dev/chat/qa)
               </div>
@@ -438,7 +476,11 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, models, loadingModels, onS
           {saved && (
             <div className="flex items-center gap-2 p-3 bg-green-500/10 border border-green-500/20 rounded-lg text-xs text-green-400">
               <Check size={13} />
-              Salvo em <code className="mx-1 text-green-300">prompts.py</code> / <code className="mx-1 text-green-300">tools.py</code> â€” uvicorn reiniciando automaticamente...
+              {supportsPromptEdit || supportsToolsEdit ? (
+                <>Salvo em <code className="mx-1 text-green-300">prompts.py</code> / <code className="mx-1 text-green-300">tools.py</code> e Supabase â€” runtime sincronizado.</>
+              ) : (
+                <>Modelo salvo no Supabase e reaplicado ao runtime.</>
+              )}
             </div>
           )}
 
@@ -461,7 +503,7 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, models, loadingModels, onS
               {saving ? <Loader2 size={14} className="animate-spin" /> :
                 saved ? <Check size={14} className="text-green-400" /> :
                   <Save size={14} />}
-              {saved ? 'Salvo no .py!' : 'Salvar no cÃ³digo'}
+              {saved ? 'Salvo' : supportsPromptEdit || supportsToolsEdit ? 'Salvar no cÃ³digo' : 'Salvar modelo'}
             </button>
           </div>
         </div>
@@ -475,14 +517,16 @@ interface ChatConfigCardProps {
   models: ORModel[];
   loadingModels: boolean;
   onSave: (config: ChatConfigRow) => Promise<void>;
+  onDelete: (config: ChatConfigRow) => Promise<void>;
 }
 
-const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loadingModels, onSave }) => {
+const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loadingModels, onSave, onDelete }) => {
   const [modelName, setModelName] = useState(config.model_name);
   const [modelId, setModelId] = useState(config.openrouter_model_id);
   const [systemPrompt, setSystemPrompt] = useState(config.system_prompt || '');
   const [isActive, setIsActive] = useState(config.is_active);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [saved, setSaved] = useState(false);
   const selectedModel = models.find(m => m.id === modelId);
 
@@ -519,6 +563,16 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
       setTimeout(() => setSaved(false), 2000);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirm(`Excluir o slot "${modelName || `Modelo ${config.slot_number}`}"?`)) return;
+    setDeleting(true);
+    try {
+      await onDelete(config);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -590,10 +644,18 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
         </div>
       )}
 
-      <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-3">
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-red-500/10 text-red-300 hover:bg-red-500/20 border border-red-500/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+          Excluir slot
+        </button>
         <button
           onClick={handleSave}
-          disabled={saving || !isDirty || !modelId}
+          disabled={saving || deleting || !isDirty || !modelId}
           className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border border-indigo-500/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} className="text-green-400" /> : <Save size={14} />}
@@ -622,6 +684,10 @@ const PROVIDER_ICONS: Record<string, string> = {
   openai: '🟢',
   browserbase: 'ðŸŒ',
   browserbase_project_id: 'ðŸ—‚ï¸',
+  tavily: '🔎',
+  firecrawl: '🔥',
+  e2b: '⚙️',
+  e2b_api_key: '⚙️',
 };
 
 /** Exibe apenas inÃ­cio e fim da chave: "sk-abâ€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢ef12" */
@@ -652,7 +718,7 @@ function formatDateTime(dateStr?: string): string {
 // â”€â”€ Componente principal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export const AdminPage: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<Tab>('usuarios');
+  const [activeTab, setActiveTab] = useState<ExtendedTab>('usuarios');
 
   // Dados do Supabase
   const [users, setUsers] = useState<UserRow[]>([]);
@@ -666,7 +732,7 @@ export const AdminPage: React.FC = () => {
 
   // Form para adicionar nova API Key
   const [showAddKey, setShowAddKey] = useState(false);
-  const [newKeyProvider, setNewKeyProvider] = useState('browserbase');
+  const [newKeyProvider, setNewKeyProvider] = useState('e2b');
   const [newKeyValue, setNewKeyValue] = useState('');
   const [addingKey, setAddingKey] = useState(false);
   const [addKeyError, setAddKeyError] = useState('');
@@ -675,11 +741,19 @@ export const AdminPage: React.FC = () => {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
   const [agentsError, setAgentsError] = useState<string | null>(null);
+  const [reloadingAgentModels, setReloadingAgentModels] = useState(false);
   const [orModels, setOrModels] = useState<ORModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [chatConfigs, setChatConfigs] = useState<ChatConfigRow[]>([]);
   const [chatConfigsLoading, setChatConfigsLoading] = useState(false);
   const [chatConfigsError, setChatConfigsError] = useState<string | null>(null);
+  const [executions, setExecutions] = useState<any[]>([]);
+  const [executionsLoading, setExecutionsLoading] = useState(false);
+  const [executionsError, setExecutionsError] = useState<string | null>(null);
+  const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
+  const [executionDetail, setExecutionDetail] = useState<any | null>(null);
+  const [executionDetailLoading, setExecutionDetailLoading] = useState(false);
+  const [copiedExecutionId, setCopiedExecutionId] = useState<string | null>(null);
 
   // '' = usa Vite proxy (/api/admin/* â†’ localhost:8001). NÃ£o hardcodar localhost aqui.
   const backendUrl = '';
@@ -727,11 +801,38 @@ export const AdminPage: React.FC = () => {
       const res = await fetch(`${backendUrl}/api/admin/agents`);
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
       const data = await res.json();
-      setAgents(data.agents || []);
+      const rows = (data.agents || []) as AgentConfig[];
+      rows.sort((a, b) => {
+        if (a.module !== b.module) return a.module.localeCompare(b.module);
+        return a.name.localeCompare(b.name);
+      });
+      setAgents(rows);
     } catch (err: any) {
       setAgentsError(err.message || 'Erro ao conectar com o backend');
     } finally {
       setAgentsLoading(false);
+    }
+  };
+
+  const reloadAgentModels = async () => {
+    setReloadingAgentModels(true);
+    setAgentsError(null);
+    try {
+      const res = await fetch(`${backendUrl}/api/admin/agents/reload-models`, {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+      const data = await res.json();
+      const rows = (data.agents || []) as AgentConfig[];
+      rows.sort((a, b) => {
+        if (a.module !== b.module) return a.module.localeCompare(b.module);
+        return a.name.localeCompare(b.name);
+      });
+      setAgents(rows);
+    } catch (err: any) {
+      setAgentsError(err.message || 'Erro ao recarregar modelos do Supabase');
+    } finally {
+      setReloadingAgentModels(false);
     }
   };
 
@@ -749,6 +850,100 @@ export const AdminPage: React.FC = () => {
     } finally {
       setChatConfigsLoading(false);
     }
+  };
+
+  const fetchExecutions = async (options?: { silent?: boolean }) => {
+    if (!options?.silent) setExecutionsLoading(true);
+    if (!options?.silent) setExecutionsError(null);
+    try {
+      const res = await fetch(`${backendUrl}/api/admin/executions?limit=100`);
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const rows = data.executions || [];
+      setExecutions(rows);
+      if (rows.length > 0) {
+        const hasSelected = selectedExecutionId && rows.some((row: any) => row.id === selectedExecutionId);
+        if (!hasSelected) {
+          setSelectedExecutionId(rows[0].id);
+        }
+      }
+    } catch (err: any) {
+      setExecutionsError(err.message || 'Erro ao carregar execuções');
+    } finally {
+      if (!options?.silent) setExecutionsLoading(false);
+    }
+  };
+
+  const fetchExecutionDetail = async (executionId: string, options?: { silent?: boolean }) => {
+    if (!options?.silent) setExecutionDetailLoading(true);
+    try {
+      const res = await fetch(`${backendUrl}/api/admin/executions/${executionId}`);
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setExecutionDetail(data);
+    } catch (err: any) {
+      setExecutionsError(err.message || 'Erro ao carregar detalhes da execução');
+      if (!options?.silent) setExecutionDetail(null);
+    } finally {
+      if (!options?.silent) setExecutionDetailLoading(false);
+    }
+  };
+
+  const copyExecutionLogs = async (detail: any) => {
+    const execution = detail?.execution || null;
+    const agents = detail?.agents || [];
+    const logs = detail?.logs || [];
+
+    const condensed = {
+      execution: {
+        id: execution?.id,
+        status: execution?.status,
+        request_text: execution?.request_text,
+        request_source: execution?.request_source,
+        supervisor_agent: execution?.supervisor_agent,
+        started_at: execution?.started_at,
+        finished_at: execution?.finished_at,
+        duration_ms: execution?.duration_ms,
+        final_error: execution?.final_error,
+        metadata: execution?.metadata || {},
+      },
+      summary: {
+        agent_count: agents.length,
+        log_count: logs.length,
+        failed_agents: agents.filter((agent: any) => agent.status === 'failed').length,
+        error_events: logs.filter((log: any) => log.level === 'error').length,
+      },
+      agents: agents.map((agent: any) => ({
+        id: agent.id,
+        agent_key: agent.agent_key,
+        agent_name: agent.agent_name,
+        role: agent.role,
+        route: agent.route,
+        model: agent.model,
+        status: agent.status,
+        duration_ms: agent.duration_ms,
+        error_text: agent.error_text,
+        input_payload: agent.input_payload,
+        output_payload: agent.output_payload,
+        metadata: agent.metadata,
+      })),
+      logs: logs.map((log: any) => ({
+        id: log.id,
+        created_at: log.created_at,
+        level: log.level,
+        event_type: log.event_type,
+        execution_agent_id: log.execution_agent_id,
+        message: log.message,
+        tool_name: log.tool_name,
+        tool_args: log.tool_args,
+        tool_result: log.tool_result,
+        raw_payload: log.raw_payload,
+      })),
+    };
+
+    await navigator.clipboard.writeText(JSON.stringify(condensed, null, 2));
+    setCopiedExecutionId(execution?.id || 'copied');
+    window.setTimeout(() => setCopiedExecutionId((current) => (current === (execution?.id || 'copied') ? null : current)), 2000);
   };
 
   /** Envia alteraÃ§Ãµes de um agente para o backend (PUT /api/admin/agents/{id}) */
@@ -791,6 +986,27 @@ export const AdminPage: React.FC = () => {
     );
   };
 
+  const deleteChatConfig = async (config: ChatConfigRow) => {
+    if (!config.id) {
+      setChatConfigs(prev => prev.filter(item => item.slot_number !== config.slot_number));
+      return;
+    }
+
+    const res = await fetch(`${backendUrl}/api/admin/chat-models/${config.id}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) throw new Error(await res.text());
+
+    setChatConfigs(prev =>
+      prev
+        .filter(item => item.id !== config.id)
+        .map((item, index) => ({ ...item, slot_number: index + 1 }))
+        .sort((a, b) => a.slot_number - b.slot_number)
+    );
+
+    await fetchChatConfigs();
+  };
+
   const createChatConfig = () => {
     setChatConfigs(prev => {
       const nextSlot = prev.length > 0 ? Math.max(...prev.map(item => item.slot_number)) + 1 : 1;
@@ -823,7 +1039,24 @@ export const AdminPage: React.FC = () => {
       if (chatConfigs.length === 0) fetchChatConfigs();
       if (orModels.length === 0) fetchModels();
     }
+    if (activeTab === 'logs') {
+      fetchExecutions();
+    }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'logs' || !selectedExecutionId) return;
+    fetchExecutionDetail(selectedExecutionId);
+  }, [activeTab, selectedExecutionId]);
+
+  useEffect(() => {
+    if (activeTab !== 'logs') return;
+    const id = window.setInterval(() => {
+      fetchExecutions({ silent: true });
+      if (selectedExecutionId) fetchExecutionDetail(selectedExecutionId, { silent: true });
+    }, 5000);
+    return () => window.clearInterval(id);
+  }, [activeTab, selectedExecutionId]);
 
   // â”€â”€ AÃ§Ãµes de usuÃ¡rio â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -876,11 +1109,12 @@ export const AdminPage: React.FC = () => {
 
   // â”€â”€ ConfiguraÃ§Ã£o das tabs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  const tabs: { id: Tab; label: string; icon: React.ReactNode; count: number }[] = [
+  const tabs: { id: ExtendedTab; label: string; icon: React.ReactNode; count: number }[] = [
     { id: 'usuarios', label: 'UsuÃ¡rios', icon: <Users size={16} />, count: users.length },
     { id: 'apikeys', label: 'API Keys', icon: <Key size={16} />, count: apiKeys.length },
     { id: 'orquestracao', label: 'OrquestraÃ§Ã£o', icon: <GitBranch size={16} />, count: agents.length },
     { id: 'chat_normal', label: 'Chat Normal', icon: <Brain size={16} />, count: chatConfigs.filter(c => c.is_active).length },
+    { id: 'logs', label: 'Logs', icon: <Terminal size={16} />, count: executions.length },
   ];
 
   // â”€â”€ RenderizaÃ§Ã£o â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1002,12 +1236,13 @@ export const AdminPage: React.FC = () => {
             onNewKeyProviderChange={setNewKeyProvider}
             onNewKeyValueChange={(value) => { setNewKeyValue(value); setAddKeyError(''); }}
             onSaveKey={async () => {
+              if (!newKeyProvider.trim()) { setAddKeyError('Informe o provider'); return; }
               if (!newKeyValue.trim()) { setAddKeyError('Insira a chave'); return; }
               setAddingKey(true);
               setAddKeyError('');
               try {
                 const { error } = await supabase.from('ApiKeys').insert({
-                  provider: newKeyProvider,
+                  provider: newKeyProvider.trim(),
                   api_key: newKeyValue.trim(),
                   is_active: true,
                 });
@@ -1077,6 +1312,7 @@ export const AdminPage: React.FC = () => {
                     models={orModels}
                     loadingModels={modelsLoading}
                     onSave={saveChatConfig}
+                    onDelete={deleteChatConfig}
                   />
                 ))}
               </div>
@@ -1099,16 +1335,27 @@ export const AdminPage: React.FC = () => {
             <div className="flex items-center justify-between mb-2">
               <div>
                 <h2 className="text-sm font-semibold text-white">Agentes do Backend Python</h2>
-                <p className="text-xs text-neutral-500 mt-0.5">Edite model, system prompt e tools de cada agente. As alteraÃ§Ãµes entram em vigor imediatamente.</p>
+                <p className="text-xs text-neutral-500 mt-0.5">A lista agora inclui os componentes com LLM realmente ativos no runtime, incluindo orquestraÃ§Ã£o, pesquisa profunda, memÃ³ria e roteamento.</p>
+                <p className="text-[11px] text-neutral-600 mt-1">Modelos ficam no Supabase. Onde o runtime expÃµe prompt e tools, essas ediÃ§Ãµes continuam no backend.</p>
               </div>
-              <button
-                onClick={fetchAgents}
-                disabled={agentsLoading}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-400 text-xs transition-colors border border-neutral-800 disabled:opacity-50"
-              >
-                <RefreshCw size={12} className={agentsLoading ? 'animate-spin' : ''} />
-                Recarregar
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={reloadAgentModels}
+                  disabled={reloadingAgentModels}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 text-xs transition-colors border border-emerald-500/20 disabled:opacity-50"
+                >
+                  <RefreshCw size={12} className={reloadingAgentModels ? 'animate-spin' : ''} />
+                  Recarregar modelos do Supabase
+                </button>
+                <button
+                  onClick={fetchAgents}
+                  disabled={agentsLoading}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-400 text-xs transition-colors border border-neutral-800 disabled:opacity-50"
+                >
+                  <RefreshCw size={12} className={agentsLoading ? 'animate-spin' : ''} />
+                  Recarregar painel
+                </button>
+              </div>
             </div>
 
             {/* Erro de conexÃ£o com o backend */}
@@ -1171,6 +1418,164 @@ export const AdminPage: React.FC = () => {
                 <p className="text-xs mt-1">Verifique se o backend estÃ¡ rodando</p>
               </div>
             )}
+          </div>
+        )}
+
+        {activeTab === 'logs' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <h2 className="text-sm font-semibold text-white">Execuções e Logs</h2>
+                <p className="text-xs text-neutral-500 mt-0.5">Atualização automática a cada 5 segundos. Clique em uma execução para ver todos os agentes e eventos.</p>
+              </div>
+              <button
+                onClick={fetchExecutions}
+                disabled={executionsLoading}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-400 text-xs transition-colors border border-neutral-800 disabled:opacity-50"
+              >
+                <RefreshCw size={12} className={executionsLoading ? 'animate-spin' : ''} />
+                Recarregar
+              </button>
+            </div>
+
+            {executionsError && (
+              <div className="flex items-start gap-3 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
+                <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                <div>{executionsError}</div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 xl:grid-cols-[380px_minmax(0,1fr)] gap-4">
+              <div className="bg-[#0f0f0f] border border-neutral-900 rounded-xl overflow-hidden">
+                <div className="px-4 py-3 border-b border-neutral-900 text-xs text-neutral-500 uppercase tracking-wider">Execuções</div>
+                <div className="max-h-[75vh] overflow-y-auto">
+                  {executionsLoading && executions.length === 0 && (
+                    <div className="px-4 py-6 text-sm text-neutral-500">Carregando execuções...</div>
+                  )}
+                  {!executionsLoading && executions.length === 0 && (
+                    <div className="px-4 py-6 text-sm text-neutral-500">Nenhuma execução encontrada.</div>
+                  )}
+                  {executions.map((execution) => (
+                    <button
+                      key={execution.id}
+                      onClick={() => setSelectedExecutionId(execution.id)}
+                      className={`w-full px-4 py-3 text-left border-b border-neutral-900 hover:bg-white/[0.02] transition-colors ${
+                        selectedExecutionId === execution.id ? 'bg-indigo-500/10' : ''
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3 mb-1">
+                        <span className="text-xs text-white font-medium truncate">{execution.request_text || 'Sem texto'}</span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-full border ${
+                          execution.status === 'completed'
+                            ? 'text-green-400 border-green-500/20 bg-green-500/10'
+                            : execution.status === 'failed'
+                              ? 'text-red-400 border-red-500/20 bg-red-500/10'
+                              : 'text-yellow-400 border-yellow-500/20 bg-yellow-500/10'
+                        }`}>
+                          {execution.status}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-3 text-[10px] text-neutral-500">
+                        <span>{formatDateTime(execution.created_at)}</span>
+                        <span>{execution.agent_count || 0} agentes</span>
+                        <span>{execution.log_count || 0} logs</span>
+                        <span>{execution.duration_ms || 0} ms</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-[#0f0f0f] border border-neutral-900 rounded-xl overflow-hidden min-h-[60vh]">
+                <div className="px-4 py-3 border-b border-neutral-900 text-xs text-neutral-500 uppercase tracking-wider">Detalhes</div>
+                {executionDetailLoading && (
+                  <div className="px-4 py-6 text-sm text-neutral-500">Carregando detalhes...</div>
+                )}
+                {!executionDetailLoading && !executionDetail && (
+                  <div className="px-4 py-6 text-sm text-neutral-500">Selecione uma execução.</div>
+                )}
+                {!executionDetailLoading && executionDetail && (
+                  <div className="p-4 space-y-5 overflow-y-auto max-h-[75vh]">
+                    <div className="bg-[#141414] border border-neutral-900 rounded-xl p-4">
+                      <div className="flex items-center justify-between gap-3 mb-2">
+                        <div className="text-sm font-semibold text-white">Execução principal</div>
+                        <button
+                          onClick={() => copyExecutionLogs(executionDetail)}
+                          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 text-xs transition-colors border border-indigo-500/20"
+                        >
+                          <FileText size={12} />
+                          {copiedExecutionId === executionDetail.execution?.id ? 'Copiado' : 'Copiar logs consolidados'}
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                        <div><span className="text-neutral-500">ID:</span> <span className="text-neutral-200 break-all">{executionDetail.execution?.id}</span></div>
+                        <div><span className="text-neutral-500">Status:</span> <span className="text-neutral-200">{executionDetail.execution?.status}</span></div>
+                        <div><span className="text-neutral-500">Início:</span> <span className="text-neutral-200">{formatDateTime(executionDetail.execution?.started_at)}</span></div>
+                        <div><span className="text-neutral-500">Fim:</span> <span className="text-neutral-200">{formatDateTime(executionDetail.execution?.finished_at)}</span></div>
+                        <div className="md:col-span-2"><span className="text-neutral-500">Pedido:</span> <span className="text-neutral-200">{executionDetail.execution?.request_text}</span></div>
+                        <div><span className="text-neutral-500">Agentes:</span> <span className="text-neutral-200">{executionDetail.agents?.length || 0}</span></div>
+                        <div><span className="text-neutral-500">Eventos:</span> <span className="text-neutral-200">{executionDetail.logs?.length || 0}</span></div>
+                        {executionDetail.execution?.final_error && (
+                          <div className="md:col-span-2 text-red-400"><span className="text-neutral-500">Erro final:</span> {executionDetail.execution.final_error}</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="bg-[#141414] border border-neutral-900 rounded-xl p-4">
+                      <div className="text-sm font-semibold text-white mb-3">Agentes executados</div>
+                      <div className="space-y-3">
+                        {(executionDetail.agents || []).map((agent: any) => (
+                          <div key={agent.id} className="border border-neutral-900 rounded-lg p-3">
+                            <div className="flex items-center justify-between gap-3 mb-2">
+                              <div className="text-xs font-medium text-white">{agent.agent_name} <span className="text-neutral-500">({agent.agent_key})</span></div>
+                              <div className="text-[10px] text-neutral-400">{agent.status}</div>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px] text-neutral-400">
+                              <div>Role: {agent.role || '—'}</div>
+                              <div>Route: {agent.route || '—'}</div>
+                              <div>Modelo: {agent.model || '—'}</div>
+                              <div>Duração: {agent.duration_ms || 0} ms</div>
+                            </div>
+                            {agent.error_text && <div className="mt-2 text-xs text-red-400">{agent.error_text}</div>}
+                            <details className="mt-3">
+                              <summary className="text-xs text-indigo-300 cursor-pointer">Ver payloads</summary>
+                              <pre className="mt-2 text-[10px] text-neutral-300 bg-[#0b0b0b] border border-neutral-900 rounded-lg p-3 overflow-auto">{JSON.stringify({ input: agent.input_payload, output: agent.output_payload }, null, 2)}</pre>
+                            </details>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="bg-[#141414] border border-neutral-900 rounded-xl p-4">
+                      <div className="text-sm font-semibold text-white mb-3">Eventos</div>
+                      <div className="space-y-2">
+                        {(executionDetail.logs || []).map((log: any) => (
+                          <div key={log.id} className="border border-neutral-900 rounded-lg p-3">
+                            <div className="flex items-center justify-between gap-3 mb-1">
+                              <div className="text-xs text-white">{log.event_type}</div>
+                              <div className="text-[10px] text-neutral-500">{formatDateTime(log.created_at)}</div>
+                            </div>
+                            {log.message && <div className="text-xs text-neutral-300 mb-2">{log.message}</div>}
+                            <div className="text-[10px] text-neutral-500">Agent: {log.execution_agent_id || '—'} • Level: {log.level}</div>
+                            {(log.tool_name || log.tool_args || log.tool_result || log.raw_payload) && (
+                              <details className="mt-2">
+                                <summary className="text-[10px] text-indigo-300 cursor-pointer">Ver detalhes do log</summary>
+                                <pre className="mt-2 text-[10px] text-neutral-300 bg-[#0b0b0b] border border-neutral-900 rounded-lg p-3 overflow-auto">{JSON.stringify({
+                                  tool_name: log.tool_name,
+                                  tool_args: log.tool_args,
+                                  tool_result: log.tool_result,
+                                  raw_payload: log.raw_payload,
+                                }, null, 2)}</pre>
+                              </details>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 

@@ -32,6 +32,13 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    trimmed = value.strip()
+    return trimmed or None
+
+
 @router.get("/preferences/{user_id}", response_model=PreferencesResponse)
 async def get_preferences(user_id: str):
     """Retorna as preferências do usuário. Cria registro default se não existir."""
@@ -87,7 +94,7 @@ async def upsert_preferences(user_id: str, body: PreferencesUpsert):
         if body.theme is not None:
             data["theme"] = body.theme
         if body.display_name is not None:
-            data["display_name"] = body.display_name
+            data["display_name"] = _normalize_optional_text(body.display_name)
         if body.custom_instructions is not None:
             data["custom_instructions"] = body.custom_instructions
         if body.logo_url is not None:

@@ -41,6 +41,7 @@ interface SidebarProps {
   onLogout?: () => void;
   onTriggerUpsell: (feature: string) => void;
   onCollapsedChange?: (collapsed: boolean) => void;
+  onDisplayNameChange?: (displayName: string | null) => void;
 }
 
 interface NavButtonProps {
@@ -142,7 +143,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onLoadSession,
   onLogout,
   onTriggerUpsell,
-  onCollapsedChange
+  onCollapsedChange,
+  onDisplayNameChange,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -274,26 +276,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
 
         {!collapsed && (
-          <button
-            onClick={() => setCollapsed(true)}
-            className="p-2 text-neutral-600 hover:text-neutral-300 hover:bg-white/[0.04] rounded-lg transition-colors"
-            title="Recolher menu"
-          >
-            <ChevronsLeft size={18} />
-          </button>
+          <div className="relative group/collapse">
+            <button
+              onClick={() => setCollapsed(true)}
+              className="p-2 text-neutral-600 hover:text-neutral-300 hover:bg-white/[0.04] rounded-lg transition-colors"
+            >
+              <ChevronsLeft size={18} />
+            </button>
+            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/collapse:opacity-100 group-hover/collapse:visible transition-all duration-150 pointer-events-none z-50">
+              Recolher menu
+            </div>
+          </div>
         )}
       </div>
 
       {/* Botão expandir — só aparece quando colapsado */}
       {collapsed && (
         <div className="flex justify-center pb-1 shrink-0">
-          <button
-            onClick={() => setCollapsed(false)}
-            className="p-2 text-neutral-600 hover:text-neutral-300 hover:bg-white/[0.04] rounded-lg transition-colors"
-            title="Expandir menu"
-          >
-            <ChevronsRight size={18} />
-          </button>
+          <div className="relative group/expand">
+            <button
+              onClick={() => setCollapsed(false)}
+              className="p-2 text-neutral-600 hover:text-neutral-300 hover:bg-white/[0.04] rounded-lg transition-colors"
+            >
+              <ChevronsRight size={18} />
+            </button>
+            <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/expand:opacity-100 group-hover/expand:visible transition-all duration-150 pointer-events-none z-50">
+              Expandir menu
+            </div>
+          </div>
         </div>
       )}
 
@@ -361,18 +371,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="px-2 py-2 text-[11px] text-neutral-600">Nenhum projeto</div>
               ) : (
                 projects.map(proj => (
-                  <button
-                    key={proj.id}
-                    onClick={() => onSelectProject?.(selectedProjectId === proj.id ? null : proj.id)}
-                    className={`w-full flex items-center gap-2.5 px-2 py-2 text-sm rounded-lg transition-colors
-                      ${selectedProjectId === proj.id
-                        ? 'text-white bg-indigo-500/10 border border-indigo-500/30'
-                        : 'text-neutral-400 hover:text-white hover:bg-white/[0.03]'
-                      }`}
-                  >
-                    <Folder size={14} className={selectedProjectId === proj.id ? 'text-indigo-400' : 'text-indigo-400/70'} />
-                    <span className="truncate">{proj.name}</span>
-                  </button>
+                  <div key={proj.id} className="relative group/proj">
+                    <button
+                      onClick={() => onSelectProject?.(selectedProjectId === proj.id ? null : proj.id)}
+                      className={`w-full flex items-center gap-2.5 px-2 py-2 text-sm rounded-lg transition-colors
+                        ${selectedProjectId === proj.id
+                          ? 'text-white bg-indigo-500/10 border border-indigo-500/30'
+                          : 'text-neutral-400 hover:text-white hover:bg-white/[0.03]'
+                        }`}
+                    >
+                      <Folder size={14} className={selectedProjectId === proj.id ? 'text-indigo-400' : 'text-indigo-400/70'} />
+                      <span className="truncate">{proj.name}</span>
+                    </button>
+                    <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/proj:opacity-100 group-hover/proj:visible transition-all duration-150 pointer-events-none z-50">
+                      {selectedProjectId === proj.id ? 'Fechar projeto' : `Abrir · ${proj.name}`}
+                    </div>
+                  </div>
                 ))
               )}
             </div>
@@ -416,28 +430,38 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           {toolsOpen && !collapsed && (
             <div className="mt-0.5 ml-3 border-l border-[#313134] pl-3 space-y-0.5">
-              <button
-                onClick={() => onNavigate('TOOLS_MY')}
-                className={`w-full flex items-center gap-2.5 px-2 py-2 text-sm rounded-lg transition-colors
-                  ${currentView === 'TOOLS_MY'
-                    ? 'text-white bg-white/[0.05]'
-                    : 'text-neutral-400 hover:text-white hover:bg-white/[0.03]'
-                  }`}
-              >
-                <Wrench size={15} className="text-neutral-500 flex-shrink-0" />
-                Minhas Tools
-              </button>
-              <button
-                onClick={() => onNavigate('TOOLS_STORE')}
-                className={`w-full flex items-center gap-2.5 px-2 py-2 text-sm rounded-lg transition-colors
-                  ${currentView === 'TOOLS_STORE'
-                    ? 'text-white bg-white/[0.05]'
-                    : 'text-neutral-400 hover:text-white hover:bg-white/[0.03]'
-                  }`}
-              >
-                <Store size={15} className="text-neutral-500 flex-shrink-0" />
-                Loja
-              </button>
+              <div className="relative group/tools-my">
+                <button
+                  onClick={() => onNavigate('TOOLS_MY')}
+                  className={`w-full flex items-center gap-2.5 px-2 py-2 text-sm rounded-lg transition-colors
+                    ${currentView === 'TOOLS_MY'
+                      ? 'text-white bg-white/[0.05]'
+                      : 'text-neutral-400 hover:text-white hover:bg-white/[0.03]'
+                    }`}
+                >
+                  <Wrench size={15} className="text-neutral-500 flex-shrink-0" />
+                  Minhas Tools
+                </button>
+                <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/tools-my:opacity-100 group-hover/tools-my:visible transition-all duration-150 pointer-events-none z-50">
+                  Ferramentas configuradas por você
+                </div>
+              </div>
+              <div className="relative group/tools-store">
+                <button
+                  onClick={() => onNavigate('TOOLS_STORE')}
+                  className={`w-full flex items-center gap-2.5 px-2 py-2 text-sm rounded-lg transition-colors
+                    ${currentView === 'TOOLS_STORE'
+                      ? 'text-white bg-white/[0.05]'
+                      : 'text-neutral-400 hover:text-white hover:bg-white/[0.03]'
+                    }`}
+                >
+                  <Store size={15} className="text-neutral-500 flex-shrink-0" />
+                  Loja
+                </button>
+                <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/tools-store:opacity-100 group-hover/tools-store:visible transition-all duration-150 pointer-events-none z-50">
+                  Explorar e adicionar novas ferramentas
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -529,6 +553,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         userName={userName}
         userPlan={userPlan}
         userId={userId}
+        onDisplayNameChange={onDisplayNameChange}
       />
 
       {/* Modal Criar Projeto (Popup) */}

@@ -244,8 +244,6 @@ async def _generate_excel(args: dict) -> str:
 
 
 async def _execute_python(code: str) -> str:
-    import os
-
     try:
         from e2b_code_interpreter import Sandbox
     except ImportError:
@@ -255,21 +253,44 @@ async def _execute_python(code: str) -> str:
             "Execute: pip install e2b-code-interpreter"
         )
 
-    # Ensure E2B API Key is present
-    e2b_api_key = os.getenv("E2B_API_KEY")
+    from backend.core.config import get_config
+
+    config = get_config()
+
+    # Sempre busca a chave E2B fresca do Supabase (ignora o singleton cacheado no startup).
+    # Isso garante que trocar a chave no Supabase Admin tem efeito imediato, sem restart.
+    def _fetch_e2b_key_from_supabase() -> str | None:
+        try:
+            from backend.core.supabase_client import get_supabase_client
+            db = get_supabase_client()
+            for provider in ("e2b", "e2b_api_key"):
+                rows = db.query("ApiKeys", "api_key", {"provider": provider})
+                if rows and rows[0].get("api_key"):
+                    return rows[0]["api_key"]
+        except Exception as exc:
+            logger.warning("[E2B] Falha ao buscar chave do Supabase: %s", exc)
+        return None
+
+    e2b_api_key = await asyncio.to_thread(_fetch_e2b_key_from_supabase)
+    if not e2b_api_key:
+        # Fallback: env var ou config cacheado no startup
+        e2b_api_key = os.getenv("E2B_API_KEY") or config.e2b_api_key
+
     if not e2b_api_key:
         logger.error("[E2B] Variável E2B_API_KEY ausente; sandbox indisponível.")
-        return "Erro: A variável E2B_API_KEY não está configurada no ambiente. Sandbox indisponível."
+        return (
+            "Erro: A variável E2B_API_KEY não está configurada. "
+            "Adicione provider='e2b' ou provider='e2b_api_key' na tabela ApiKeys do Supabase, ou defina E2B_API_KEY no ambiente."
+        )
+
+    logger.info("[E2B] Usando chave: %s...", e2b_api_key[:15])
 
     if not code or not code.strip():
         logger.error("[E2B] Tentativa de executar código vazio.")
         return "Erro: nenhum código Python foi fornecido para execução."
 
     try:
-        from backend.core.config import get_config
         from backend.core.supabase_client import upload_to_supabase
-
-        config = get_config()
 
         def snapshot_artifacts(sandbox) -> dict[str, object]:
             entries = sandbox.files.list(_E2B_ARTIFACT_ROOT, depth=_E2B_ARTIFACT_SCAN_DEPTH)

@@ -3,6 +3,427 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-21 (light-theme-fix) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `src/index.css`
+- `components/SettingsModal.tsx`
+
+### O que foi feito:
+1. **SettingsModal.tsx** — Reduziu temas de 5 para 3 (removeu `dim` e `midnight`). Grid mudou de `grid-cols-5` para `grid-cols-3`. Swatch do light atualizado para `#ededef` sem grid.
+2. **index.css** — Reescrita completa do bloco `[data-theme="light"]`: fundo `#ededef` (cinza suave), sem dot-grid, sombra ambiente sutil via glow-primary/secondary. Overrides CSS abrangentes para todos os hardcodes de cor encontrados nos componentes: `bg-[#0a0a0a]/80`, `bg-[#111113]`, `bg-[#121212]/95`, `bg-[#1a1a1d]`, `bg-[#141416]`, `bg-[#222]`, `bg-[#252525]`, e todos os `border-[#xxx]`. Inversão da paleta Tailwind v4 via `--color-neutral-*`. Botões indigo forçam `color: white`. Scrollbar clara.
+
+### Por quê:
+Light theme tinha falhas visuais graves (inputs escuros, sidebar quebrada, botões sem contraste) porque apenas variáveis CSS genéricas eram sobrescritas. Fix cobre todas as cores hardcoded Tailwind arbitrary values usadas nos componentes via seletores CSS `[data-theme="light"] .class-name`.
+
+---
+
+## 2026-03-21 (clarificacao) — Claude Opus 4.6
+
+### Arquivos modificados:
+- `backend/agents/planner.py`
+- `backend/agents/prompts.py`
+- `backend/agents/orchestrator.py`
+- `lib/api-client.ts`
+- `pages/ArccoChat.tsx`
+- `components/chat/ClarificationCard.tsx` (novo)
+
+### O que foi feito:
+1. **planner.py** — Adicionados ClarificationQuestion, acknowledgment, needs_clarification e questions ao PlannerOutput.
+2. **prompts.py** — Regras de quando clarificar vs seguir direto no PLANNER_SYSTEM_PROMPT.
+3. **orchestrator.py** — Emite acknowledgment (chunk) e clarification (SSE) antes do pipeline. Se needs_clarification, pausa e retorna.
+4. **api-client.ts** — Adicionado 'clarification' ao ChatStreamEventType.
+5. **ClarificationCard.tsx** — Novo componente com radio buttons (choice) e text input (open), botao Continuar.
+6. **ArccoChat.tsx** — Estado clarificationQuestions, handler SSE, renderizacao condicional do card, limpeza no handleSendMessage.
+
+### Por que:
+Pedidos ambiguos geravam resultados genericos. Agora o planner pode fazer perguntas antes de executar, melhorando a qualidade das respostas. Inspirado no Claude Code e Manus.
+
+---
+
+## 2026-03-21 (temas) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `src/index.css`
+- `components/SettingsModal.tsx`
+
+### O que foi feito:
+1. **index.css** — Adicionado tema `ghost`: dark plano sem decorações (`--dot-color: transparent`, `--glow-primary/secondary: transparent`). Adicionado tema `light`: off-white (`#f5f5f7`) com inversão da paleta de neutros Tailwind v4 via CSS vars (`--color-neutral-*`, `--color-white`) + scrollbar clara.
+2. **SettingsModal.tsx** — Array `themes` expandido de 3 para 5 (+ ghost + light). Grid trocado de `flex` para `grid grid-cols-5 gap-2`. Swatch sem linha quando `line === 'transparent'`.
+
+### Por quê:
+Os 3 temas existentes eram praticamente idênticos (variações de preto). Adicionados `Ghost` (dark limpo sem background decorativo) e `Light` (claro com inversão da paleta de cores).
+
+---
+
+## 2026-03-21 — Claude Opus 4.6
+
+### Arquivos modificados:
+- `backend/agents/planner.py`
+- `backend/agents/prompts.py`
+- `backend/agents/orchestrator.py`
+
+### O que foi feito:
+1. **planner.py** — Adicionado campo `is_terminal` (bool, default=False) ao PlanStep. Permite que o planner decida qual step encerra o pipeline.
+2. **prompts.py** — Adicionadas regras de "FLUXO E TERMINAL" ao PLANNER_SYSTEM_PROMPT com 3 exemplos concretos de fluxo correto.
+3. **orchestrator.py** — No planner loop: (a) fallback de seguranca que forca ultimo step como terminal se planner esqueceu; (b) refatorado bloco `elif is_terminal:` para checar `step.is_terminal` em vez de `TOOL_MAP` hardcoded. Steps nao-terminais acumulam resultado no `accumulated_context` e continuam. ReAct loop inalterado.
+
+### Por que:
+O pipeline parava prematuramente quando `text_generator` executava antes de `design_generator` num plano multi-step, porque `text_generator` era hardcoded como terminal. Agora o planner controla o fluxo e apenas o ultimo step entregavel e terminal.
+
+## 2026-03-21 — Claude Opus 4.6 (Logs de observabilidade)
+
+### Arquivos modificados:
+- `backend/agents/orchestrator.py`
+
+### O que foi feito:
+1. **orchestrator.py** — Adicionados 4 novos pontos de log no planner loop:
+   - `terminal_fallback` (warning): quando o fallback de seguranca forca o ultimo step como terminal
+   - `pipeline_terminated`: quando o pipeline para num step terminal, com lista de steps pulados
+   - `context_accumulated`: quando um step nao-terminal acumula resultado, com tamanho do contexto
+   - `step_skipped` (error): quando o supervisor ignora a tool forcada e responde em texto
+   - `planner_step_started` agora inclui `accumulated_context_chars` no payload
+
+### Por que:
+Melhorar diagnosticabilidade na aba de Logs do admin. Agora cada decisao do pipeline (parar, acumular, pular) fica registrada no Supabase com dados concretos.
+
+---
+
+## 2026-03-21 (19) — Claude Code (claude-opus-4-6)
+
+### Arquivos modificados:
+- `backend/agents/prompts.py`
+
+### O que foi feito:
+1. **DESIGN_GENERATOR_SYSTEM_PROMPT** — Adicionada secao "APRESENTACOES E MULTIPLAS ARTES":
+   - Instrui o agente a gerar cada slide como HTML COMPLETO e INDEPENDENTE
+   - Separa slides com `<!-- ARCCO_DESIGN_SEPARATOR -->`
+   - Nunca juntar multiplos slides num unico HTML
+   - Inclui exemplo de saida com 2 slides
+   - Adicionada regra de dimensao fixa 1080x1080px
+
+### Por que:
+O frontend ja tinha toda a logica de split por DESIGN_SEPARATOR (renderContent em ArccoChat.tsx → DesignGallery → DesignPreviewModal com tabs), mas o prompt do design_generator nao instruia o agente a usar o separador. Resultado: apresentacoes vinham como um HTML gigante com tudo junto, sem galeria nem tabs no editor.
+
+---
+
+## 2026-03-20 (18) — Claude Code (claude-opus-4-6)
+
+### Arquivos modificados:
+- `components/chat/DesignPreviewModal.tsx`
+
+### O que foi feito:
+1. **FIX: textos nao eram extraidos** — `EDITABLE_TAGS` (Set com H1-H6, P, SPAN, etc.) nao incluia `DIV`, mas a IA gera HTML com texto dentro de `<div>`. O filtro `if (!EDITABLE_TAGS.has(el.tagName)) continue` pulava TODOS os textos → array `texts` vazio → nenhum Textbox no canvas → edicao impossivel.
+2. **Nova abordagem: leaf detection** — Removido filtro por tag. Nova funcao `collectLeafTextElements()` coleta TODOS os elementos com texto visivel, depois remove wrappers via `el.contains(other)` — mantendo apenas os mais internos (folhas). Isso garante que textos em qualquer tag (div, p, h1, span, etc.) sejam capturados sem duplicatas.
+3. **Removido `EDITABLE_TAGS`** — nao mais necessario.
+
+### Por que:
+O preview ficava perfeito (html2canvas captura tudo como imagem), mas nao havia nenhum objeto editavel no canvas Fabric.js porque o filtro por tag descartava os elementos `<div>` onde a IA coloca o texto.
+
+---
+
+## 2026-03-20 (17) — Claude Code (claude-opus-4-6)
+
+### Arquivos modificados:
+- `components/chat/DesignPreviewModal.tsx`
+- `package.json` (dependencias: fabric, html2canvas)
+
+### O que foi feito:
+1. **Refatoracao completa: iframe → Fabric.js canvas**
+   - Instalado `fabric` v7.2.0 e `html2canvas` como dependencias
+   - Removido TODO o codigo baseado em iframe (srcDoc, contentEditable, DOM manipulation, event listeners)
+   - Nova arquitetura:
+     a. HTML da IA renderiza em iframe OCULTO (para Tailwind CDN funcionar)
+     b. `html2canvas` captura background sem texto → dataURL
+     c. Textos extraidos via `getBoundingClientRect` + `getComputedStyle`
+     d. Canvas Fabric.js montado: imagem de fundo + Textbox para cada texto
+   - Edicao de texto: Fabric.js Textbox nativo (click para selecionar, double-click para editar inline, drag para mover, handles para redimensionar)
+   - Sidebar: controles de texto (conteudo, tamanho, alinhamento, cor, fonte) que atualizam o objeto Fabric diretamente
+   - Export PNG/JPEG: client-side via `canvas.toDataURL()` (sem backend)
+   - Export PDF/PPTX: PNG embrulhado em HTML simples, enviado ao endpoint existente
+   - Multi-design: dispose canvas + reprocessar HTML ao trocar tab
+   - Escala: `canvas.setZoom()` + `setDimensions()` para caber no container
+   - Loading state com spinner enquanto html2canvas processa (~500ms)
+
+### Por que:
+A abordagem iframe+contentEditable era fundamentalmente fragil: srcDoc reativo destruia edicoes, contentEditable conflitava com drag handlers, event listeners nao tinham cleanup adequado, e CSS transform causava bugs de coordenadas. Fabric.js resolve todos esses problemas com edicao, drag, resize e export nativos.
+
+---
+
+## 2026-03-20 (16) — Claude Code (claude-opus-4-6)
+
+### Arquivos modificados:
+- `components/chat/DesignPreviewModal.tsx`
+
+### O que foi feito:
+1. **FIX srcDoc reativo** — `initialSrcDoc` era recalculado a cada render (qualquer mudanca de cor/fonte recriava o srcDoc → iframe recarregava → destruia edicoes). Agora `srcDoc` e um `useMemo` que so depende de `iframeSrcKey`, mudancas de estilo vao direto no DOM via `applyGlobalStyles()`.
+2. **FIX cleanup de event listeners** — `onLoad` retornava funcao de cleanup como callback de evento (ignorado pelo browser). Agora usa `cleanupRef` para armazenar e chamar cleanup corretamente no useEffect.
+3. **Removido drag-and-drop** — conflitava fundamentalmente com contentEditable (mousedown do drag impedia cursor de texto). Edicao inline agora funciona normalmente.
+4. **Edicao inline + sidebar** — clique no texto da arte coloca cursor para edicao direta, sidebar mostra controles (texto, tamanho, alinhamento, cor). Ambos funcionam sem conflito.
+5. **Export limpo** — remove contenteditable/spellcheck/selection antes de serializar, restaura depois.
+
+### Por que:
+O editor estava completamente quebrado: nenhuma edicao funcionava porque o srcDoc era recalculado em toda mudanca de estado, recarregando o iframe. Event listeners se acumulavam sem cleanup. Drag-and-drop impedia edicao de texto.
+
+---
+
+## 2026-03-20 (15) — Claude Code (claude-opus-4-6)
+
+### Arquivos modificados:
+- `components/chat/DesignPreviewModal.tsx`
+
+### O que foi feito:
+1. **DesignPreviewModal.tsx** — Reescrita completa da arquitetura do editor de design:
+   - **Fix edicao de texto**: Removido padrao reativo srcDoc (causava reload do iframe a cada keystroke, destruindo estado de edicao). Agora usa `iframeSrcKey` counter para reloads controlados + manipulacao direta do DOM do iframe para todas as edicoes.
+   - **Fix posicionamento**: Design ficava preso no canto. Implementado sistema de escala dinamica com `transform: scale()` calculado como `Math.min(iframeWidth/1080, iframeHeight/1080)`, centralizando com margins automaticas.
+   - **Drag and drop**: Implementado arraste de elementos com `translate()` transform, coordenadas escaladas pelo fator de viewport, threshold de 4px para distinguir clique de arraste.
+   - **Export limpo**: `getExportHtml()` remove temporariamente escala/margins antes de serializar, garantindo que o download reflete exatamente o que o usuario ve no canvas.
+   - **Clareza visual**: Borda tracejada ao redor do canvas, footer com "O que voce ve na moldura e exatamente o que sera baixado", dropdown com texto explicativo.
+   - **Novos helpers**: `parseTranslate()`, `rgbToHex()`, `parseFontSize()`, `applyScale()`, `applyGlobalStyles()` (DOM direto).
+   - **Sidebar expandida**: Font size slider 8-120px com input numerico, hint de drag-and-drop, alinhamento texto.
+
+### Por que:
+Edicao de texto nao funcionava (iframe recarregava a cada mudanca), design ficava no canto (body fixo em 1080px num iframe de ~600px), usuario nao sabia o que seria baixado, e nao tinha como arrastar elementos. Reescrita resolve todos esses problemas com arquitetura de manipulacao direta do DOM.
+
+---
+
+## 2026-03-20 (14) — Claude Code (claude-opus-4-6)
+
+### Arquivos modificados:
+- `components/chat/DesignPreviewModal.tsx`
+- `src/index.css`
+
+### O que foi feito:
+1. **DesignPreviewModal.tsx** — Redesign completo do layout para estilo Canvas+Sidebar:
+   - Removido toggle View/Edit — design sempre editavel, clicar num texto abre propriedades na sidebar
+   - Canvas com fundo checkerboard para delimitar claramente a borda da arte (nao se perde mais no fundo escuro)
+   - Shadow no container do design para destacar do fundo
+   - Sidebar fixa 280px a direita com:
+     - Controles do elemento selecionado: textarea, slider de tamanho de fonte (8-72px, NOVO), botoes de alinhamento esquerda/centro/direita (NOVO), cor do texto
+     - Controles globais: fundo transparente/cor, cor de texto geral, cor de destaque, fonte
+   - Estado vazio da sidebar: mensagem "Clique em qualquer texto da arte para editar"
+   - Dropdown de export com label claro "Baixar como PNG/PDF/PPTX/JPEG"
+   - Footer informativo: dimensoes "1080 x 1080px"
+   - Removidos sliders de preview (zoom/borda/raio) que confundiam o usuario
+   - SelectedNodeState expandido com fontSize e textAlign
+   - Novos handlers: handleSelectedFontSizeChange, handleSelectedAlignChange
+2. **index.css** — Adicionado `.checkerboard-bg` com padrao xadrez sutil para fundo do canvas
+
+### Por que:
+O editor de design era confuso: borda da arte se perdia no fundo escuro, usuario nao sabia onde alterar o que, nao tinha controle de tamanho de fonte nem alinhamento, e nao ficava claro o que seria baixado. O redesign estilo Canva com sidebar fixa torna tudo explicito e acessivel.
+
+---
+
+## 2026-03-20 (13) — Claude Code (claude-opus-4-6)
+
+### Arquivos modificados:
+- `components/chat/PresentationCard.tsx`
+- `components/chat/DesignPreviewModal.tsx`
+
+### O que foi feito:
+1. **PresentationCard.tsx** — FIX CRASH: adicionado `Monitor` ao import do lucide-react. O componente usava `<Monitor>` no estado de streaming mas nao importava, causando ReferenceError que travava toda a aplicacao quando um design era gerado.
+2. **DesignPreviewModal.tsx** — Redesign completo da UX do modal:
+   - Header simplificado: titulo + toggle View/Edit + botao Personalizar (engrenagem) + dropdown Baixar + fullscreen + close
+   - Controles de personalizacao (cores, fonte, sliders) agora ficam num painel colapsavel (fechado por padrao) — libera maximo espaco para o design
+   - Botoes de export consolidados num dropdown "Baixar" no header em vez de barra separada no footer
+   - Preview area ocupa todo o espaco disponivel, design centralizado vertical e horizontalmente
+   - Tabs de multiplos designs simplificados (pills compactos no topo + miniaturas flutuantes no bottom do preview)
+   - Painel de edicao de texto reposicionado como floating panel no canto superior direito com backdrop blur
+   - Removida barra de footer com botoes de export (substituida pelo dropdown no header)
+   - Visual geral mais limpo: sem cores orange excessivas, tons neutros consistentes
+
+### Por que:
+O modal travava a aplicacao inteira (crash por import faltando). Alem disso, tinha 4 barras de controles empilhadas antes do usuario ver o design — interface sobrecarregada e pouco intuitiva. O redesign prioriza o conteudo visual e esconde controles avancados atras de toggles.
+
+---
+
+## 2026-03-20 (12) — Claude Code (claude-opus-4-6)
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+- `backend/agents/orchestrator.py`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Removidos blocos legados: `AgentTerminal` (terminal card) e pill "agente · pensando▌". Substituidos por mini loading inline com logo Arcco pulsando + "Analisando..." enquanto aguarda primeiro step SSE.
+2. **ArccoChat.tsx** — Removido import `AgentTerminal` e icon `Terminal` do lucide (nao mais usados).
+3. **orchestrator.py** — Step inicial agora e contextual: "Entendendo o pedido: {intent}..." em vez do generico "A estruturar plano de execucao...". Segundo step trocado de thought para step: "Definindo estrategia de execucao...".
+
+### Por que:
+Remover vestigios do terminal antigo que ainda aparecia no inicio do fluxo. Fazer o agente responder prontamente com o que vai fazer, usando a intent do usuario no primeiro step emitido.
+
+---
+
+## 2026-03-20 (11) — Claude Code (claude-opus-4-6)
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+- `src/index.css`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Removido bloco `<AgentThoughtPanel>` e substituido por steps inline no fluxo de mensagens. Cada step mostra logo Arcco 16x16 pulsando (running) ou opaco (done) + texto em tom neutro. Após conclusao, steps colapsam em "X etapas · Ys" clicavel para expandir/recolher. Import do AgentThoughtPanel removido (mantido apenas o type ThoughtStep).
+2. **ArccoChat.tsx** — No chunk handler, adicionado `setTimeout(() => setIsThoughtsExpanded(false), 600)` para colapso automatico dos steps quando a resposta comeca a chegar.
+3. **index.css** — Adicionado keyframe `pulse-soft` (opacity 0.4→1.0, 1.5s ease-in-out infinite) e classe `.animate-pulse-soft`.
+
+### Por que:
+Substituir o painel separado (AgentThoughtPanel) por steps inline estilo Claude Code / Manus — visual mais clean e integrado ao fluxo do chat.
+
+---
+
+## 2026-03-20 (10) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `backend/agents/executor.py`
+
+### O que foi feito:
+1. **executor.py** — `_execute_python`: substituiu `config.e2b_api_key or os.getenv("E2B_API_KEY")` por busca direta ao Supabase (`ApiKeys` table, providers `e2b` e `e2b_api_key`) via `asyncio.to_thread(_fetch_e2b_key_from_supabase)`. Env var / config cacheado viram fallback. Adicionado log `[E2B] Usando chave: ...` para debug.
+
+### Por quê:
+`get_config()` é singleton criado no startup. Se o servidor iniciou com `E2B_API_KEY=chave_velha` no env, o config cacheia a chave inválida e `_load_keys_from_supabase` nunca consulta o Supabase (porque `needs_e2b = not self.e2b_api_key` = False quando env var está preenchida). Resultado: 401 mesmo com chave nova no Supabase. O fix faz cada chamada E2B buscar a chave fresca do Supabase, ignorando o singleton cacheado.
+
+---
+
+## 2026-03-20 (9) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `backend/agents/orchestrator.py`
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **orchestrator.py** — Complex planner loop (~linha 645): trocado `yield sse("thought", ...)` para `yield sse("pre_action", ...)` para ambos os caminhos (reasoning direto e fallback `_build_pre_action_ack`).
+2. **ArccoChat.tsx** — Adicionado handler para novo evento SSE `pre_action`: seta `chatThinkingMessage` com texto do backend e ativa `chatThinkingVisible` (mostra no bubble do chat, fora do terminal).
+3. **ArccoChat.tsx** — Chunk handler: removido guard `!isAgentMode` do timer de hide do thinking. Agora usa `chatThinkingStartRef.current > 0` para funcionar nos dois modos (Chat Normal e Agent). Reseta ref ao esconder.
+
+### Por quê:
+Pre-action acknowledgement precisa aparecer no bubble do chat (fora do AgentThoughtPanel/terminal). O evento `thought` ia para o terminal; o novo `pre_action` é tratado pelo frontend como indicador visual no chat bubble com mínimo 800ms de exibição.
+
+---
+
+## 2026-03-20 (8) — Claude Code (claude-opus-4-6)
+
+### Arquivos modificados:
+- `backend/agents/orchestrator.py`
+
+### O que foi feito:
+1. **orchestrator.py** — Criada função `_build_pre_action_ack(tool_calls)` que gera mensagens contextuais de pre-action a partir do nome da tool + argumentos (query, url, file_name). Cobre todas as 8 tools do TOOL_MAP.
+2. **orchestrator.py** — ReAct simple loop (linha ~1040): refatorado check de `supervisor_reasoning` para usar `if/else` — se modelo gerou content, emite como `thought`; senão, chama `_build_pre_action_ack()` como fallback.
+3. **orchestrator.py** — Complex planner loop (linha ~645): mesmo pattern de fallback adicionado — se `supervisor_reasoning` vazio mas tem `tool_calls`, gera ack contextual.
+
+### Por quê:
+O Claude (via OpenRouter) tipicamente NÃO gera `content` junto com `tool_calls` — separa os dois em mensagens distintas. A instrução no system prompt era insuficiente. O fallback `_build_pre_action_ack()` garante que uma mensagem contextual sempre aparece antes da execução de qualquer tool, independente do comportamento do modelo.
+
+---
+
+## 2026-03-20 (7) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `backend/agents/prompts.py`
+
+### O que foi feito:
+1. **prompts.py** — Adicionada instrução "RECONHECIMENTO PRÉ-AÇÃO" ao final do `CHAT_SYSTEM_PROMPT`. Instrui o supervisor a escrever UMA frase curta no campo `content` antes de qualquer `tool_call`, sendo específico ao tema do pedido. Inclui exemplos por ferramenta (ask_web_search, ask_browser, execute_python, ask_design_generator, deep_research, ask_file_modifier, read_session_file).
+
+### Por quê:
+Pre-action Acknowledgement pattern — o `orchestrator.py` já tinha a infraestrutura (linhas 1036-1039) que captura `message.content` quando existe `tool_calls` e emite como evento SSE `thought`. Faltava apenas instruir o LLM a gerar esse conteúdo. Zero mudanças de código, zero mudanças no contrato SSE.
+
+---
+
+## 2026-03-20 (6) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Adicionadas funções `saveConvMode` e `getConvMode` (fora do componente) que persistem o modo (agent/chat) de cada conversa no `localStorage` com a chave `arcco_conv_mode` (objeto `{ [convId]: boolean }`).
+2. **ArccoChat.tsx** — No `useEffect` de carregamento de conversa por UUID, após definir `conversationId`, restaura o modo salvo via `getConvMode(chatSessionId)`.
+3. **ArccoChat.tsx** — No handler SSE de `conversation_id`, chama `saveConvMode(content, isAgentMode)` para persistir o modo da conversa recém-criada.
+4. **ArccoChat.tsx** — Botão de toggle de modo recebe `disabled={messages.length > 0}`, fica opaco/inativo quando há mensagens e exibe no tooltip "O modo não pode ser alterado durante uma conversa."
+
+### Por quê:
+Ao recarregar uma conversa salva, ela voltava sempre para o modo Agent (padrão). Além disso, era possível trocar de modo durante uma conversa em andamento, causando inconsistência. Agora o modo é persistido por conversa e travado após a primeira mensagem.
+
+---
+
+## 2026-03-20 (5) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Substituiu `chatFirstChunkReceived` (state com race condition) por `chatThinkingVisible` (state) + `chatThinkingStartRef` + `chatThinkingTimerRef`. O panel fica visível por no mínimo 800ms: quando primeiro chunk chega, agenda `setTimeout(setChatThinkingVisible(false), max(0, 800-elapsed))`.
+2. **ArccoChat.tsx** — `finally` block agora cancela o timer e força `setChatThinkingVisible(false)` em qualquer caso (erro, abort, fim normal).
+3. **ArccoChat.tsx** — UI do thinking panel redesenhada estilo Google: spinner rotativo + "Pensando" + linha vertical indigo + mensagem contextual com fade-in slide-in.
+
+### Por quê:
+Race condition — `chatFirstChunkReceived` era um state React que podia ser batched com o próprio reset, tornando o indicator invisível. Novo approach usa timer explícito com tempo mínimo garantido, independente da velocidade do modelo.
+
+---
+
+## 2026-03-20 (4) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Substituiu a condição `msg.content === ''` por estado dedicado `chatFirstChunkReceived`. Thinking indicator fica visível até o **primeiro chunk SSE chegar** (`setChatFirstChunkReceived(true)` no handler de `chunk`). Resetado para `false` a cada envio de mensagem em chat mode.
+
+### Por quê:
+Bug de timing — `msg.content === ''` durava apenas alguns milissegundos antes dos primeiros chunks chegarem (OpenRouter direto é rápido). Com `chatFirstChunkReceived`, a visibilidade do indicator é determinada pelo evento real de chegada de dados, não pelo estado de render do React.
+
+---
+
+## 2026-03-20 (3) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Moveu o thinking indicator do Chat Normal para **dentro do bubble do assistente** (renderizado no lugar de `renderContent` quando `msg.content === ''`). Removeu o elemento separado que ficava abaixo das mensagens e não era percebido pelo usuário.
+
+### Por quê:
+Bug de UX — o indicator estava abaixo do bubble do assistente, fora do campo de visão do usuário. O assistente já aparece como placeholder vazio e começa a receber texto quase imediatamente; o usuário olha para o bubble, não para abaixo. Agora os dots e a mensagem contextual aparecem dentro do bubble, exatamente onde o usuário está olhando.
+
+---
+
+## 2026-03-20 (2) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Substituiu o array fixo `chatThinkingMessages` + rotação por `useInterval` por uma função `generateThinkingMessage(text)` com keyword detection em português (15+ categorias: email, planilha, código, post, tradução, proposta, plano, análise, etc.).
+2. **ArccoChat.tsx** — `chatThinkingMessage` agora é computado no momento do envio (`handleSendMessage`) baseado no texto real da pergunta do usuário.
+3. **ArccoChat.tsx** — Mensagem de thinking no Chat Normal é única e contextual (sem rotação), com `animate-in fade-in` na montagem.
+
+### Por quê:
+Melhoria de UX — mensagem de thinking agora reflete o que o usuário perguntou (ex: "Redigindo a mensagem para você..." quando menciona email), tornando a experiência mais contextual e responsiva.
+
+---
+
+## 2026-03-20 — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Adicionado array `chatThinkingMessages` com 7 mensagens resonantes. Adicionado estado `thinkingMsgIndex` e `useEffect` que rota as mensagens a cada 2.5s quando `!isAgentMode && isLoading`.
+2. **ArccoChat.tsx** — `AgentThoughtPanel` agora só renderiza em agent mode (`isAgentMode && agentThoughts.length > 0`), removendo-o do modo Chat Normal.
+3. **ArccoChat.tsx** — Indicador de loading separado por modo: agent mode mantém o pill "agente · pensando▌"; chat normal exibe 3 dots animados com mensagem resonante rotativa (fade-in via `key` trick).
+
+### Por quê:
+UX — no modo Chat Normal, o terminal e o painel de steps são informação irrelevante para o usuário. Substituído por indicador visual suave com mensagens contextuais que transmitem que o modelo está pensando.
+
+---
+
+## 2026-03-20 (18) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Substituiu o dropdown de seleção de modelo (que usava `<select>` nativo invisível sobreposto em div estilizado) por um dropdown customizado completo. Adicionou estado `showChatModelDropdown`. Ambos os modos (agent e chat) agora usam dropdowns com botão trigger estilizado, painel com backdrop dismiss, ícones, checkmark no item selecionado e transição do chevron.
+
+### Por que:
+UX ruim — dropdown nativo é visualmente inconsistente com o resto da interface dark. Novo dropdown customizado segue o design system da aplicação.
+
 ---
 
 ## 2026-03-19 (17) — Claude Code (claude-sonnet-4-6)
