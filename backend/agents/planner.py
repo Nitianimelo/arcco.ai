@@ -65,6 +65,15 @@ async def generate_plan(user_intent: str, model: str) -> PlannerOutput:
         # But a highly reliable way is to instruct the model to respond ONLY in JSON, and provide the schema in the system prompt.
         messages[0]["content"] += f"\n\nOUTPUT SCHEMA OBRIGATÓRIO (retorne APENAS o JSON válido): {json.dumps(schema)}"
 
+        # Injeção dinâmica de skills — filtra por relevância ao intent, evita poluir o contexto
+        from backend.skills import loader as skills_loader
+        _skills_desc = skills_loader.get_skill_descriptions(user_intent)
+        if _skills_desc:
+            messages[0]["content"] += (
+                f"\n\nSKILLS DE NEGÓCIO DISPONÍVEIS (use o nome exato como valor de 'action' no plano):\n"
+                f"{_skills_desc}"
+            )
+
         # Let's use call_openrouter which calls OpenRouter API
         data = await call_openrouter(
             messages=messages,

@@ -3,6 +3,242 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-26 — Claude Code (claude-sonnet-4-6) — Skill: Gerador de Slides (slide_generator)
+
+### Arquivos criados:
+- `backend/skills/slide_generator.py`
+
+### Arquivos modificados:
+- `backend/agents/prompts.py`
+
+### O que foi feito:
+1. **slide_generator.py** — Primeira skill de negócio do Arcco. Modelos Pydantic `Slide` e `SlideDeck` definem a estrutura: layout (`title_and_subtitle` | `bullets` | `big_number`), heading, points, big_value e speaker_notes. A função `execute()` injeta o JSON schema no system prompt (padrão do planner), chama `call_openrouter` com o modelo do agente `text_generator`, valida o output com `SlideDeck.model_validate()` e retorna JSON. Keywords: slide, slides, apresentação, pitch, deck, powerpoint, pptx, keynote, palestra.
+2. **prompts.py** — Adicionado Exemplo 5 ao PLANNER_SYSTEM_PROMPT: quando `slide_generator` está disponível nas SKILLS DE NEGÓCIO, o planner deve usar o fluxo `web_search → slide_generator → design_generator` no lugar de `text_generator → design_generator` para apresentações.
+
+### Por que:
+A skill atua como copywriter estruturado que antecede o design_generator, produzindo um JSON com decisões de layout, copy e notas do palestrante por slide. O design_generator recebe esse JSON rico e gera HTML de qualidade muito superior ao que recebia via texto livre.
+
+---
+
+## 2026-03-26 — Claude Code (claude-sonnet-4-6) — Sistema à prova de troca de modelos
+
+### Arquivos criados:
+- `backend/core/model_capabilities.py`
+
+### Arquivos modificados:
+- `backend/core/llm.py`
+- `backend/agents/orchestrator.py`
+
+### O que foi feito:
+1. **model_capabilities.py** — Cache de capacidades aprendido em runtime. Dois conjuntos: `_NO_FORCED_TOOL_CHOICE` (modelos que rejeitam tool_choice forçado) e `_NO_TOOLS` (modelos sem function calling). API: `supports_forced_tool_choice()`, `mark_no_forced_tool_choice()`, `supports_tools()`, `mark_no_tools()`, `get_summary()`.
+2. **llm.py** — `_normalize_message()`: remove blocos `<think>...</think>` do content antes de qualquer processamento (DeepSeek R1, QwQ, Marco-o1, etc. jogam reasoning tokens inline). Aplicado automaticamente em todos os choices de toda chamada `call_openrouter`.
+3. **orchestrator.py** — `_call_supervisor_for_step` reescrito: (a) consulta o cache ANTES da chamada — modelos já conhecidos como "sem forced tool_choice" vão direto para "auto" sem round-trip de erro; (b) detecta e classifica erros de tool_choice vs erro de tools completo; (c) `mark_*` atualiza o cache na primeira falha; (d) retry de reforço usa o cache para não repetir o erro.
+
+### Por que:
+Troca frequente de modelos (especialmente chineses baratos) causava falhas imprevisíveis: tool_choice 404, thinking tokens poluindo o pipeline, erros crypticos sem mensagem útil. Agora o sistema adapta automaticamente na primeira requisição e performa otimamente em todas as seguintes.
+
+---
+
+## 2026-03-26 — Claude Code (claude-sonnet-4-6) — Fix: fallback tool_choice para modelos sem suporte
+
+### Arquivos modificados:
+- `backend/agents/orchestrator.py`
+
+### O que foi feito:
+1. **orchestrator.py** — `_call_supervisor_for_step`: adicionado try/except ao redor da chamada `call_openrouter` com `tool_choice` forçado. Quando o modelo retorna erro 404 com "No endpoints found that support the provided 'tool_choice' value" (modelos como `xiaomi/mimo-v2-pro` via OpenRouter), o sistema faz fallback automático para `tool_choice="auto"` e injeta instrução textual para guiar o modelo. O mesmo fallback foi adicionado na segunda tentativa (retry).
+
+### Por que:
+Modelo `xiaomi/mimo-v2-pro` configurado no admin não suporta `tool_choice` forçado. O OpenRouter retornava 404 imediatamente, derrubando toda a execução. O fallback garante compatibilidade com qualquer modelo do OpenRouter independente do suporte a tool_choice estrito.
+
+---
+
+## 2026-03-26 — Claude Code (claude-sonnet-4-6) — Arquitetura Híbrida: Motor de Skills Dinâmicas
+
+### Arquivos criados:
+- `backend/skills/__init__.py`
+- `backend/skills/base.py`
+- `backend/skills/loader.py`
+
+### Arquivos modificados:
+- `backend/agents/orchestrator.py`
+- `backend/agents/planner.py`
+
+### O que foi feito:
+1. **backend/skills/__init__.py** — Marca o diretório como módulo Python com instruções de template para criar novas skills.
+2. **backend/skills/base.py** — TypedDict `SkillMeta` documentando o contrato que cada skill deve seguir: `id`, `name`, `description`, `parameters` (JSON Schema).
+3. **backend/skills/loader.py** — Motor de autodescoberta: usa `pkgutil.iter_modules` para encontrar todos os arquivos `.py` em `backend/skills/` que expõem `SKILL_META + execute()`. API pública: `get_skill_tool_definitions()`, `is_skill()`, `get_skill_ids()`, `get_skill_descriptions()`, `execute_dynamic_skill()`.
+4. **orchestrator.py** — 6 mudanças cirúrgicas:
+   - Import de `skills_loader` no topo.
+   - `active_tools` agora concatena `skills_loader.get_skill_tool_definitions()`.
+   - TOOL_MAP lookup no Planner Loop: fallback para `route = "dynamic_skill"` quando `func_name` não está no TOOL_MAP mas é uma skill válida.
+   - `elif route == "dynamic_skill":` no Planner Loop: chama `execute_dynamic_skill`, acumula contexto.
+   - TOOL_MAP lookup no ReAct Loop: mesmo fallback.
+   - `elif route == "dynamic_skill":` no ReAct Loop: chama `execute_dynamic_skill`, adiciona a `current_messages`.
+5. **planner.py** — Injeção dinâmica: antes de chamar o LLM, injeta descrições das skills disponíveis no system prompt do planner para que ele saiba quando usá-las.
+
+### Por que:
+Cada nova integração de negócio (CNPJ, rastreador, cotação, WhatsApp, ERP, etc.) exigia modificar o núcleo do orchestrator.py. A nova arquitetura híbrida separa as ferramentas nativas (browser, python, design) das skills de negócio: adicionar uma nova skill agora exige apenas criar um arquivo `.py` em `backend/skills/` e reiniciar o backend.
+
+---
+
+## 2026-03-25 — Claude Code (claude-sonnet-4-6) — Spy Pages card: fix canais de tráfego e gênero
+
+### Arquivos modificados:
+- `components/chat/SpyPagesInputCard.tsx`
+
+### O que foi feito:
+1. **Canais de tráfego** — Barras corrigidas para usar a porcentagem real (0–100%) como largura CSS, em vez de largura relativa ao maior canal (que distorcia as proporções visualmente). Organic/paid pills movidos para rodapé discreto abaixo das barras, como texto simples com ponto separador.
+2. **Gênero** — Substituída barra dividida (fina, difícil de ler) por dois blocos stat lado a lado: azul para ♂ Masculino e rosa para ♀ Feminino, mostrando porcentagem em destaque. Seção agora sempre renderiza (mostra "—" quando Apify não retorna os dados), eliminando o sumiço do bloco.
+
+### Por que:
+Barra relativa ao max exibia proporções enganosas (canal de 30% aparecia igual ao de 60%). Barra de gênero era fina demais e sumia quando dados eram null — dois blocos coloridos são mais claros e resilientes a dados ausentes.
+
+---
+
+## 2026-03-25 — Claude Code (claude-sonnet-4-6) — Spy Pages card: melhorias visuais de demografia
+
+### Arquivos modificados:
+- `components/chat/SpyPagesInputCard.tsx`
+
+### O que foi feito:
+1. **SpyPagesInputCard.tsx** — Seção "Audiência" do SitePreviewCard melhorada em dois pontos:
+   - **Gênero**: labels coloridos com `text-blue-400` (♂) e `text-pink-400` (♀) mostrando porcentagem diretamente ao lado do símbolo. Barra split masculino/feminino com `bg-blue-500` / `bg-pink-400`.
+   - **Idade**: substituídas barras verticais (histograma com porcentagem só no tooltip) por barras horizontais com label da faixa (ex: "18-24") à esquerda e porcentagem visível à direita. Maxval calculado fora do `.map()` via IIFE para evitar recálculo por item.
+
+### Por que:
+Usuário pediu: distribuição etária com porcentagem visível + distribuição masculina/feminina com rótulos coloridos e identidade visual clara.
+
+---
+
+## 2026-03-23 — Claude Code (claude-sonnet-4-6) — Spy Pages Tool: análise de tráfego via SimilarWeb/Apify
+
+### Arquivos modificados:
+- `backend/core/config.py`
+- `backend/services/apify_service.py` (NOVO)
+- `backend/agents/tools.py`
+- `backend/agents/executor.py`
+- `backend/agents/orchestrator.py`
+- `backend/api/chat.py`
+- `backend/tools/catalog.py`
+- `lib/api-client.ts`
+- `components/chat/SpyPagesInputCard.tsx` (NOVO)
+- `components/chat/SpyPagesResultCard.tsx` (NOVO)
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **config.py** — Adicionado campo `apify_api_key`, carregado de env `APIFY_API_KEY` e de provider='apify' no Supabase.
+2. **apify_service.py** — Novo serviço: chama actor `tri_angle~similarweb-scraper` via Apify REST API síncrona. Normaliza campos (visits, bounce, países, páginas, concorrentes, keywords).
+3. **tools.py** — Adicionado `SPY_PAGES_TOOLS` com tool `analyze_web_pages(urls[])`.
+4. **executor.py** — Handler `_analyze_web_pages` que chama `apify_service.analyze_pages()`.
+5. **orchestrator.py** — Import SPY_PAGES_TOOLS, TOOL_MAP entry, param `spy_pages_enabled`, `active_tools` dinâmico, handler spy_pages no planner loop E no ReAct loop. Corrigido `_call_supervisor_for_step` para receber `tools` como parâmetro (era referência inválida a variável local). Corrigido ReAct loop de `SUPERVISOR_TOOLS` hardcoded para `active_tools`.
+6. **chat.py** — Extrai `spy_pages_enabled` do body e passa ao orquestrador.
+7. **catalog.py** — Entry spy_pages na loja de tools.
+8. **api-client.ts** — Param `spyPagesEnabled`, event type `spy_pages_result` e `pre_action`, handler especial no SSE loop para evento com campo `data` em vez de `content`.
+9. **SpyPagesInputCard.tsx** — Card de input com 1-4 URLs, botão "Iniciar análise".
+10. **SpyPagesResultCard.tsx** — Card de resultado com tabs (Visão Geral, Audiência, Concorrentes), selector de site, métricas, botão "Gerar relatório".
+11. **ArccoChat.tsx** — States `spyPagesActive`, `spyPagesEnabled`, `spyPagesResult`, `showToolsDropdown`. Botão "Tools" vira dropdown. Handler SSE `spy_pages_result`. `handleSpyPagesSubmit`. Render dos 2 novos cards.
+
+### Por que:
+Implementação completa da tool Spy Pages: permite ao usuário analisar tráfego de até 4 sites via SimilarWeb (usando Apify), com resultado interativo em card com abas diretamente no chat.
+
+## 2026-03-22 — Claude Code (claude-opus-4-6) — Botao Computer no Chat: IA manipula arquivos do usuario
+
+### Arquivos modificados:
+- `backend/agents/tools.py`
+- `backend/agents/executor.py`
+- `backend/agents/orchestrator.py`
+- `backend/api/chat.py`
+- `lib/api-client.ts`
+- `pages/ArccoChat.tsx`
+- `pages/ArccoComputer.tsx`
+- `App.tsx`
+
+### O que foi feito:
+1. **tools.py** — Adicionado `COMPUTER_TOOLS` com 3 tools: `list_computer_files`, `read_computer_file`, `manage_computer_file` (move/rename/create_folder/save_new).
+2. **executor.py** — Adicionado `user_id` param no `execute_tool()`. Implementados 3 handlers: `_list_computer_files` (query Supabase user_files), `_read_computer_file` (fetch blob + extrai texto via `_extract_text_from_bytes`), `_manage_computer_file` (switch por action).
+3. **orchestrator.py** — Adicionados params `user_id` e `computer_enabled`. Quando `computer_enabled=True`, inclui COMPUTER_TOOLS no array de tools do supervisor e adiciona instrucao no prompt. Adicionadas 3 entradas no TOOL_MAP (non-terminal, route "computer"). Todas as chamadas `execute_tool()` recebem `user_id`.
+4. **chat.py** — Extrai `computer_enabled` do body e passa pro `orchestrate_and_stream()` junto com `user_id`.
+5. **api-client.ts** — Adicionado param `computerEnabled` na funcao `chat()`, enviado como `computer_enabled` no body.
+6. **ArccoChat.tsx** — Adicionado state `computerEnabled`, botao toggle "Computer" no toolbar (so aparece em modo agente), passa flag na chamada `agentApi.chat()`. Removido props `pendingFileIds`/`onPendingFilesConsumed` e useEffect de upload intermediario.
+7. **ArccoComputer.tsx** — Removido prop `onOpenChatWithFiles`, funcao `handleOpenWithAI` e botao "Abrir com IA".
+8. **App.tsx** — Removido state `pendingFileIds`, props `pendingFileIds`/`onPendingFilesConsumed` do ArccoChatPage, e callback `onOpenChatWithFiles` do ArccoComputerPage.
+
+### Por que:
+Novo fluxo: toggle "Computer" no input do chat permite a IA acessar diretamente os arquivos do usuario no Supabase (listar, ler, mover, renomear, criar pasta, salvar novo). Elimina o fluxo intermediario de "Abrir com IA" que fazia upload duplicado. Codigo mais limpo e experiencia mais direta.
+
+---
+
+## 2026-03-22 — Claude Code (claude-sonnet-4-6) — ArccoComputer UI/UX refinement
+
+### Arquivos modificados:
+- `pages/ArccoComputer.tsx`
+
+### O que foi feito:
+1. **ArccoComputer.tsx** — Removido ícone Monitor do título, `text-2xl font-bold` → `text-xl font-semibold`. Upload button: `rounded-xl` → `rounded-md`. Nova Pasta button: removido `bg-[#1a1a1a]`, simplificado para `border border-neutral-700 hover:text-white rounded-md`. Drag overlay: removido `bg-indigo-500/10 border-2 border-dashed` e card interno, substituído por `bg-black/50` simples. Spinner de loading: `h-8 w-8` → `h-5 w-5`, cor `border-neutral-500`. Empty state: removido `border-2 border-dashed border-[#262626] rounded-2xl`. Folder hover: `hover:border-indigo-500/40` → `hover:border-neutral-700`. File grid card selected: removido `ring-1 ring-indigo-500/30`. Download hover button: removido `backdrop-blur-sm`. File list card selected: removido `ring-1 ring-indigo-500/20`. Action bar: todos os `rounded-xl` → `rounded-md`; botão Mover/Renomear: `border border-neutral-700 hover:text-white`; botão Excluir: `border border-neutral-700 hover:border-red-500/30 text-red-400`. Modais Nova Pasta e Mover: `rounded-2xl` → `rounded-xl`, input `rounded-xl` → `rounded-lg`, botões Criar/Mover: `rounded-xl` → `rounded-md`. Modal Mover folder selected: `bg-indigo-500/15 border-indigo-500/50 text-indigo-200` → `bg-white/[0.07] text-white border-transparent`.
+
+### Por que:
+UI do Arcco Computer tinha padrões visuais típicos de geração por IA (anel duplo ring/border, empty state com dashed border, drag overlay dramático, rounded-xl em tudo, hover colorido indigo). Padronizado com o sistema de botões e estilos da plataforma.
+
+---
+
+## 2026-03-22 — Claude Code (claude-opus-4-6) — Session files fix
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+- `pages/ArccoComputer.tsx`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Reescrito useEffect de `pendingFileIds`: agora faz fetch do blob do Supabase Storage, cria File object, e faz upload real via `agentApi.uploadSessionFile()`. Antes so criava metadados locais sem enviar pro backend.
+2. **ArccoComputer.tsx** — Corrigido userId: removido `supabase.auth.getUser()` (nao funciona com service_role key), agora usa `localStorage.getItem('arcco_user_id')` via prop do App.tsx.
+
+### Por que:
+O botao "Abrir com IA" do Arcco Computer nao enviava os arquivos pro backend como session files. O agente precisa dos arquivos em `/tmp/arcco_chat/{session_id}/` para poder le-los via `read_session_file`.
+
+---
+
+## 2026-03-22 — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `components/Sidebar.tsx`
+- `pages/ArccoChat.tsx`
+- `components/SettingsModal.tsx`
+- `pages/AdminPage.tsx`
+
+### O que foi feito:
+1. **Sidebar.tsx** — NavButton active state: removido gradiente `from-indigo-500/10` e glow `shadow-[0_0_20px...]`, substituído por `bg-white/[0.06]` simples. Ícone ativo: removido `drop-shadow` glowing. Border-radius dos botões de nav: `rounded-xl` → `rounded-lg`. Todos os inputs e botões do modal "Novo Projeto": `rounded-xl` → `rounded-lg`/`rounded-md`. Botão Tools active state: mesmo simplificação do NavButton.
+2. **ArccoChat.tsx** — Botão Enviar: `bg-neutral-800 rounded-lg` → `bg-white/[0.08] rounded-md`. Botão Plus/Anexar: `rounded-full` → `rounded-md`. Botões Tools e Pesquisa da toolbar: `rounded-full px-2 py-1` → `rounded-md`. Mode Toggle: removida borda `border-[#333]`, agora é apenas texto com `hover:bg-white/[0.05]`. Suggestions: `rounded-full` → `rounded-md`. Botão Parar: `rounded-full backdrop-blur-sm` → `rounded-lg` sem blur. FilePreviewCard: Download e Salvar com `border border-neutral-700` em vez de `bg-[#1a1a1a]`.
+3. **SettingsModal.tsx** — Tabs laterais: removido `border-indigo-500/20` do estado ativo, agora usa `bg-white/[0.07]` sem borda colorida. Todos os inputs: `rounded-xl` → `rounded-lg`. Botão Save, Atualizar Senha, Assinar, Nova Tarefa: `rounded-xl` → `rounded-md`.
+4. **AdminPage.tsx** — Tabs de navegação: `bg-indigo-500/20 text-indigo-300 border border-indigo-500/30` → `bg-[#1c1c1c] text-white` sem borda colorida. Botão Save dos agentes e chat slots: `bg-indigo-500/20 text-indigo-300 border border-indigo-500/30` → `bg-indigo-600 text-white rounded-md`. Botão Delete chat slot: sem bg vermelho, apenas `text-red-400` com borda neutra. Botão "Novo modelo": `bg-indigo-500/20 text-indigo-300` → `bg-indigo-600 text-white rounded-md`.
+
+### Por que:
+UI/UX refinement para eliminar padrões que fazem a interface parecer "gerada por IA": excesso de `rounded-xl`, gradientes e glows em active states, e o pattern `bg-indigo-500/20 text-indigo-300 border border-indigo-500/30` usado em demasia. Simplificação para hierarquia visual mais clara e identidade mais humana.
+
+---
+
+
+## 2026-03-22 — Claude Code (claude-opus-4-6)
+
+### Arquivos modificados:
+- `lib/driveService.ts`
+- `types.ts`
+- `components/Sidebar.tsx`
+- `pages/ArccoComputer.tsx` (novo)
+- `App.tsx`
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **driveService.ts** — Adicionado `folder_path` na interface `UserFile`. Novos metodos: `listByFolder`, `listFolders`, `createFolder`, `moveFile`, `renameFile`, `uploadMultiple`, `getFilesByIds`.
+2. **types.ts** — Adicionado `ARCCO_COMPUTER` ao tipo `ViewState`.
+3. **Sidebar.tsx** — Renomeado "Arcco Drive" para "Arcco Computer" com icone `Monitor`. Navegacao aponta para `ARCCO_COMPUTER`.
+4. **ArccoComputer.tsx** — File manager completo: breadcrumb, pastas, selecao multipla, upload drag-drop, criar pasta, mover, renomear, excluir, busca, botao "Abrir com IA".
+5. **App.tsx** — Import atualizado para `ArccoComputerPage`. Adicionado estado `pendingFileIds`. Rota `ARCCO_COMPUTER` com callback `onOpenChatWithFiles`. Props `pendingFileIds`/`onPendingFilesConsumed` passadas ao ArccoChat.
+6. **ArccoChat.tsx** — Novas props `pendingFileIds` e `onPendingFilesConsumed`. useEffect que carrega arquivos do Computer como attachments com toast de confirmacao.
+
+### Por que:
+Transformar o "Arcco Drive" (cofre simples) no "Arcco Computer" — file manager com pastas, upload multiplo e integracao com o chat para manipular arquivos via IA.
+
+---
+
 ## 2026-03-21 (light-theme-fix) — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:

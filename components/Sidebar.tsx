@@ -3,6 +3,7 @@ import {
   Wrench,
   MessageSquare,
   HardDrive,
+  Monitor,
   Settings,
   ChevronDown,
   ChevronRight,
@@ -79,12 +80,12 @@ const NavButton: React.FC<NavButtonProps> = ({ item, isActive, userPlan, collaps
       title={collapsed ? item.label : undefined}
       onClick={handleClick}
       disabled={isDisabled}
-      className={`group relative w-full flex items-center transition-all duration-200 outline-none rounded-xl
+      className={`group relative w-full flex items-center transition-all duration-200 outline-none rounded-lg
         ${collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5'}
         ${isDisabled
           ? 'opacity-40 cursor-not-allowed text-neutral-500 border-l-2 border-transparent'
           : isActive
-            ? 'bg-gradient-to-r from-indigo-500/10 to-transparent border-l-2 border-indigo-500 text-white shadow-[0_0_20px_rgba(99,102,241,0.15)]'
+            ? 'bg-white/[0.06] border-l-2 border-indigo-500 text-white'
             : 'text-neutral-400 hover:text-white hover:bg-white/[0.03] border-l-2 border-transparent'
         } text-sm font-medium`}
     >
@@ -94,7 +95,7 @@ const NavButton: React.FC<NavButtonProps> = ({ item, isActive, userPlan, collaps
           className={`transition-colors duration-200 ${isDisabled
             ? 'text-neutral-600'
             : isActive
-              ? 'text-indigo-400 drop-shadow-[0_0_8px_rgba(129,140,248,0.5)]'
+              ? 'text-indigo-400'
               : isLocked
                 ? 'text-neutral-600'
                 : 'text-neutral-500 group-hover:text-neutral-200'
@@ -235,7 +236,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [collapsed]);
 
   const appTools: NavItem[] = [
-    { id: 'ARCCO_DRIVE', label: 'Arcco Drive', icon: HardDrive },
+    { id: 'ARCCO_COMPUTER', label: 'Arcco Computer', icon: Monitor },
   ];
 
   const isToolsActive = currentView === 'TOOLS_MY' || currentView === 'TOOLS_STORE';
@@ -335,7 +336,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               if (collapsed) return;
               setProjectsOpen(!projectsOpen);
             }}
-            className={`group relative w-full flex items-center transition-all duration-200 outline-none rounded-xl text-sm font-medium
+            className={`group relative w-full flex items-center transition-all duration-200 outline-none rounded-lg text-sm font-medium
               ${collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5'}
               text-neutral-400 hover:text-white hover:bg-white/[0.03] border-l-2 border-transparent`}
           >
@@ -401,10 +402,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               if (collapsed) return;
               setToolsOpen(!toolsOpen);
             }}
-            className={`group relative w-full flex items-center transition-all duration-200 outline-none rounded-xl text-sm font-medium
+            className={`group relative w-full flex items-center transition-all duration-200 outline-none rounded-lg text-sm font-medium
               ${collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5'}
               ${isToolsActive
-                ? 'bg-gradient-to-r from-indigo-500/10 to-transparent border-l-2 border-indigo-500 text-white shadow-[0_0_20px_rgba(99,102,241,0.15)]'
+                ? 'bg-white/[0.06] border-l-2 border-indigo-500 text-white'
                 : 'text-neutral-400 hover:text-white hover:bg-white/[0.03] border-l-2 border-transparent'
               }`}
           >
@@ -412,7 +413,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <Wrench
                 size={20}
                 className={`transition-colors duration-200 ${isToolsActive
-                  ? 'text-indigo-400 drop-shadow-[0_0_8px_rgba(129,140,248,0.5)]'
+                  ? 'text-indigo-400'
                   : 'text-neutral-500 group-hover:text-neutral-200'
                   }`}
               />
@@ -575,7 +576,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   value={newProjectName}
                   onChange={e => setNewProjectName(e.target.value)}
                   placeholder="Ex: SaaS Landing Page"
-                  className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50"
+                  className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-lg px-3 py-2.5 outline-none focus:border-indigo-500/50"
                   autoFocus
                 />
               </div>
@@ -592,7 +593,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   value={newProjectInstructions}
                   onChange={e => setNewProjectInstructions(e.target.value)}
                   placeholder="Informações relevantes, regras de negócios..."
-                  className="w-full h-24 bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50 resize-none"
+                  className="w-full h-24 bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-lg px-3 py-2.5 outline-none focus:border-indigo-500/50 resize-none"
                 />
               </div>
 
@@ -607,7 +608,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   type="button"
                   onClick={() => document.getElementById('project-file-upload')?.click()}
-                  className="w-full flex flex-col items-center justify-center border border-dashed border-[#313134] hover:border-indigo-500/50 bg-[#1a1a1d] hover:bg-white/[0.02] transition-colors rounded-xl p-4 text-sm text-neutral-400 gap-2 cursor-pointer"
+                  className="w-full flex flex-col items-center justify-center border border-dashed border-[#313134] hover:border-indigo-500/50 bg-[#1a1a1d] hover:bg-white/[0.02] transition-colors rounded-lg p-4 text-sm text-neutral-400 gap-2 cursor-pointer"
                 >
                   <Upload size={20} className="text-neutral-500" />
                   <span>Upload de arquivos para aprendizado</span>
@@ -641,7 +642,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   value={newProjectTools}
                   onChange={e => setNewProjectTools(e.target.value)}
                   placeholder="Ex: Busca Web, Manipulação de Arquivos..."
-                  className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50"
+                  className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-lg px-3 py-2.5 outline-none focus:border-indigo-500/50"
                 />
               </div>
             </div>
@@ -660,7 +661,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 onClick={handleCreateProject}
                 disabled={!newProjectName.trim() || isCreatingProject}
-                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-xl transition-colors flex items-center gap-2"
+                className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-md transition-colors flex items-center gap-2"
               >
                 {isCreatingProject && <Loader2 size={14} className="animate-spin" />}
                 {isCreatingProject ? 'Criando...' : 'Criar Projeto'}

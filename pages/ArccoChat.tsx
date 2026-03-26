@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Loader2, Sparkles, Save, FileText, Download, ChevronDown, Paperclip, HardDrive, FileSpreadsheet, Eye, Square, Plus, Link, Folder, Pencil, Trash2, Upload, X, Check, AlertTriangle, Wrench, Globe } from 'lucide-react';
+import { Send, Loader2, Sparkles, Save, FileText, Download, ChevronDown, Paperclip, HardDrive, FileSpreadsheet, Eye, Square, Plus, Link, Folder, Pencil, Trash2, Upload, X, Check, AlertTriangle, Wrench, Globe, Monitor } from 'lucide-react';
+import SpyPagesInputCard from '../components/chat/SpyPagesInputCard';
+import SpyPagesResultCard, { SpyPagesSite } from '../components/chat/SpyPagesResultCard';
 import { projectApi, Project, ProjectFile } from '../lib/projectApi';
 import { openRouterService } from '../lib/openrouter';
 import { agentApi, SessionFileItem, SessionFileStatus } from '../lib/api-client';
@@ -91,21 +93,21 @@ const FilePreviewCard: React.FC<FilePreviewCardProps> = ({ url, filename, type, 
         {onOpenPreview && (
           <button
             onClick={onOpenPreview}
-            className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition-colors"
+            className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition-colors"
           >
             <Eye size={13} /> Preview
           </button>
         )}
         <button
           onClick={handleDownload}
-          className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[#1a1a1a] hover:bg-[#222] border border-[#2a2a2a] text-neutral-400 hover:text-neutral-200 text-xs font-medium transition-all"
+          className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-md border border-neutral-700 text-neutral-400 hover:text-neutral-200 hover:border-neutral-600 text-xs font-medium transition-colors"
         >
           <Download size={13} /> Baixar
         </button>
         <button
           onClick={handleSaveToVault}
           disabled={isSaving}
-          className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[#1a1a1a] hover:bg-[#222] border border-[#2a2a2a] text-neutral-400 hover:text-neutral-200 text-xs font-medium transition-all disabled:opacity-50"
+          className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-md border border-neutral-700 text-neutral-400 hover:text-neutral-200 hover:border-neutral-600 text-xs font-medium transition-colors disabled:opacity-50"
         >
           {isSaving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
           Salvar
@@ -252,6 +254,14 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const [designPreview, setDesignPreview] = useState<{ designs: string[]; initialIndex: number } | null>(null);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [isSearchEnabled, setIsSearchEnabled] = useState(false);
+  const [computerEnabled, setComputerEnabled] = useState(false);
+  const [spyPagesActive, setSpyPagesActive] = useState(false);
+  const [spyPagesEnabled, setSpyPagesEnabled] = useState(false);
+  const [spyPagesUrls, setSpyPagesUrls] = useState<string[]>([]);
+  const [spyPagesLoading, setSpyPagesLoading] = useState(false);
+  const [spyPagesPreviewData, setSpyPagesPreviewData] = useState<SpyPagesSite[] | null>(null);
+  const [spyPagesResult, setSpyPagesResult] = useState<SpyPagesSite[] | null>(null);
+  const [showToolsDropdown, setShowToolsDropdown] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const notifiedFailedFilesRef = useRef<Set<string>>(new Set());
 
@@ -622,12 +632,26 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const handleSendMessage = async (text: string = inputValue) => {
     if (!text.trim() || isLoading || !isApiKeyReady) return;
 
+    // Injeta dados do Spy Pages já coletados como contexto para o agente
+    // Captura contexto Spy Pages antes de limpar o estado
+    const spyContext = spyPagesPreviewData && spyPagesPreviewData.length > 0
+      ? JSON.stringify(spyPagesPreviewData)
+      : null;
+
+    if (spyContext) {
+      setSpyPagesPreviewData(null);
+      setSpyPagesUrls([]);
+    } else if (spyPagesUrls.length > 0) {
+      setSpyPagesUrls([]);
+    }
+
+    // UI e histórico mostram APENAS a pergunta do usuário (sem o JSON de contexto)
     const userMsgId = Date.now().toString();
-    const newUserMsg: Message = { id: userMsgId, role: 'user', content: text, timestamp: new Date().toISOString() };
+    const newUserMsg: Message = { id: userMsgId, role: 'user', content: text.trim(), timestamp: new Date().toISOString() };
 
     const newMessages = [...messages, newUserMsg];
     setMessages(newMessages);
-    saveToSession(newMessages); // Save intermediate state
+    saveToSession(newMessages);
 
     setInputValue('');
     if (textareaRef.current) {
@@ -639,10 +663,11 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     setBrowserAction(null);
     setTextDocArtifact(null);
     setClarificationQuestions(null);
+    setSpyPagesResult(null);
     if (!isAgentMode) {
       setIsTerminalOpen(false);
       setTerminalContent('');
-      setChatThinkingMessage(generateThinkingMessage(text));
+      setChatThinkingMessage(generateThinkingMessage(text.trim()));
       // Garante visibilidade mínima do thinking panel (cancela timer anterior se houver)
       if (chatThinkingTimerRef.current) clearTimeout(chatThinkingTimerRef.current);
       chatThinkingStartRef.current = Date.now();
@@ -659,7 +684,16 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
     try {
 
-      const formattedMessages = newMessages.map(m => ({ role: m.role, content: m.content }));
+      // Injeta contexto Spy Pages na última mensagem do usuário (invisível no chat)
+      const formattedMessages = newMessages.map((m, i) => {
+        if (spyContext && i === newMessages.length - 1 && m.role === 'user') {
+          return {
+            role: m.role,
+            content: `[CONTEXTO COLETADO VIA SIMILARWEB/APIFY — use estes dados para responder com precisão]\n${spyContext}\n\n[PERGUNTA DO USUÁRIO]\n${m.content}`,
+          };
+        }
+        return { role: m.role, content: m.content };
+      });
 
       // Typing effect queue
       let displayContent = '';
@@ -803,6 +837,17 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             return;
           }
 
+          // Spy Pages result — dados SimilarWeb para o card interativo
+          if (type === 'spy_pages_result') {
+            try {
+              const sites: SpyPagesSite[] = typeof content === 'string' ? JSON.parse(content) : content;
+              setSpyPagesResult(sites);
+              setSpyPagesEnabled(false);
+              setSpyPagesUrls([]);
+            } catch { /* ignore */ }
+            return;
+          }
+
           if (type === 'chunk') {
             if (!hasStartedTalking) {
               hasStartedTalking = true;
@@ -838,6 +883,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
         projectId,
         conversationId,
         !isAgentMode && isSearchEnabled,
+        isAgentMode && computerEnabled,
+        isAgentMode && spyPagesEnabled,
       );
 
       // Wait for queue to finish draining typing effect
@@ -876,6 +923,27 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const handleSpyPagesSubmit = async (urls: string[]) => {
+    setSpyPagesLoading(true);
+    setSpyPagesUrls(urls);
+    try {
+      const results = await agentApi.prefetchSpyPages(urls);
+      setSpyPagesPreviewData(results);
+    } catch {
+      setSpyPagesPreviewData(null);
+      setSpyPagesActive(false);
+      setSpyPagesUrls([]);
+      showToast('Erro ao coletar dados do Apify. Verifique a API key.', 'error');
+    } finally {
+      setSpyPagesLoading(false);
+    }
+  };
+
+  const handleSpyPagesReady = () => {
+    setSpyPagesActive(false);
+    setSpyPagesEnabled(false); // dados já coletados, agente não precisa chamar Apify
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1001,8 +1069,52 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
   const renderInputArea = (variant: 'centered' | 'bottom') => (
     <div className={`relative group w-full ${variant === 'centered' ? 'max-w-2xl' : 'max-w-4xl mx-auto'}`}>
-      <div className="absolute -inset-0.5 bg-gradient-to-r from-neutral-700/20 to-neutral-500/20 rounded-[24px] blur opacity-0 group-hover:opacity-100 transition duration-500"></div>
+
+      {/* Spy Pages — card de entrada de URLs, aparece acima do input */}
+      {spyPagesActive && !isLoading && (
+        <div className="mb-2">
+          <SpyPagesInputCard
+            onSubmit={handleSpyPagesSubmit}
+            onClose={() => { setSpyPagesActive(false); setSpyPagesLoading(false); setSpyPagesPreviewData(null); setSpyPagesUrls([]); }}
+            isLoading={spyPagesLoading}
+            previewData={spyPagesPreviewData}
+            onConfirmReady={handleSpyPagesReady}
+          />
+        </div>
+      )}
+
+      <div className="absolute -inset-0.5 bg-gradient-to-r from-neutral-700/20 to-neutral-500/20 rounded-[24px] blur opacity-0 group-hover:opacity-100 transition duration-500 pointer-events-none"></div>
       <div className={`relative bg-[#121212]/95 border border-[#333] rounded-[24px] px-4 py-3 shadow-2xl ${variant === 'centered' ? 'min-h-[56px]' : ''}`}>
+
+        {/* URLs carregadas — chips acima da textarea */}
+        {spyPagesUrls.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap mb-2 pb-2 border-b border-[#222]">
+            <span className="text-[10px] text-violet-500 uppercase tracking-wide font-medium flex-shrink-0">Spy Pages</span>
+            {spyPagesUrls.map((url, i) => (
+              <span key={i} className="flex items-center gap-1 px-2 py-0.5 bg-violet-500/10 border border-violet-500/25 rounded-full text-[11px] text-violet-300">
+                <Eye size={9} />
+                <span className="max-w-[140px] truncate">{url}</span>
+                <button
+                  onClick={() => {
+                    const next = spyPagesUrls.filter((_, j) => j !== i);
+                    setSpyPagesUrls(next);
+                    if (next.length === 0) setSpyPagesEnabled(false);
+                  }}
+                  className="text-violet-500 hover:text-red-400 transition-colors ml-0.5"
+                >
+                  <X size={9} />
+                </button>
+              </span>
+            ))}
+            <button
+              onClick={() => { setSpyPagesUrls([]); setSpyPagesEnabled(false); }}
+              className="text-[10px] text-neutral-700 hover:text-neutral-500 transition-colors ml-1"
+            >
+              limpar
+            </button>
+          </div>
+        )}
+
         <div className="flex items-end gap-2">
         <textarea
           ref={textareaRef}
@@ -1016,8 +1128,9 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             }
           }}
           onKeyDown={handleKeyDown}
-          placeholder={isFileLoading ? "Enviando arquivo..." : "Digite sua mensagem... (Shift+Enter para nova linha)"}
-          className="flex-1 bg-transparent border-none outline-none text-white placeholder-neutral-500 focus:ring-0 resize-none overflow-hidden leading-relaxed py-0"
+          disabled={spyPagesLoading}
+          placeholder={spyPagesLoading ? "Coletando dados, aguarde..." : isFileLoading ? "Enviando arquivo..." : "Digite sua mensagem... (Shift+Enter para nova linha)"}
+          className="flex-1 bg-transparent border-none outline-none text-white placeholder-neutral-500 focus:ring-0 resize-none overflow-hidden leading-relaxed py-0 disabled:opacity-40 disabled:cursor-not-allowed"
           autoFocus={variant === 'centered'}
         />
 
@@ -1025,7 +1138,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
           <button
             onClick={() => handleSendMessage(inputValue)}
             disabled={isLoading || !isApiKeyReady || (!isAgentMode && !selectedChatConfig) || !inputValue.trim()}
-            className="p-2 rounded-lg text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors bg-neutral-800 hover:bg-neutral-700"
+            className="p-2 rounded-md text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors bg-white/[0.08] hover:bg-white/[0.13]"
           >
             <Send size={18} />
           </button>
@@ -1042,7 +1155,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             <button
               onClick={() => setShowAddMenu(!showAddMenu)}
               disabled={isFileLoading}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-full text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.03] transition-colors disabled:cursor-not-allowed"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.05] transition-colors disabled:cursor-not-allowed"
             >
               {isFileLoading
                 ? <Loader2 size={13} className="animate-spin text-indigo-400" />
@@ -1083,27 +1196,75 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             )}
           </div>
 
-          <div className="relative group/tools">
-            <button
-              onClick={() => showToast('Seletor de tools ainda não está conectado.', 'success')}
-              className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.03] transition-colors"
-            >
-              <Wrench size={12} />
-              <span>Tools</span>
-            </button>
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/tools:opacity-100 group-hover/tools:visible transition-all duration-150 pointer-events-none z-50">
-              Ferramentas disponíveis para o agente
+          {isAgentMode && (
+            <div className="relative">
+              <button
+                onClick={() => setShowToolsDropdown(p => !p)}
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-all duration-200 ${
+                  spyPagesActive
+                    ? 'text-violet-400 bg-violet-500/10 hover:bg-violet-500/15'
+                    : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.05]'
+                }`}
+              >
+                <Wrench size={12} />
+                <span>Tools</span>
+                {spyPagesActive && <span className="w-1.5 h-1.5 rounded-full bg-violet-400 ml-0.5" />}
+              </button>
+              {showToolsDropdown && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowToolsDropdown(false)} />
+                  <div className="absolute bottom-full left-0 mb-2 w-52 bg-[#1a1a1d] border border-[#333] rounded-xl shadow-2xl overflow-hidden z-50">
+                    <div className="px-3 pt-2.5 pb-1.5">
+                      <p className="text-[10px] text-neutral-600 uppercase tracking-wide">Ferramentas</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setSpyPagesActive(true);
+                        setShowToolsDropdown(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-white/[0.05] transition-colors"
+                    >
+                      <div className="w-7 h-7 rounded-lg bg-violet-500/15 flex items-center justify-center flex-shrink-0">
+                        <Eye size={13} className="text-violet-400" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-neutral-300">Spy Pages</p>
+                        <p className="text-[10px] text-neutral-600">Analise tráfego de sites</p>
+                      </div>
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
-          </div>
+          )}
+
+          {isAgentMode && (
+            <div className="relative group/computer">
+              <button
+                onClick={() => setComputerEnabled(p => !p)}
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-all duration-200 ${
+                  computerEnabled
+                    ? 'text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/15'
+                    : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.05]'
+                }`}
+              >
+                <Monitor size={12} />
+                <span>Computer</span>
+              </button>
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/computer:opacity-100 group-hover/computer:visible transition-all duration-150 pointer-events-none z-50">
+                {computerEnabled ? 'Ativo · a IA pode acessar seus arquivos' : 'Permite a IA acessar e gerenciar seus arquivos'}
+              </div>
+            </div>
+          )}
 
           {!isAgentMode && (
             <div className="relative group/search">
               <button
                 onClick={() => setIsSearchEnabled(p => !p)}
-                className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] transition-all duration-200 ${
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-all duration-200 ${
                   isSearchEnabled
                     ? 'text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/15'
-                    : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.03]'
+                    : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.05]'
                 }`}
               >
                 <Globe size={12} />
@@ -1218,15 +1379,6 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                       </div>
                       <Check size={13} className="text-indigo-400 flex-shrink-0" />
                     </button>
-                    <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg opacity-35 cursor-not-allowed mt-0.5">
-                      <div className="flex-shrink-0 w-7 h-7 rounded-lg bg-neutral-800 flex items-center justify-center">
-                        <Sparkles size={12} className="text-neutral-600" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-neutral-400">Arcco Symphony</p>
-                        <p className="text-[11px] text-neutral-600 mt-0.5">Em breve</p>
-                      </div>
-                    </div>
                   </div>
                 </div>
               </>
@@ -1282,10 +1434,10 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 setShowModelDropdown(false);
               }}
               disabled={messages.length > 0}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-300 border ${
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-200 ${
                 messages.length > 0
-                  ? 'text-neutral-700 border-[#252525] cursor-not-allowed opacity-50'
-                  : 'text-neutral-500 border-[#333] hover:text-neutral-300 hover:border-neutral-600'
+                  ? 'text-neutral-700 cursor-not-allowed opacity-40'
+                  : 'text-neutral-500 hover:text-neutral-200 hover:bg-white/[0.05]'
               }`}
             >
               <Sparkles size={13} className="opacity-50" />
@@ -1379,7 +1531,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   <button
                     key={hint}
                     onClick={() => handleSendMessage(hint)}
-                    className="px-4 py-2 bg-[#1a1a1a] hover:bg-[#222] border border-[#262626] rounded-full text-xs text-neutral-300 transition-colors"
+                    className="px-3 py-1.5 bg-[#1a1a1a] hover:bg-[#222] border border-[#2a2a2a] rounded-md text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
                   >
                     {hint}
                   </button>
@@ -1546,6 +1698,14 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   </div>
                 )}
 
+                {/* Spy Pages Result Card */}
+                {spyPagesResult && spyPagesResult.length > 0 && (
+                  <SpyPagesResultCard
+                    data={spyPagesResult}
+                    onGenerateReport={(prompt) => handleSendMessage(prompt)}
+                  />
+                )}
+
                 {/* Loading — Agent mode: aguardando primeiro step inline */}
                 {isLoading && isAgentMode && agentThoughts.length === 0 && (
                   <div className="w-full max-w-[85%] md:max-w-[80%] pl-[62px] py-1">
@@ -1573,7 +1733,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                         );
                         setIsThoughtsExpanded(false);
                       }}
-                      className="flex items-center gap-2 px-5 py-2 bg-[#141414] hover:bg-[#1e1e1e] border border-[#2a2a2a] hover:border-neutral-600 rounded-full text-[11px] text-neutral-500 hover:text-neutral-300 transition-all duration-200 backdrop-blur-sm"
+                      className="flex items-center gap-2 px-4 py-1.5 bg-[#141414] hover:bg-[#1e1e1e] border border-[#2a2a2a] hover:border-neutral-700 rounded-lg text-[11px] text-neutral-500 hover:text-neutral-300 transition-all duration-200"
                       title="Cancelar a geração da resposta"
                     >
                       <Square size={10} fill="currentColor" />

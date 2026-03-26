@@ -31,7 +31,7 @@ _E2B_ARTIFACT_EXCLUDED_DIRS = {
 }
 
 
-async def execute_tool(func_name: str, func_args: dict) -> str:
+async def execute_tool(func_name: str, func_args: dict, user_id: str | None = None) -> str:
     """Despachante principal: executa a ferramenta e retorna resultado como string."""
     if func_name == "web_search":
         return await _web_search(func_args.get("query", ""))
@@ -72,6 +72,20 @@ async def execute_tool(func_name: str, func_args: dict) -> str:
 
     elif func_name == "generate_pdf_template":
         return await _generate_pdf_template(func_args)
+
+    # ── Arcco Computer tools ──
+    elif func_name == "list_computer_files":
+        return await _list_computer_files(func_args, user_id)
+
+    elif func_name == "read_computer_file":
+        return await _read_computer_file(func_args, user_id)
+
+    elif func_name == "manage_computer_file":
+        return await _manage_computer_file(func_args, user_id)
+
+    # ── Spy Pages (SimilarWeb via Apify) ──
+    elif func_name == "analyze_web_pages":
+        return await _analyze_web_pages(func_args)
 
     return f"Ferramenta desconhecida: {func_name}"
 
@@ -720,3 +734,259 @@ async def _modify_pdf(args: dict) -> str:
         f"PDF modificado com sucesso. URL: {upload_url}\n\n"
         f"INSTRUÇÃO OBRIGATÓRIA: Inclua exatamente este link na resposta final: [Baixar PDF Modificado]({upload_url})"
     )
+
+
+# ── Arcco Computer Tools ─────────────────────────────────────────────────────
+
+
+async def _list_computer_files(args: dict, user_id: str | None) -> str:
+    """Lista arquivos do usuário no Arcco Computer."""
+    if not user_id:
+        return "Erro: user_id não disponível. O usuário precisa estar logado."
+
+    from backend.core.supabase_client import get_supabase_client
+
+    folder_path = args.get("folder_path", "/")
+    client = get_supabase_client()
+
+    try:
+        files = client.query(
+            "user_files",
+            select="id,file_name,file_type,size_bytes,folder_path,created_at",
+            filters={"user_id": user_id, "folder_path": folder_path},
+            order="created_at.desc",
+        )
+
+        if not files:
+            return f"Nenhum arquivo encontrado na pasta '{folder_path}'."
+
+        # Filtra markers de pasta
+        real_files = [f for f in files if f.get("file_type") != "folder"]
+
+        # Busca subpastas
+        all_paths = client.query(
+            "user_files",
+            select="folder_path",
+            filters={"user_id": user_id},
+        )
+        prefix = folder_path if folder_path == "/" else folder_path + "/"
+        subfolders = set()
+        for row in all_paths:
+            fp = row.get("folder_path", "")
+            if fp and fp != folder_path and fp.startswith(prefix):
+                rest = fp[len(prefix):]
+                next_level = rest.split("/")[0]
+                if next_level:
+                    subfolders.add(next_level)
+
+        lines = [f"Pasta: {folder_path}"]
+        if subfolders:
+            lines.append(f"Subpastas: {', '.join(sorted(subfolders))}")
+        lines.append(f"Arquivos ({len(real_files)}):")
+        for f in real_files:
+            size = f.get("size_bytes", 0)
+            size_str = f"{size} B" if size < 1024 else f"{size / 1024:.1f} KB" if size < 1048576 else f"{size / 1048576:.1f} MB"
+            lines.append(f"  - id={f['id']} | {f['file_name']} | {f.get('file_type', '?')} | {size_str}")
+
+        return "\n".join(lines)
+    except Exception as exc:
+        logger.error("Erro ao listar arquivos do Computer: %s", exc)
+        return f"Erro ao listar arquivos: {exc}"
+
+
+async def _read_computer_file(args: dict, user_id: str | None) -> str:
+    """Lê conteúdo de um arquivo do Arcco Computer."""
+    if not user_id:
+        return "Erro: user_id não disponível."
+
+    from backend.core.supabase_client import get_supabase_client
+
+    file_id = args.get("file_id", "")
+    query = args.get("query")
+
+    if not file_id:
+        return "Erro: file_id é obrigatório."
+
+    client = get_supabase_client()
+
+    try:
+        rows = client.query(
+            "user_files",
+            filters={"id": file_id, "user_id": user_id},
+        )
+        if not rows:
+            return f"Arquivo não encontrado (id={file_id})."
+
+        file_meta = rows[0]
+        file_url = file_meta.get("file_url", "")
+        file_name = file_meta.get("file_name", "arquivo")
+        file_type = file_meta.get("file_type", "")
+
+        if not file_url:
+            return f"Arquivo '{file_name}' não possui URL."
+
+        # Baixa o conteúdo
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            resp = await http.get(file_url, follow_redirects=True)
+        if resp.status_code != 200:
+            return f"Erro ao baixar '{file_name}': HTTP {resp.status_code}"
+
+        content_bytes = resp.content
+
+        # Extrai texto baseado no tipo
+        text = await asyncio.to_thread(_extract_text_from_bytes, content_bytes, file_name, file_type)
+
+        if not text or not text.strip():
+            return f"O arquivo '{file_name}' não contém texto legível."
+
+        # RAG se query fornecida
+        if query:
+            try:
+                from backend.services.ephemeral_rag_service import search_relevant_chunks, format_chunk_results
+                chunks = search_relevant_chunks(text, query)
+                return format_chunk_results(file_name, chunks)
+            except Exception:
+                pass  # fallback para preview simples
+
+        preview = text[:4000].strip()
+        if len(text) > 4000:
+            preview += "\n\n... [conteúdo truncado — use query para buscar trechos específicos]"
+        return f"Conteúdo de '{file_name}':\n\n{preview}"
+
+    except Exception as exc:
+        logger.error("Erro ao ler arquivo do Computer (id=%s): %s", file_id, exc)
+        return f"Erro ao ler arquivo: {exc}"
+
+
+def _extract_text_from_bytes(content: bytes, filename: str, mime_type: str) -> str:
+    """Extrai texto de bytes baseado no tipo do arquivo."""
+    name_lower = filename.lower()
+
+    # PDF
+    if "pdf" in mime_type or name_lower.endswith(".pdf"):
+        return _read_pdf_text(content)
+
+    # Excel
+    if "spreadsheet" in mime_type or "excel" in mime_type or name_lower.endswith((".xlsx", ".xls")):
+        return _read_excel_structure(content)
+
+    # PPTX
+    if "presentation" in mime_type or name_lower.endswith((".pptx", ".ppt")):
+        return _read_pptx_structure(content)
+
+    # DOCX
+    if "document" in mime_type or name_lower.endswith(".docx"):
+        try:
+            from docx import Document
+            doc = Document(io.BytesIO(content))
+            return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        except Exception:
+            return content.decode("utf-8", errors="replace")
+
+    # Texto puro / CSV / JSON / MD
+    if any(t in mime_type for t in ("text", "json", "csv", "markdown")) or name_lower.endswith(
+        (".txt", ".csv", ".md", ".json", ".html", ".css", ".js")
+    ):
+        return content.decode("utf-8", errors="replace")
+
+    # Fallback: tenta como texto
+    try:
+        return content.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+async def _manage_computer_file(args: dict, user_id: str | None) -> str:
+    """Gerencia arquivos no Arcco Computer: mover, renomear, criar pasta, salvar novo."""
+    if not user_id:
+        return "Erro: user_id não disponível."
+
+    from backend.core.supabase_client import get_supabase_client, upload_to_supabase
+
+    action = args.get("action", "")
+    client = get_supabase_client()
+
+    try:
+        if action == "move":
+            file_id = args.get("file_id", "")
+            target = args.get("target_folder", "/")
+            if not file_id:
+                return "Erro: file_id é obrigatório para mover."
+            client.update("user_files", {"folder_path": target}, {"id": file_id, "user_id": user_id})
+            return f"Arquivo movido para '{target}'."
+
+        elif action == "rename":
+            file_id = args.get("file_id", "")
+            new_name = args.get("new_name", "")
+            if not file_id or not new_name:
+                return "Erro: file_id e new_name são obrigatórios para renomear."
+            client.update("user_files", {"file_name": new_name}, {"id": file_id, "user_id": user_id})
+            return f"Arquivo renomeado para '{new_name}'."
+
+        elif action == "create_folder":
+            target = args.get("target_folder", "")
+            if not target or target == "/":
+                return "Erro: informe o caminho da pasta (ex: /Marketing)."
+            client.insert("user_files", {
+                "user_id": user_id,
+                "file_name": ".folder",
+                "file_url": "",
+                "file_type": "folder",
+                "folder_path": target,
+                "size_bytes": 0,
+            })
+            return f"Pasta '{target}' criada."
+
+        elif action == "save_new":
+            file_name = args.get("file_name", f"arquivo_{int(time.time())}.txt")
+            content = args.get("content", "")
+            file_type = args.get("file_type", "text/plain")
+            target_folder = args.get("target_folder", "/")
+
+            if not content:
+                return "Erro: content é obrigatório para salvar novo arquivo."
+
+            content_bytes = content.encode("utf-8")
+            storage_path = f"{user_id}/{int(time.time())}_{file_name}"
+
+            sb_client = get_supabase_client()
+            public_url = sb_client.storage_upload("user_artifacts", storage_path, content_bytes, file_type)
+
+            client.insert("user_files", {
+                "user_id": user_id,
+                "file_name": file_name,
+                "file_url": public_url,
+                "file_type": file_type,
+                "size_bytes": len(content_bytes),
+                "folder_path": target_folder,
+            })
+            return f"Arquivo '{file_name}' salvo em '{target_folder}'."
+
+        else:
+            return f"Ação desconhecida: '{action}'. Use: move, rename, create_folder ou save_new."
+
+    except Exception as exc:
+        logger.error(f"[COMPUTER] Erro em manage_computer_file action='{action}': {exc}")
+        return f"Erro ao executar ação '{action}': {exc}"
+
+
+# ── Spy Pages (SimilarWeb via Apify) ─────────────────────────────────────────
+
+async def _analyze_web_pages(args: dict) -> str:
+    import json as _json
+    from backend.services.apify_service import analyze_pages
+
+    urls = args.get("urls", [])[:4]
+    if not urls:
+        return "Erro: nenhuma URL fornecida para análise."
+
+    try:
+        results = await analyze_pages(urls)
+        return _json.dumps(results, ensure_ascii=False)
+    except Exception as exc:
+        logger.error(f"[EXECUTOR] Erro em analyze_web_pages: {exc}")
+        return f"Erro ao analisar sites: {exc}"
+
+    except Exception as exc:
+        logger.error("Erro ao gerenciar arquivo do Computer (action=%s): %s", action, exc)
+        return f"Erro ao executar '{action}': {exc}"

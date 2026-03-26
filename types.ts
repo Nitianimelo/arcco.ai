@@ -10,7 +10,8 @@ export type ViewState =
   | 'PROJETOS'            // Projetos
   | 'TOOLS_MY'            // Minhas Tools
   | 'TOOLS_STORE'         // Loja de Tools
-  | 'ARCCO_DRIVE'         // Arcco Drive - Cofre de Arquivos
+  | 'ARCCO_DRIVE'         // Legacy (redirect to ARCCO_COMPUTER)
+  | 'ARCCO_COMPUTER'      // Arcco Computer - File Manager
   | 'ARCCO_CHAT'          // Arcco Chat - Chat com IA
   | 'AULAS'               // Aulas (em breve)
   | 'SUPORTE'             // Suporte

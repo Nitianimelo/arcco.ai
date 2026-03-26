@@ -83,31 +83,13 @@ interface ToolFromAPI {
 // Fallback local caso a API esteja fora do ar
 const FALLBACK_TOOLS: ToolDefinition[] = [
   {
-    id: 'web_search',
-    name: 'Busca Web',
-    description: 'Pesquisa informações atualizadas na internet usando múltiplas fontes.',
-    icon: Globe,
-    category: 'Pesquisa',
+    id: 'spy_pages',
+    name: 'Spy Pages',
+    description: 'Analise tráfego, engajamento, países e concorrentes de qualquer site com dados do SimilarWeb.',
+    icon: Eye,
+    category: 'Análise',
     status: 'available',
-    color: 'from-blue-500/20 to-blue-600/10 border-blue-500/30',
-  },
-  {
-    id: 'python_executor',
-    name: 'Execução Python',
-    description: 'Executa código Python em sandbox seguro na nuvem.',
-    icon: Code2,
-    category: 'Código',
-    status: 'available',
-    color: 'from-yellow-500/20 to-yellow-600/10 border-yellow-500/30',
-  },
-  {
-    id: 'doc_generator',
-    name: 'Gerador de Documentos',
-    description: 'Cria documentos profissionais em DOCX e PDF.',
-    icon: FileText,
-    category: 'Documentos',
-    status: 'available',
-    color: 'from-emerald-500/20 to-emerald-600/10 border-emerald-500/30',
+    color: 'from-violet-500/20 to-violet-600/10 border-violet-500/30',
   },
 ];
 
@@ -131,7 +113,7 @@ function saveSelectedTools(ids: string[]) {
 // Componente principal
 // ────────────────────────────────────────────────────────────
 
-const CATEGORIES = ['Todas', 'Pesquisa', 'Código', 'Documentos', 'Automação', 'Análise', 'Em breve'] as const;
+const CATEGORIES = ['Todas', 'Análise'] as const;
 type FilterCategory = typeof CATEGORIES[number];
 
 const ToolsStorePage: React.FC = () => {

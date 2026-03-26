@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import ArccoChatPage from './pages/ArccoChat';
-import { ArccoDrivePage } from './pages/ArccoDrive';
+import { ArccoComputerPage } from './pages/ArccoComputer';
 import { AdminPage } from './pages/AdminPage';
 import ToolsStorePage from './pages/ToolsStorePage';
 import MyToolsPage from './pages/MyToolsPage';
@@ -195,8 +195,13 @@ function App() {
             onClearInitialMessage={() => setInitialChatIntent(null)}
           />
         );
+      case 'ARCCO_COMPUTER':
       case 'ARCCO_DRIVE':
-        return <ArccoDrivePage />;
+        return (
+          <ArccoComputerPage
+            userId={userId}
+          />
+        );
       case 'TOOLS_STORE':
         return <ToolsStorePage />;
       case 'TOOLS_MY':

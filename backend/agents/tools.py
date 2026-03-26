@@ -709,3 +709,127 @@ SUPERVISOR_TOOLS = [
         }
     },
 ]
+
+# ── Tools do Arcco Computer (incluídas condicionalmente quando computer_enabled=True) ──
+
+COMPUTER_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_computer_files",
+            "description": (
+                "Lista os arquivos do usuário no Arcco Computer. "
+                "Use para saber quais arquivos o usuário possui antes de ler ou manipular. "
+                "Retorna id, nome, tipo, tamanho e data de cada arquivo."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "folder_path": {
+                        "type": "string",
+                        "description": "Caminho da pasta. '/' para raiz, '/Marketing' para subpasta. Default: '/'"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_computer_file",
+            "description": (
+                "Lê o conteúdo de um arquivo do Arcco Computer do usuário. "
+                "Baixa e extrai texto de PDFs, DOCX, XLSX, imagens (OCR) e texto puro. "
+                "Use o file_id obtido via list_computer_files."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_id": {
+                        "type": "string",
+                        "description": "ID do arquivo (obtido via list_computer_files)"
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Pergunta ou termos para buscar trechos relevantes (opcional, ativa RAG)"
+                    }
+                },
+                "required": ["file_id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_computer_file",
+            "description": (
+                "Gerencia arquivos no Arcco Computer do usuário: mover para outra pasta, "
+                "renomear, criar nova pasta ou salvar um novo arquivo gerado."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["move", "rename", "create_folder", "save_new"],
+                        "description": "Ação: move (mover arquivo), rename (renomear), create_folder (criar pasta), save_new (salvar novo arquivo)"
+                    },
+                    "file_id": {
+                        "type": "string",
+                        "description": "ID do arquivo (obrigatório para move e rename)"
+                    },
+                    "new_name": {
+                        "type": "string",
+                        "description": "Novo nome do arquivo (para rename)"
+                    },
+                    "target_folder": {
+                        "type": "string",
+                        "description": "Pasta destino. Ex: '/', '/Marketing', '/Docs' (para move, create_folder e save_new)"
+                    },
+                    "file_name": {
+                        "type": "string",
+                        "description": "Nome do novo arquivo (para save_new)"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Conteúdo do novo arquivo em texto ou HTML (para save_new)"
+                    },
+                    "file_type": {
+                        "type": "string",
+                        "description": "Tipo MIME do novo arquivo. Ex: text/plain, text/html, application/json (para save_new)"
+                    }
+                },
+                "required": ["action"]
+            }
+        }
+    },
+]
+
+# ── Spy Pages Tools (SimilarWeb via Apify) ───────────────────────────────────
+
+SPY_PAGES_TOOLS: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_web_pages",
+            "description": (
+                "Analisa tráfego e métricas de sites usando dados do SimilarWeb via Apify. "
+                "Retorna visitas mensais, bounce rate, tempo médio no site, páginas por visita, "
+                "ranking global, top países de audiência, páginas mais visitadas e concorrentes. "
+                "Use esta tool quando o usuário pedir para analisar, espiar ou comparar sites."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Lista de URLs ou domínios para analisar. Máximo 4. Exemplos: ['google.com', 'https://facebook.com']"
+                    }
+                },
+                "required": ["urls"]
+            }
+        }
+    }
+]

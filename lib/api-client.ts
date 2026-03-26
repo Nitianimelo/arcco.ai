@@ -9,7 +9,9 @@ export type ChatStreamEventType =
     | 'browser_action'
     | 'text_doc'
     | 'file_artifact'
-    | 'clarification';
+    | 'clarification'
+    | 'spy_pages_result'
+    | 'pre_action';
 
 export interface ChatStreamEvent {
     type: ChatStreamEventType;
@@ -119,6 +121,8 @@ export const agentApi = {
         projectId?: string | null,
         conversationId?: string | null,
         webSearch?: boolean,
+        computerEnabled?: boolean,
+        spyPagesEnabled?: boolean,
     ): Promise<string> {
         const res = await fetch(`${API_BASE}/chat`, {
             method: 'POST',
@@ -133,6 +137,8 @@ export const agentApi = {
                 ...(projectId ? { project_id: projectId } : {}),
                 ...(conversationId ? { conversation_id: conversationId } : {}),
                 ...(webSearch ? { web_search: true } : {}),
+                ...(computerEnabled ? { computer_enabled: true } : {}),
+                ...(spyPagesEnabled ? { spy_pages_enabled: true } : {}),
             }),
             signal,
         });
@@ -159,8 +165,19 @@ export const agentApi = {
                 for (const line of lines) {
                     if (!line.startsWith('data: ')) continue;
                     try {
-                        const event = JSON.parse(line.slice(6)) as ChatStreamEvent;
+                        const raw = JSON.parse(line.slice(6)) as any;
+                        const eventType: ChatStreamEventType = raw.type;
 
+                        // spy_pages_result usa campo "data" em vez de "content"
+                        if (eventType === 'spy_pages_result') {
+                            if (onEvent) {
+                                const payload = typeof raw.data === 'string' ? raw.data : JSON.stringify(raw.data ?? []);
+                                onEvent('spy_pages_result', payload);
+                            }
+                            continue;
+                        }
+
+                        const event = raw as ChatStreamEvent;
                         if (onEvent) onEvent(event.type, event.content);
 
                         if (event.type === 'chunk') {
@@ -237,6 +254,17 @@ export const agentApi = {
 
         const data = await res.json();
         return data.files || [];
+    },
+
+    async prefetchSpyPages(urls: string[]): Promise<any[]> {
+        const res = await fetch(`${API_BASE}/spy-pages-prefetch`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ urls }),
+        });
+        if (!res.ok) throw new Error(`Spy Pages prefetch falhou (${res.status})`);
+        const data = await res.json();
+        return data.results || [];
     },
 
     async deleteSessionFiles(sessionId: string): Promise<void> {

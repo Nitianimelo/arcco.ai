@@ -25,7 +25,8 @@ from typing import AsyncGenerator
 from backend.core.llm import call_openrouter, stream_openrouter
 from backend.agents import registry
 from backend.agents.executor import execute_tool
-from backend.agents.tools import SUPERVISOR_TOOLS
+from backend.agents.tools import SUPERVISOR_TOOLS, COMPUTER_TOOLS, SPY_PAGES_TOOLS
+from backend.skills import loader as skills_loader
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,11 @@ def _build_pre_action_ack(tool_calls: list) -> str | None:
     if name == "read_session_file":
         fn = args.get("file_name", "")
         return f"Consultando o arquivo {fn[:40]}..." if fn else "Consultando o arquivo anexado..."
+    if name == "analyze_web_pages":
+        urls = args.get("urls", [])
+        if urls:
+            return f"Analisando {len(urls)} site(s) via SimilarWeb..."
+        return "Analisando sites via SimilarWeb..."
     return None
 
 
@@ -118,6 +124,12 @@ TOOL_MAP = {
     "ask_web_search": {"route": "web_search", "is_terminal": False},
     "execute_python": {"route": "python", "is_terminal": False},
     "deep_research": {"route": "deep_research", "is_terminal": False},
+    # Arcco Computer tools (só ativas quando computer_enabled=True)
+    "list_computer_files": {"route": "computer", "is_terminal": False},
+    "read_computer_file": {"route": "computer", "is_terminal": False},
+    "manage_computer_file": {"route": "computer", "is_terminal": False},
+    # Spy Pages (SimilarWeb via Apify) — só ativa quando spy_pages_enabled=True
+    "analyze_web_pages": {"route": "spy_pages", "is_terminal": False},
 }
 
 # Rotas que DEVEM conter links de download
@@ -181,43 +193,120 @@ async def _call_supervisor_for_step(
     step_messages: list,
     supervisor_model: str,
     tool_choice,
+    tools: list,
     forced_tool_name: str | None = None,
 ) -> dict:
     """
     Executa a chamada do supervisor para um passo do planner.
-    Se uma ferramenta específica foi forçada e o modelo ignorar o tool call,
-    faz uma segunda tentativa com instrução explícita para evitar falha silenciosa.
-    """
-    data = await call_openrouter(
-        messages=step_messages,
-        model=supervisor_model,
-        max_tokens=4096,
-        tools=SUPERVISOR_TOOLS,
-        tool_choice=tool_choice,
-    )
-    message = data["choices"][0]["message"]
 
-    if forced_tool_name and not message.get("tool_calls"):
-        logger.warning(
-            "[ORCHESTRATOR] Modelo ignorou tool_choice forçado '%s'. Reforçando instrução.",
-            forced_tool_name,
+    Comportamentos adaptativos:
+    - Se o modelo está cacheado como "sem suporte a tool_choice forçado", vai direto para
+      tool_choice='auto' sem tentar e falhar (zero overhead após primeira descoberta).
+    - Se a chamada falha com 404/"tool_choice", registra no cache e retenta com "auto".
+    - Se o modelo ignora o tool_choice mas responde em texto, reforça via instrução.
+    - Se o modelo não suporta tools algum, registra e lança erro informativo.
+    """
+    from backend.core.model_capabilities import (
+        supports_forced_tool_choice,
+        mark_no_forced_tool_choice,
+        supports_tools,
+        mark_no_tools,
+    )
+
+    # Se já sabemos que o modelo não suporta forced tool_choice, vai direto para "auto"
+    effective_tool_choice = tool_choice
+    if forced_tool_name and not supports_forced_tool_choice(supervisor_model):
+        effective_tool_choice = "auto"
+        logger.debug(
+            "[ORCHESTRATOR] '%s' → tool_choice='auto' (capacidade cacheada)", supervisor_model
         )
-        retry_messages = step_messages + [
-            {
-                "role": "system",
-                "content": (
-                    f"Você DEVE responder chamando exclusivamente a ferramenta '{forced_tool_name}'. "
-                    "Não responda em texto livre."
-                ),
-            }
-        ]
-        retry = await call_openrouter(
-            messages=retry_messages,
+
+    def _build_forced_instruction_messages(base: list) -> list:
+        """Adiciona instrução textual para guiar modelo sem tool_choice forçado."""
+        if not forced_tool_name:
+            return base
+        return base + [{
+            "role": "system",
+            "content": (
+                f"Você DEVE responder chamando exclusivamente a ferramenta '{forced_tool_name}'. "
+                "Não responda em texto livre."
+            ),
+        }]
+
+    def _is_tool_choice_error(err: Exception) -> bool:
+        s = str(err)
+        return "tool_choice" in s and ("No endpoints found" in s or "404" in s)
+
+    def _is_no_tools_error(err: Exception) -> bool:
+        s = str(err).lower()
+        return ("tool" in s or "function" in s) and (
+            "not support" in s or "unsupported" in s or "invalid" in s
+        ) and "tool_choice" not in str(err)
+
+    try:
+        data = await call_openrouter(
+            messages=_build_forced_instruction_messages(step_messages) if effective_tool_choice == "auto" else step_messages,
             model=supervisor_model,
             max_tokens=4096,
-            tools=SUPERVISOR_TOOLS,
-            tool_choice=tool_choice,
+            tools=tools,
+            tool_choice=effective_tool_choice,
         )
+    except Exception as e:
+        if _is_tool_choice_error(e):
+            # Modelo não suporta tool_choice forçado — aprender e retentar
+            mark_no_forced_tool_choice(supervisor_model)
+            logger.warning(
+                "[ORCHESTRATOR] '%s' não suporta tool_choice forçado → fallback 'auto'.",
+                supervisor_model,
+            )
+            data = await call_openrouter(
+                messages=_build_forced_instruction_messages(step_messages),
+                model=supervisor_model,
+                max_tokens=4096,
+                tools=tools,
+                tool_choice="auto",
+            )
+        elif _is_no_tools_error(e):
+            # Modelo sem suporte a function calling — registrar e informar
+            mark_no_tools(supervisor_model)
+            raise Exception(
+                f"O modelo '{supervisor_model}' não suporta function calling. "
+                "Troque o modelo do agente 'chat' no painel admin → Orquestração."
+            )
+        else:
+            raise
+
+    message = data["choices"][0]["message"]
+
+    # Se esperávamos um tool_call mas o modelo respondeu em texto mesmo com "auto"
+    if forced_tool_name and not message.get("tool_calls"):
+        logger.warning(
+            "[ORCHESTRATOR] '%s' ignorou tool_choice forçado '%s'. Reforçando instrução.",
+            supervisor_model,
+            forced_tool_name,
+        )
+        retry_messages = _build_forced_instruction_messages(step_messages)
+        retry_tool_choice = "auto" if not supports_forced_tool_choice(supervisor_model) else tool_choice
+        try:
+            retry = await call_openrouter(
+                messages=retry_messages,
+                model=supervisor_model,
+                max_tokens=4096,
+                tools=tools,
+                tool_choice=retry_tool_choice,
+            )
+        except Exception as e:
+            if _is_tool_choice_error(e):
+                mark_no_forced_tool_choice(supervisor_model)
+                retry = await call_openrouter(
+                    messages=retry_messages,
+                    model=supervisor_model,
+                    max_tokens=4096,
+                    tools=tools,
+                    tool_choice="auto",
+                )
+            else:
+                raise
         message = retry["choices"][0]["message"]
 
     return message
@@ -364,7 +453,7 @@ async def _run_specialist_with_tools(
                 func_name = tool["function"]["name"]
                 try:
                     func_args = json.loads(tool["function"]["arguments"])
-                    result = await execute_tool(func_name, func_args)
+                    result = await execute_tool(func_name, func_args, user_id=user_id)
                 except json.JSONDecodeError:
                     result = "Erro: Argumentos da ferramenta com JSON inválido. Corrija a formatação JSON e tente novamente."
                 except Exception as e:
@@ -408,7 +497,7 @@ async def _run_terminal_one_shot(
     func_name = tool["function"]["name"]
     try:
         func_args = json.loads(tool["function"]["arguments"])
-        result = await execute_tool(func_name, func_args)
+        result = await execute_tool(func_name, func_args, user_id=user_id)
     except json.JSONDecodeError:
         result = "Erro: argumentos JSON inválidos na ferramenta. Tente novamente."
     except Exception as e:
@@ -480,6 +569,9 @@ async def orchestrate_and_stream(
     messages: list,
     model: str,
     session_id: str | None = None,
+    user_id: str | None = None,
+    computer_enabled: bool = False,
+    spy_pages_enabled: bool = False,
     execution_id: str | None = None,
     execution_logger = None,
 ) -> AsyncGenerator[str, None]:
@@ -496,9 +588,31 @@ async def orchestrate_and_stream(
     supervisor_model = registry.get_model("chat") or model
     session_inventory_message = _build_session_inventory_message(session_id)
 
+    # Extrai o intent antes de tudo — necessário para filtro de skills
     user_intent = next(
         (str(m["content"]) for m in reversed(messages) if m.get("role") == "user"), ""
     )
+
+    # Monta tools dinamicamente (inclui Computer, Spy Pages e Skills dinâmicas se disponíveis)
+    # Skills são filtradas por relevância ao intent do usuário — evita injetar 70 skills desnecessárias
+    active_tools = (
+        SUPERVISOR_TOOLS
+        + (COMPUTER_TOOLS if computer_enabled else [])
+        + (SPY_PAGES_TOOLS if spy_pages_enabled else [])
+        + skills_loader.get_skill_tool_definitions(user_intent)
+    )
+    if computer_enabled:
+        supervisor_prompt += (
+            "\n\nO usuário ativou o Arcco Computer. Você tem acesso a ferramentas para listar, ler e gerenciar "
+            "os arquivos pessoais do usuário. Use list_computer_files para ver os arquivos, read_computer_file "
+            "para ler conteúdo, e manage_computer_file para mover, renomear, criar pastas ou salvar novos arquivos."
+        )
+    if spy_pages_enabled:
+        supervisor_prompt += (
+            "\n\nO usuário ativou o Spy Pages. Use a ferramenta analyze_web_pages para analisar tráfego, "
+            "métricas de engajamento e concorrentes dos sites solicitados. Passe as URLs exatamente como "
+            "o usuário forneceu."
+        )
 
     planner_model = registry.get_model("planner") or supervisor_model
 
@@ -651,6 +765,7 @@ async def orchestrate_and_stream(
                     step_messages=step_messages,
                     supervisor_model=supervisor_model,
                     tool_choice=_tool_choice,
+                    tools=active_tools,
                     forced_tool_name=_forced_tool_name,
                 )
                 if execution_logger:
@@ -698,11 +813,15 @@ async def orchestrate_and_stream(
                         yield sse("steps", "<step>Erro de argumentos sub-agente. Ignorando...</step>")
                         continue
 
-                    if func_name not in TOOL_MAP:
+                    if func_name in TOOL_MAP:
+                        route = TOOL_MAP[func_name]["route"]
+                        is_terminal = TOOL_MAP[func_name]["is_terminal"]
+                    elif skills_loader.is_skill(func_name):
+                        route = "dynamic_skill"
+                        is_terminal = False
+                    else:
                         continue
-                        
-                    route = TOOL_MAP[func_name]["route"]
-                    is_terminal = TOOL_MAP[func_name]["is_terminal"]
+
                     recent_context = [m for m in step_messages if m.get("role") in ["user", "assistant"]][-5:]
                     tool_agent_id = None
                     if execution_logger:
@@ -720,7 +839,7 @@ async def orchestrate_and_stream(
                     try:
 
                         if route == "session_file":
-                            specialist_result = await execute_tool("read_session_file", func_args)
+                            specialist_result = await execute_tool("read_session_file", func_args, user_id=user_id)
                             if execution_logger:
                                 await execution_logger.log_event(
                                     execution_id,
@@ -743,7 +862,7 @@ async def orchestrate_and_stream(
                             query = func_args.get("query", "")
                             specialist_result = None
                             async for event in _exec_with_heartbeat(
-                                execute_tool("web_search", {"query": query}),
+                                execute_tool("web_search", {"query": query}, user_id=user_id),
                                 lambda elapsed: sse("steps", f"<step>Pesquisando na web — {int(elapsed)}s...</step>"),
                                 timeout=_SEARCH_TIMEOUT,
                             ):
@@ -777,7 +896,7 @@ async def orchestrate_and_stream(
 
                         elif route == "python":
                             yield sse("steps", f"<step>Executando código Python (Passo {step.step})...</step>")
-                            specialist_result = await execute_tool("execute_python", func_args)
+                            specialist_result = await execute_tool("execute_python", func_args, user_id=user_id)
                             async for artifact_event in _emit_file_artifacts(specialist_result):
                                 yield artifact_event
                             if specialist_result.startswith("Erro"):
@@ -819,7 +938,7 @@ async def orchestrate_and_stream(
 
                             specialist_result = None
                             async for event in _exec_with_heartbeat(
-                                execute_tool("ask_browser", func_args),
+                                execute_tool("ask_browser", func_args, user_id=user_id),
                                 lambda elapsed: sse("steps", f"<step>Navegador ativo — {int(elapsed)}s...</step>"),
                                 timeout=_BROWSER_TIMEOUT,
                             ):
@@ -890,6 +1009,23 @@ async def orchestrate_and_stream(
                             async for artifact_event in _emit_file_artifacts(research_result):
                                 yield artifact_event
                             accumulated_context += f"\n[Passo {step.step} - deep_research]: {research_result}"
+
+                        elif route == "spy_pages":
+                            yield sse("steps", f"<step>Analisando sites via SimilarWeb (Passo {step.step})...</step>")
+                            spy_result = await execute_tool("analyze_web_pages", func_args, user_id=user_id)
+                            # Emite evento especial para o frontend renderizar o card
+                            yield f'data: {json.dumps({"type": "spy_pages_result", "data": spy_result})}\n\n'
+                            accumulated_context += f"\n[Passo {step.step} - spy_pages]: {spy_result}"
+                            yield sse("thought", "Dados SimilarWeb obtidos com sucesso.")
+
+                        elif route == "dynamic_skill":
+                            yield sse("steps", f"<step>Executando skill: {func_name} (Passo {step.step})...</step>")
+                            try:
+                                specialist_result = await skills_loader.execute_dynamic_skill(func_name, func_args)
+                            except Exception as e:
+                                specialist_result = f"Erro na skill {func_name}: {e}"
+                            accumulated_context += f"\n[Passo {step.step} - {func_name}]: {specialist_result}"
+                            yield sse("thought", f"Skill {func_name} executada com sucesso.")
 
                         elif is_terminal:
                             # Ferramentas que PODEM ser terminais (text_generator, design_generator)
@@ -1155,7 +1291,7 @@ async def orchestrate_and_stream(
                 messages=current_messages,
                 model=supervisor_model,
                 max_tokens=4096,
-                tools=SUPERVISOR_TOOLS
+                tools=active_tools,
             )
             message = data["choices"][0]["message"]
         except (KeyError, IndexError) as e:
@@ -1196,16 +1332,19 @@ async def orchestrate_and_stream(
                     yield sse("steps", "<step>Aguardando sub-agente corrigir os parâmetros da ferramenta...</step>")
                     continue
 
-                if func_name not in TOOL_MAP:
+                if func_name in TOOL_MAP:
+                    route = TOOL_MAP[func_name]["route"]
+                    is_terminal = TOOL_MAP[func_name]["is_terminal"]
+                elif skills_loader.is_skill(func_name):
+                    route = "dynamic_skill"
+                    is_terminal = False
+                else:
                     current_messages.append({
                         "role": "tool",
                         "tool_call_id": tool["id"],
                         "content": f"Erro: ferramenta '{func_name}' não suportada pelo orquestrador.",
                     })
                     continue
-
-                route = TOOL_MAP[func_name]["route"]
-                is_terminal = TOOL_MAP[func_name]["is_terminal"]
                 react_agent_id = None
                 if execution_logger:
                     react_agent_id = await execution_logger.start_agent(
@@ -1225,7 +1364,7 @@ async def orchestrate_and_stream(
                 if route == "session_file":
                     file_name = func_args.get("file_name", "")
                     yield sse("steps", f"<step>Consultando anexo da sessão: {file_name[:60]}...</step>")
-                    specialist_result = await execute_tool("read_session_file", func_args)
+                    specialist_result = await execute_tool("read_session_file", func_args, user_id=user_id)
                     if execution_logger:
                         await execution_logger.log_event(
                             execution_id,
@@ -1252,7 +1391,7 @@ async def orchestrate_and_stream(
 
                     specialist_result = None
                     async for event in _exec_with_heartbeat(
-                        execute_tool("web_search", {"query": query}),
+                        execute_tool("web_search", {"query": query}, user_id=user_id),
                         lambda elapsed: sse("steps", f"<step>Pesquisando na web — {int(elapsed)}s...</step>"),
                         timeout=_SEARCH_TIMEOUT,
                     ):
@@ -1284,7 +1423,7 @@ async def orchestrate_and_stream(
                         yield sse("steps", f"<step>Lendo página {fetch_url[:50]}...</step>")
                         try:
                             page_content = await asyncio.wait_for(
-                                execute_tool("web_fetch", {"url": fetch_url}),
+                                execute_tool("web_fetch", {"url": fetch_url}, user_id=user_id),
                                 timeout=20.0,
                             )
                             specialist_result += f"\n\n---\nConteúdo detalhado de {fetch_url}:\n{page_content}"
@@ -1323,7 +1462,7 @@ async def orchestrate_and_stream(
                 elif route == "python":
                     yield sse("steps", "<step>Executando código Python...</step>")
                     try:
-                        specialist_result = await execute_tool("execute_python", func_args)
+                        specialist_result = await execute_tool("execute_python", func_args, user_id=user_id)
                     except Exception as exc:
                         logger.error(f"[ORCHESTRATOR] Erro na execução Python: {exc}")
                         specialist_result = f"Erro ao executar Python: {exc}"
@@ -1374,7 +1513,7 @@ async def orchestrate_and_stream(
 
                     specialist_result = None
                     async for event in _exec_with_heartbeat(
-                        execute_tool("ask_browser", func_args),
+                        execute_tool("ask_browser", func_args, user_id=user_id),
                         lambda elapsed: sse("steps", f"<step>Navegador ativo — {int(elapsed)}s...</step>"),
                         timeout=_BROWSER_TIMEOUT,
                     ):
@@ -1488,6 +1627,56 @@ async def orchestrate_and_stream(
                             output_payload={"preview": research_result[:2000]},
                         )
                     yield sse("steps", "<step>Pesquisa profunda concluída — preparando resposta...</step>")
+
+                # ── ROTA: Spy Pages (SimilarWeb via Apify) ──
+                elif route == "spy_pages":
+                    urls = func_args.get("urls", [])
+                    yield sse("steps", f"<step>Analisando {len(urls)} site(s) via SimilarWeb...</step>")
+                    spy_result = await execute_tool("analyze_web_pages", func_args, user_id=user_id)
+                    # Emite evento especial para o frontend renderizar o card
+                    yield f'data: {json.dumps({"type": "spy_pages_result", "data": spy_result})}\n\n'
+                    if execution_logger:
+                        await execution_logger.log_event(
+                            execution_id,
+                            execution_agent_id=react_agent_id,
+                            event_type="tool_result",
+                            message=f"Análise SimilarWeb concluída para {len(urls)} site(s)",
+                            tool_name="analyze_web_pages",
+                            tool_args=func_args,
+                            tool_result=spy_result[:2000],
+                        )
+                        await execution_logger.finish_agent(
+                            react_agent_id,
+                            status="completed",
+                            output_payload={"preview": spy_result[:500]},
+                        )
+                    current_messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool["id"],
+                        "content": spy_result,
+                    })
+                    current_messages.append({
+                        "role": "system",
+                        "content": (
+                            "Os dados do SimilarWeb foram obtidos com sucesso e exibidos ao usuário como card interativo. "
+                            "Faça um breve resumo dos dados encontrados e pergunte como o usuário quer prosseguir."
+                        ),
+                    })
+                    yield sse("steps", "<step>Dados SimilarWeb recebidos — preparando resposta...</step>")
+
+                # ── ROTA: Dynamic Skill (skills de negócio registradas em backend/skills/) ──
+                elif route == "dynamic_skill":
+                    yield sse("steps", f"<step>Executando skill: {func_name}...</step>")
+                    try:
+                        specialist_result = await skills_loader.execute_dynamic_skill(func_name, func_args)
+                    except Exception as e:
+                        specialist_result = f"Erro na skill {func_name}: {e}"
+                    current_messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool["id"],
+                        "content": specialist_result,
+                    })
+                    yield sse("thought", f"Skill {func_name} executada com sucesso.")
 
                 # ── ROTA: Terminal (text_generator, design_generator) ──
                 elif is_terminal:

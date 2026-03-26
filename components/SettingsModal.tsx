@@ -156,7 +156,7 @@ const PersonalizacaoTab: React.FC<{ userName: string; userId: string; onDisplayN
             value={displayName}
             onChange={e => setDisplayName(e.target.value)}
             placeholder="Ex: Master, User..."
-            className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50"
+            className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-lg px-3 py-2.5 outline-none focus:border-indigo-500/50"
           />
         </div>
         <div>
@@ -176,7 +176,7 @@ const PersonalizacaoTab: React.FC<{ userName: string; userId: string; onDisplayN
               value={logoUrl}
               onChange={e => setLogoUrl(e.target.value)}
               placeholder="URL da Logo"
-              className="flex-1 bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50"
+              className="flex-1 bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-lg px-3 py-2.5 outline-none focus:border-indigo-500/50"
             />
           </div>
         </div>
@@ -187,7 +187,7 @@ const PersonalizacaoTab: React.FC<{ userName: string; userId: string; onDisplayN
             value={occupation}
             onChange={e => setOccupation(e.target.value)}
             placeholder="Ex: Analista, UI/UX, Founder..."
-            className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50"
+            className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-lg px-3 py-2.5 outline-none focus:border-indigo-500/50"
           />
         </div>
       </div>
@@ -196,7 +196,7 @@ const PersonalizacaoTab: React.FC<{ userName: string; userId: string; onDisplayN
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-xl transition-colors flex items-center gap-2"
+          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-md transition-colors flex items-center gap-2"
         >
           {saving ? (
             <><Loader2 size={14} className="animate-spin" /> Salvando...</>
@@ -226,17 +226,17 @@ const ContaTab: React.FC = () => (
       </div>
       <div>
         <label className="block text-xs text-neutral-500 mb-1.5 font-medium uppercase tracking-wider">Senha Atual</label>
-        <input type="password" placeholder="••••••••" className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50" />
+        <input type="password" placeholder="••••••••" className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-lg px-3 py-2.5 outline-none focus:border-indigo-500/50" />
       </div>
       <div>
         <label className="block text-xs text-neutral-500 mb-1.5 font-medium uppercase tracking-wider">Nova Senha</label>
-        <input type="password" placeholder="••••••••" className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-indigo-500/50" />
+        <input type="password" placeholder="••••••••" className="w-full bg-[#1a1a1d] border border-[#313134] text-neutral-200 text-sm rounded-lg px-3 py-2.5 outline-none focus:border-indigo-500/50" />
       </div>
     </div>
 
     <div className="pt-4 border-t border-[#1e1e21] flex justify-between items-center">
       <button className="text-sm text-indigo-400 hover:text-indigo-300 font-medium transition-colors">Resgate de senha (Esqueci minha senha)</button>
-      <button className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-xl transition-colors">Atualizar Senha</button>
+      <button className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-md transition-colors">Atualizar Senha</button>
     </div>
   </div>
 );
@@ -287,7 +287,7 @@ const PlanoTab: React.FC<{ userPlan: string }> = ({ userPlan }) => {
           </p>
           <button
             disabled={isStarter}
-            className={`flex-shrink-0 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+            className={`flex-shrink-0 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
               isStarter
                 ? 'cursor-not-allowed text-neutral-600 bg-white/[0.03] border border-white/[0.06]'
                 : 'bg-indigo-600 hover:bg-indigo-500 text-white'
@@ -331,7 +331,7 @@ const TarefasTab: React.FC = () => (
         <h3 className="text-white font-semibold mb-1">Tarefas Agendadas</h3>
         <p className="text-neutral-500 text-sm">Gerencie automações e tarefas programadas para os agentes.</p>
       </div>
-      <button className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-xl transition-colors flex items-center gap-2">
+      <button className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-md transition-colors flex items-center gap-2">
         <Bell size={14} />
         Nova Tarefa
       </button>
@@ -392,9 +392,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose, use
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all text-left border ${activeTab === tab.id
-                  ? 'bg-indigo-500/10 text-white border-indigo-500/20'
-                  : 'text-neutral-500 hover:text-white hover:bg-white/[0.04] border-transparent'
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all text-left ${activeTab === tab.id
+                  ? 'bg-white/[0.07] text-white'
+                  : 'text-neutral-500 hover:text-white hover:bg-white/[0.04]'
                   }`}
               >
                 <span className={activeTab === tab.id ? 'text-indigo-400' : ''}>

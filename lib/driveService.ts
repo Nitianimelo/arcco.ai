@@ -8,6 +8,7 @@ export interface UserFile {
     file_url: string;
     file_type: string;
     size_bytes?: number;
+    folder_path?: string;
     created_at: string;
 }
 
@@ -136,7 +137,117 @@ export const driveService = {
             .eq('id', fileId);
 
         if (error) throw error;
-        // Note: Ideally we should also delete from storage, but we need the path. 
-        // For simplicity in MVP, we delete the reference. A cron job could clean up storage.
-    }
+    },
+
+    async listByFolder(userId: string, folderPath: string = '/'): Promise<UserFile[]> {
+        const { data, error } = await supabase
+            .from('user_files')
+            .select('*')
+            .eq('user_id', userId)
+            .eq('folder_path', folderPath)
+            .order('created_at', { ascending: false });
+
+        if (error) throw error;
+        return data as UserFile[];
+    },
+
+    async listFolders(userId: string, parentPath: string = '/'): Promise<string[]> {
+        const { data, error } = await supabase
+            .from('user_files')
+            .select('folder_path')
+            .eq('user_id', userId)
+            .like('folder_path', parentPath === '/' ? '/%' : `${parentPath}/%`);
+
+        if (error) throw error;
+        if (!data) return [];
+
+        const prefix = parentPath === '/' ? '/' : parentPath + '/';
+        const folders = new Set<string>();
+
+        for (const row of data) {
+            const fp = row.folder_path as string;
+            if (!fp || fp === parentPath) continue;
+            const rest = fp.slice(prefix.length);
+            const nextLevel = rest.split('/')[0];
+            if (nextLevel) folders.add(nextLevel);
+        }
+
+        return Array.from(folders).sort();
+    },
+
+    async createFolder(userId: string, folderPath: string): Promise<void> {
+        const { error } = await supabase
+            .from('user_files')
+            .insert({
+                user_id: userId,
+                file_name: '.folder',
+                file_url: '',
+                file_type: 'folder',
+                folder_path: folderPath,
+                size_bytes: 0,
+            });
+
+        if (error) throw error;
+    },
+
+    async moveFile(fileId: string, newFolderPath: string): Promise<void> {
+        const { error } = await supabase
+            .from('user_files')
+            .update({ folder_path: newFolderPath })
+            .eq('id', fileId);
+
+        if (error) throw error;
+    },
+
+    async renameFile(fileId: string, newName: string): Promise<void> {
+        const { error } = await supabase
+            .from('user_files')
+            .update({ file_name: newName })
+            .eq('id', fileId);
+
+        if (error) throw error;
+    },
+
+    async uploadMultiple(files: File[], userId: string, folderPath: string = '/'): Promise<UserFile[]> {
+        const results: UserFile[] = [];
+        for (const file of files) {
+            const path = `${userId}/${Date.now()}_${file.name}`;
+            const { error: uploadError } = await supabase.storage
+                .from('user_artifacts')
+                .upload(path, file);
+
+            if (uploadError) throw uploadError;
+
+            const { data: { publicUrl } } = supabase.storage
+                .from('user_artifacts')
+                .getPublicUrl(path);
+
+            const { data, error } = await supabase
+                .from('user_files')
+                .insert({
+                    user_id: userId,
+                    file_name: file.name,
+                    file_url: publicUrl,
+                    file_type: file.type || 'application/octet-stream',
+                    size_bytes: file.size,
+                    folder_path: folderPath,
+                })
+                .select()
+                .single();
+
+            if (error) throw error;
+            results.push(data as UserFile);
+        }
+        return results;
+    },
+
+    async getFilesByIds(fileIds: string[]): Promise<UserFile[]> {
+        const { data, error } = await supabase
+            .from('user_files')
+            .select('*')
+            .in('id', fileIds);
+
+        if (error) throw error;
+        return data as UserFile[];
+    },
 };

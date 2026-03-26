@@ -52,6 +52,19 @@ async def get_public_chat_models():
     return {"models": models}
 
 
+@router.post("/spy-pages-prefetch")
+async def spy_pages_prefetch(request: Request):
+    """Executa o actor Apify SimilarWeb diretamente e retorna os dados para o frontend."""
+    from backend.services.apify_service import analyze_pages
+    body = await request.json()
+    urls = body.get("urls", [])[:4]
+    if not urls:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "urls required"}, status_code=400)
+    results = await analyze_pages(urls)
+    return {"results": results}
+
+
 def _build_session_inventory_prompt(session_id: str | None) -> str:
     if not session_id:
         return ""
@@ -245,6 +258,8 @@ async def chat_endpoint(request: Request):
     project_id = body.get("project_id") or None
     conversation_id = body.get("conversation_id") or None
     web_search = bool(body.get("web_search", False))
+    computer_enabled = bool(body.get("computer_enabled", False))
+    spy_pages_enabled = bool(body.get("spy_pages_enabled", False))
 
     cleanup_expired_sessions()
 
@@ -364,6 +379,9 @@ async def chat_endpoint(request: Request):
                 enhanced_messages,
                 model,
                 session_id,
+                user_id=user_id,
+                computer_enabled=computer_enabled,
+                spy_pages_enabled=spy_pages_enabled,
                 execution_id=execution_id,
                 execution_logger=execution_logger,
             )

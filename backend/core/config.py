@@ -38,6 +38,9 @@ class AgentConfig:
     browserbase_project_id: str = ""
     e2b_api_key: str = ""
 
+    # Apify (SimilarWeb Scraper)
+    apify_api_key: str = ""
+
     # Agent Behavior
     enable_caching: bool = True
     cache_ttl_seconds: int = 86400
@@ -91,6 +94,7 @@ class AgentConfig:
         self.browserbase_api_key = os.getenv("BROWSERBASE_API_KEY", "")
         self.browserbase_project_id = os.getenv("BROWSERBASE_PROJECT_ID", "")
         self.e2b_api_key = os.getenv("E2B_API_KEY", self.e2b_api_key)
+        self.apify_api_key = os.getenv("APIFY_API_KEY", self.apify_api_key)
         self.enable_caching = os.getenv("AGENT_CACHE", "true").lower() == "true"
         self.cache_ttl_seconds = int(os.getenv("AGENT_CACHE_TTL", str(self.cache_ttl_seconds)))
         self.web_timeout = float(os.getenv("WEB_TIMEOUT", str(self.web_timeout)))
@@ -121,10 +125,11 @@ class AgentConfig:
         needs_browserbase = not self.browserbase_api_key
         needs_browserbase_project = not self.browserbase_project_id
         needs_e2b = not self.e2b_api_key
+        needs_apify = not self.apify_api_key
 
         if not (needs_openrouter or needs_anthropic
                 or needs_browserbase or needs_browserbase_project
-                or needs_e2b):
+                or needs_e2b or needs_apify):
             print("[CONFIG] All API keys loaded from environment variables")
             return
 
@@ -173,6 +178,10 @@ class AgentConfig:
                 if needs_e2b and e2b_key:
                     self.e2b_api_key = e2b_key
                     print("[CONFIG] E2B API key loaded from Supabase")
+
+                if needs_apify and key_map.get("apify"):
+                    self.apify_api_key = key_map["apify"]
+                    print("[CONFIG] Apify API key loaded from Supabase")
 
             if not self.openrouter_api_key and not self.api_key:
                 print("[CONFIG] WARNING: No LLM API key found (env or Supabase). Agent will fail.")

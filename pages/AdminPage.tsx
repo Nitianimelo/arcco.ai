@@ -498,10 +498,10 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, models, loadingModels, onS
             <button
               onClick={handleSave}
               disabled={saving || !isDirty}
-              className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border border-indigo-500/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 px-5 py-2 rounded-md text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {saving ? <Loader2 size={14} className="animate-spin" /> :
-                saved ? <Check size={14} className="text-green-400" /> :
+                saved ? <Check size={14} /> :
                   <Save size={14} />}
               {saved ? 'Salvo' : supportsPromptEdit || supportsToolsEdit ? 'Salvar no cÃ³digo' : 'Salvar modelo'}
             </button>
@@ -648,7 +648,7 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
         <button
           onClick={handleDelete}
           disabled={deleting}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-red-500/10 text-red-300 hover:bg-red-500/20 border border-red-500/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          className="flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium text-red-400 hover:bg-red-500/10 border border-neutral-800 hover:border-red-500/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
           Excluir slot
@@ -656,7 +656,7 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
         <button
           onClick={handleSave}
           disabled={saving || deleting || !isDirty || !modelId}
-          className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border border-indigo-500/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          className="flex items-center gap-2 px-5 py-2 rounded-md text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} className="text-green-400" /> : <Save size={14} />}
           {saved ? 'Salvo' : 'Salvar slot'}
@@ -1181,14 +1181,14 @@ export const AdminPage: React.FC = () => {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === tab.id
-                ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
-                : 'text-neutral-500 hover:text-neutral-300'
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${activeTab === tab.id
+                ? 'bg-[#1c1c1c] text-white'
+                : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.03]'
                 }`}
             >
               {tab.icon}
               {tab.label}
-              <span className={`text-xs px-1.5 py-0.5 rounded-full ${activeTab === tab.id ? 'bg-indigo-500/30 text-indigo-300' : 'bg-neutral-800 text-neutral-500'
+              <span className={`text-xs px-1.5 py-0.5 rounded ${activeTab === tab.id ? 'bg-neutral-700 text-neutral-200' : 'bg-neutral-800 text-neutral-600'
                 }`}>
                 {tab.count}
               </span>
@@ -1270,7 +1270,7 @@ export const AdminPage: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   onClick={createChatConfig}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 text-xs transition-colors border border-indigo-500/30"
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white text-xs transition-colors"
                 >
                   <Check size={12} />
                   Novo modelo

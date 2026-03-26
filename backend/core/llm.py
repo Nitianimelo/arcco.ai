@@ -3,12 +3,38 @@ Wrapper para chamadas LLM via OpenRouter e Anthropic.
 """
 
 import logging
+import re
 import time
 from typing import Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Regex para remover blocos <think>...</think> de modelos de reasoning
+# (DeepSeek R1, QwQ, Marco-o1, etc. jogam tokens de pensamento no content)
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _normalize_message(message: dict) -> dict:
+    """
+    Normaliza a mensagem de resposta do LLM para formato consistente.
+
+    - Remove blocos <think>...</think> que modelos de reasoning emitem no content
+      (DeepSeek R1, QwQ, Marco-o1, etc.)
+    - O campo reasoning_content (DeepSeek R1 nativo) é preservado intacto —
+      ele fica separado do content e não interfere no pipeline
+    - Garante que content nunca seja None (usa string vazia como fallback)
+    """
+    content = message.get("content") or ""
+
+    if "<think>" in content:
+        cleaned = _THINK_RE.sub("", content).strip()
+        if cleaned != content:
+            logger.debug("[LLM] Blocos <think> removidos do content (%d chars → %d chars)", len(content), len(cleaned))
+        message["content"] = cleaned
+
+    return message
 
 # Cache em memória com TTL de 60 segundos.
 # Supabase (tabela ApiKeys) é a Única Fonte da Verdade.
@@ -249,7 +275,12 @@ async def call_openrouter(
             logger.error(f"OpenRouter error ({response.status_code}): {error_text}")
             raise Exception(f"LLM API Error: {error_text}")
 
-        return response.json()
+        data = response.json()
+        # Normaliza a mensagem de cada choice (remove thinking tokens, etc.)
+        for choice in data.get("choices", []):
+            if isinstance(choice.get("message"), dict):
+                _normalize_message(choice["message"])
+        return data
 
 async def stream_openrouter(
     messages: list,
