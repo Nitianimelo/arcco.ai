@@ -19,10 +19,13 @@ services:
       context: .
       dockerfile: Dockerfile.frontend
     ports:
-      - "8080:80"
+      - "80:80"
+      - "443:443"
     depends_on:
       - backend
     restart: unless-stopped
+    volumes:
+      - /docker/arccoai/certbot/conf:/etc/letsencrypt
     networks:
       - arcco-net
 
