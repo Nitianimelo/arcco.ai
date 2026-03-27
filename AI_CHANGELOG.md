@@ -3,6 +3,24 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-27 06:00 — Claude Code (claude-sonnet-4-6) — Atualização de prompts: Supervisor, Planner, QA
+
+### Arquivos modificados:
+- `backend/agents/prompts.py`
+
+### O que foi feito:
+
+1. **CHAT_SYSTEM_PROMPT (Supervisor)** — Adicionada regra 11 "SKILLS DINÂMICAS DE NEGÓCIO". Instrui o Supervisor a preferir skills especializadas sobre ferramentas genéricas quando disponíveis (ex: web_form_operator em vez de ask_browser para formulários, local_lead_extractor em vez de ask_web_search para leads, multi_doc_investigator em vez de read_session_file repetido, slide_generator antes de design_generator para apresentações).
+
+2. **PLANNER_SYSTEM_PROMPT** — Reescrito com mais contexto. Cada ferramenta agora tem descrição de quando usar e quando NÃO usar. Adicionado bloco "REGRAS DE DECISÃO" com 7 regras que priorizam skills sobre ferramentas genéricas. Explica que skills são injetadas dinamicamente e que o planner deve usar o skill_id como action. Adicionada regra de minimizar passos.
+
+3. **QA_SYSTEM_PROMPT** — Adicionado critério de validação para skills dinâmicas: aprovar se saída contém dados úteis (tabela, resumo, CSV, dossiê); reprovar apenas se saída é erro genérico ou skill não executou por falta de parâmetro. Critério de design atualizado para aceitar HTML além de JSON com slides.
+
+### Por quê:
+Os prompts originais não mencionavam skills dinâmicas. Sem essa orientação, o Supervisor tentaria resolver com ferramentas genéricas (ex: chamar ask_web_search 5 vezes em vez de local_lead_extractor), o Planner não saberia quando escolher uma skill, e o QA não saberia como validar saídas de skills.
+
+---
+
 ## 2026-03-27 05:00 — Claude Code (claude-sonnet-4-6) — Skill Multi-Document Investigator
 
 ### Arquivos modificados:
