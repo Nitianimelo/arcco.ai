@@ -27,6 +27,7 @@ services:
     volumes:
       - certbot-etc:/etc/letsencrypt
       - certbot-var:/var/lib/letsencrypt
+      - certbot-web:/var/www/certbot
     networks:
       - arcco-net
 
@@ -37,7 +38,8 @@ services:
     volumes:
       - certbot-etc:/etc/letsencrypt
       - certbot-var:/var/lib/letsencrypt
-    command: certonly --webroot --webroot-path=/usr/share/nginx/html --email nitiani@gmail.com --agree-tos --no-eff-email -d app.arccoai.com --keep-until-expiring
+      - certbot-web:/var/www/certbot
+    command: certonly --webroot --webroot-path=/var/www/certbot --email nitiani@gmail.com --agree-tos --no-eff-email -d app.arccoai.com --keep-until-expiring
     depends_on:
       - nginx
     networks:
@@ -47,6 +49,7 @@ volumes:
   agent_workspace:
   certbot-etc:
   certbot-var:
+  certbot-web:
 
 networks:
   arcco-net:
