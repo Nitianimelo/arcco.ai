@@ -3,9 +3,14 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Copiar package files primeiro (cache)
-COPY package.json package-lock.json ./
-RUN npm ci --production=false
+# 1. Instalar dependências essenciais do Alpine para compilar pacotes nativos
+RUN apk add --no-cache python3 make g++ pkgconfig pixman-dev cairo-dev pango-dev
+
+# 2. Copiar package files (o asterisco previne falhas se o lockfile divergir)
+COPY package.json package-lock.json* ./
+
+# 3. Usar npm install, que é mais resiliente no build de produção
+RUN npm install
 
 # Copiar código fonte
 COPY . .
