@@ -3,6 +3,22 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-27 10:00 — Claude Code (claude-sonnet-4-6) — Fix definitivo SSL: entrypoint self-signed bootstrap
+
+### Arquivos modificados:
+- `nginx/entrypoint.sh` (NOVO)
+- `Dockerfile.frontend`
+
+### O que foi feito:
+1. **entrypoint.sh** — Script que roda antes do Nginx iniciar. Checa se `/etc/letsencrypt/live/app.arccoai.com/fullchain.pem` existe. Se sim, inicia Nginx direto. Se nao, gera certificado self-signed temporario com openssl (RSA 2048, validade 1 dia) no mesmo path que o nginx.conf espera, e inicia Nginx. Isso quebra o chicken-and-egg: Nginx sobe na porta 80 + 443 (com cert fake), Certbot valida via porta 80 e gera cert real, restart do Nginx pega o cert verdadeiro.
+
+2. **Dockerfile.frontend** — Stage 2 agora instala `openssl` via apk, copia `entrypoint.sh`, da chmod +x, e usa ENTRYPOINT em vez de CMD.
+
+### Por que:
+Nginx crashava em loop porque o bloco `listen 443 ssl` referenciava certificados que nao existiam. Certbot precisava do Nginx rodando na porta 80 para validar o dominio. Sem o entrypoint, era impossivel gerar os certificados na primeira execucao. Com o self-signed temporario, ambos os servicos conseguem completar seu papel.
+
+---
+
 ## 2026-03-27 08:30 — Claude Code (claude-sonnet-4-6) — Fix deploy Hostinger: Certbot + HTTP temporario
 
 ### Arquivos modificados:

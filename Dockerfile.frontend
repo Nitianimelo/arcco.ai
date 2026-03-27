@@ -21,12 +21,19 @@ RUN npm run build
 # ── Stage 2: Serve ────────────────────────────────────
 FROM nginx:alpine
 
+# Instalar openssl para gerar cert self-signed temporario (bootstrap SSL)
+RUN apk add --no-cache openssl
+
 # Copiar build
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Copiar config do nginx
 COPY nginx/nginx.conf /etc/nginx/nginx.conf
 
+# Copiar entrypoint (gera self-signed se cert real nao existir)
+COPY nginx/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 EXPOSE 80 443
 
-CMD ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["/entrypoint.sh"]
