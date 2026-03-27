@@ -368,51 +368,142 @@ async def _execute_python(code: str) -> str:
 
             return uploaded
 
+        def _run_code_and_collect(sandbox, current_code: str, before_snapshot) -> tuple[str, str | None]:
+            """Executa codigo no sandbox e retorna (resultado, erro_ou_none)."""
+            execution_result = sandbox.run_code(current_code)
+
+            parts = []
+            error_msg = None
+
+            # stdout de print() — vai para logs.stdout na v2
+            if execution_result.logs and execution_result.logs.stdout:
+                parts.append("".join(execution_result.logs.stdout))
+
+            # Resultado de expressão (ex: 2+2 sem print) — vai para .text
+            if execution_result.text:
+                parts.append(execution_result.text)
+
+            # Erros
+            if execution_result.error:
+                error_msg = f"{execution_result.error.name}: {execution_result.error.value}"
+                parts.append(f"ERRO: {error_msg}")
+
+            # stderr — pode indicar erro mesmo sem execution_result.error
+            if execution_result.logs and execution_result.logs.stderr:
+                stderr_text = "".join(execution_result.logs.stderr)
+                parts.append("STDERR: " + stderr_text)
+                if not error_msg and ("Error" in stderr_text or "Traceback" in stderr_text):
+                    error_msg = stderr_text[-500:]
+
+            # Resultados extras (mídia, display)
+            if execution_result.results:
+                for media in execution_result.results:
+                    if hasattr(media, 'text') and media.text:
+                        parts.append(f"RESULT: {media.text}")
+
+            uploaded_artifacts = upload_generated_artifacts(sandbox, before_snapshot)
+            if uploaded_artifacts:
+                parts.append("Arquivos gerados:")
+                parts.extend(f"[{filename}]({url})" for filename, url in uploaded_artifacts)
+
+            result_str = "\n".join(parts).strip()
+            return result_str, error_msg
+
         def sync_e2b_exec():
             logger.info("[E2B] Iniciando execução de código Python (%s chars).", len(code))
             # E2B v2 API: usar Sandbox.create() ao invés do construtor
             sandbox = Sandbox.create(api_key=e2b_api_key)
             try:
                 before_snapshot = snapshot_artifacts(sandbox)
-                execution_result = sandbox.run_code(code)
+                result_str, error_msg = _run_code_and_collect(sandbox, code, before_snapshot)
 
-                parts = []
+                if not error_msg:
+                    return result_str if result_str else "(Código executado com sucesso sem output. Use print() para ver resultados.)"
 
-                # stdout de print() — vai para logs.stdout na v2
-                if execution_result.logs and execution_result.logs.stdout:
-                    parts.append("".join(execution_result.logs.stdout))
-
-                # Resultado de expressão (ex: 2+2 sem print) — vai para .text
-                if execution_result.text:
-                    parts.append(execution_result.text)
-
-                # Erros
-                if execution_result.error:
-                    parts.append(f"ERRO: {execution_result.error.name}: {execution_result.error.value}")
-
-                # stderr
-                if execution_result.logs and execution_result.logs.stderr:
-                    parts.append("STDERR: " + "".join(execution_result.logs.stderr))
-
-                # Resultados extras (mídia, display)
-                if execution_result.results:
-                    for media in execution_result.results:
-                        if hasattr(media, 'text') and media.text:
-                            parts.append(f"RESULT: {media.text}")
-
-                uploaded_artifacts = upload_generated_artifacts(sandbox, before_snapshot)
-                if uploaded_artifacts:
-                    parts.append("Arquivos gerados:")
-                    parts.extend(f"[{filename}]({url})" for filename, url in uploaded_artifacts)
-
-                result_str = "\n".join(parts).strip()
-                return result_str if result_str else "(Código executado com sucesso sem output. Use print() para ver resultados.)"
+                # ── Auto-healing: marca codigo e erro para correcao ──
+                return f"__AUTOFIX__|{error_msg}|__CODE__|{code}|__RESULT__|{result_str}"
             finally:
                 sandbox.kill()
 
-        result = await asyncio.to_thread(sync_e2b_exec)
-        logger.info("[E2B] Execução concluída com %s chars de saída.", len(result))
-        return result
+        first_result = await asyncio.to_thread(sync_e2b_exec)
+
+        # Se nao precisa de auto-fix, retorna direto
+        if not first_result.startswith("__AUTOFIX__"):
+            logger.info("[E2B] Execução concluída com %s chars de saída.", len(first_result))
+            return first_result
+
+        # ── Loop de Auto-Healing (max 2 retries) ──────────────────────────────
+        _MAX_AUTOFIX = 2
+        current_code = code
+        last_error = first_result.split("|__CODE__|")[0].replace("__AUTOFIX__|", "")
+        last_result = first_result.split("|__RESULT__|")[-1] if "|__RESULT__|" in first_result else ""
+
+        for attempt in range(1, _MAX_AUTOFIX + 1):
+            logger.info("[E2B-AUTOFIX] Tentativa %d/%d de auto-correção...", attempt, _MAX_AUTOFIX)
+
+            # Pede ao LLM para corrigir
+            try:
+                from backend.core.llm import call_openrouter
+                fix_response = await call_openrouter(
+                    messages=[{
+                        "role": "user",
+                        "content": (
+                            "Voce e um expert em Python. O seguinte codigo falhou com este erro:\n\n"
+                            f"CODIGO:\n```python\n{current_code}\n```\n\n"
+                            f"ERRO:\n{last_error}\n\n"
+                            "Reescreva o codigo completo para corrigir o problema. "
+                            "Retorne APENAS o codigo Python puro, sem formatacao markdown, "
+                            "sem ```python, sem explicacao."
+                        ),
+                    }],
+                    model="openai/gpt-4o-mini",
+                    max_tokens=4000,
+                    temperature=0.1,
+                )
+                fixed_code = fix_response["choices"][0]["message"]["content"].strip()
+                # Remove blocos markdown se o LLM ignorar a instrucao
+                if fixed_code.startswith("```"):
+                    import re
+                    fixed_code = re.sub(r"^```(?:python)?\s*\n?", "", fixed_code)
+                    fixed_code = re.sub(r"\n?```\s*$", "", fixed_code)
+                    fixed_code = fixed_code.strip()
+
+                if not fixed_code or len(fixed_code) < 10:
+                    logger.warning("[E2B-AUTOFIX] LLM retornou código vazio/curto, abortando.")
+                    break
+
+                current_code = fixed_code
+            except Exception as fix_exc:
+                logger.error("[E2B-AUTOFIX] Falha ao chamar LLM para correção: %s", fix_exc)
+                break
+
+            # Re-executa o codigo corrigido
+            def sync_retry(retry_code=current_code):
+                sandbox = Sandbox.create(api_key=e2b_api_key)
+                try:
+                    before = snapshot_artifacts(sandbox)
+                    return _run_code_and_collect(sandbox, retry_code, before)
+                finally:
+                    sandbox.kill()
+
+            try:
+                result_str, error_msg = await asyncio.to_thread(sync_retry)
+            except Exception as retry_exc:
+                logger.error("[E2B-AUTOFIX] Falha na re-execução: %s", retry_exc)
+                last_error = str(retry_exc)
+                continue
+
+            if not error_msg:
+                logger.info("[E2B-AUTOFIX] Código corrigido com sucesso na tentativa %d!", attempt)
+                return result_str if result_str else "(Código executado com sucesso sem output. Use print() para ver resultados.)"
+
+            last_error = error_msg
+            last_result = result_str
+            logger.warning("[E2B-AUTOFIX] Tentativa %d ainda com erro: %s", attempt, error_msg[:100])
+
+        # Todas as tentativas falharam
+        logger.error("[E2B-AUTOFIX] Falha após %d tentativas de auto-correção.", _MAX_AUTOFIX)
+        return last_result if last_result else f"Falha após {_MAX_AUTOFIX + 1} tentativas de execução. Último erro: {last_error}"
     except Exception as e:
         logger.exception("[E2B] Erro durante a execução do sandbox Python.")
         return f"Erro na execução (E2B Sandbox): {e}"

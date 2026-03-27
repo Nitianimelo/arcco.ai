@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { Eye, Loader2, Monitor } from 'lucide-react';
+import { Eye, Loader2, Monitor, Layers } from 'lucide-react';
 
 interface PresentationCardProps {
   html: string;
@@ -11,6 +11,20 @@ function extractTitle(html: string) {
   return html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] ?? 'Design gerado';
 }
 
+/** Detect if the HTML contains multiple slides (presentation vs single design) */
+function isMultiSlidePresentation(html: string): boolean {
+  // Match elements with class containing "slide" as a standalone word
+  // Covers: class="slide", class="slide active", class="slide-container"
+  const slideElements = html.match(/<(?:section|div)[^>]*class="[^"]*\bslide\b[^"]*"/gi);
+  return !!slideElements && slideElements.length > 1;
+}
+
+function countSlides(html: string): number {
+  const slideElements = html.match(/<(?:section|div)[^>]*class="[^"]*\bslide\b[^"]*"/gi);
+  return slideElements ? slideElements.length : 0;
+}
+
+/** For single designs: force 1:1 square thumbnail */
 function normalizeSquareThumbnail(src: string) {
   const html = /<!doctype html>/i.test(src) || /<html[\s>]/i.test(src)
     ? src
@@ -92,10 +106,41 @@ function normalizeSquareThumbnail(src: string) {
   return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
 }
 
+/** For presentations: show only the first slide at 16:9, hide nav controls */
+function normalizePresentationThumbnail(html: string): string {
+  const overrideCSS = `<style id="arcco-pres-thumb">
+    /* Hide all slides, then show only the first */
+    .slide, .slide-container { display: none !important; }
+    .slide:first-of-type, .slide-container:first-of-type {
+      display: flex !important;
+      opacity: 1 !important;
+      min-height: 100vh !important;
+    }
+    /* Hide navigation controls */
+    .nav-btn, .slide-nav, .slide-counter, .slide-navigation,
+    [class*="nav-btn"], [class*="slide-nav"], [class*="slide-counter"],
+    button[onclick*="slide"], .navigation { display: none !important; }
+    /* Clean body */
+    body { margin: 0; overflow: hidden; }
+  </style>`;
+
+  // Remove any JS that could interfere with slide visibility
+  const noJS = html.replace(/<script(?!.*src=["']https?:\/\/cdn)[\s\S]*?<\/script>/gi, '');
+
+  if (noJS.includes('</head>')) {
+    return noJS.replace('</head>', overrideCSS + '</head>');
+  }
+  return overrideCSS + noJS;
+}
+
 const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming = false, onOpenPreview }) => {
   const thumbRef = useRef<HTMLIFrameElement>(null);
   const title = extractTitle(html);
-  const thumbnailHtml = normalizeSquareThumbnail(html);
+  const isPresentation = isMultiSlidePresentation(html);
+  const slideCount = isPresentation ? countSlides(html) : 0;
+  const thumbnailHtml = isPresentation
+    ? normalizePresentationThumbnail(html)
+    : normalizeSquareThumbnail(html);
 
   if (isStreaming) {
     return (
@@ -116,10 +161,13 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
     );
   }
 
+  // Presentation: 16:9 card. Single design: square card.
+  const aspectClass = isPresentation ? 'aspect-video' : 'aspect-square';
+
   return (
     <div className="my-3 w-full max-w-sm group">
       <div
-        className="relative aspect-square overflow-hidden cursor-pointer"
+        className={`relative ${aspectClass} overflow-hidden cursor-pointer rounded-xl border border-[#222]`}
         onClick={() => onOpenPreview?.()}
       >
         <iframe
@@ -130,6 +178,13 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
           title="Miniatura"
           tabIndex={-1}
         />
+        {/* Slide count badge */}
+        {isPresentation && slideCount > 0 && (
+          <div className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 rounded-md bg-black/60 backdrop-blur-sm text-white text-[10px] font-medium">
+            <Layers size={10} />
+            {slideCount} slides
+          </div>
+        )}
         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all duration-200 flex items-center justify-center">
           <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1.5 px-4 py-2 rounded-lg bg-orange-500/90 text-white text-xs font-medium shadow-lg">
             <Eye size={14} />
@@ -140,7 +195,9 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
       <div className="mt-2 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs text-neutral-200 truncate">{title}</p>
-          <p className="text-[10px] text-neutral-500">Clique para abrir e editar</p>
+          <p className="text-[10px] text-neutral-500">
+            {isPresentation ? `Apresentacao com ${slideCount} slides` : 'Clique para abrir e editar'}
+          </p>
         </div>
         <button
           onClick={() => onOpenPreview?.()}

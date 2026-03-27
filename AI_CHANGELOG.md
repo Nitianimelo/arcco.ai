@@ -3,6 +3,121 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-27 05:00 — Claude Code (claude-sonnet-4-6) — Skill Multi-Document Investigator
+
+### Arquivos modificados:
+- `backend/skills/multi_doc_investigator.py` (NOVO)
+
+### O que foi feito:
+1. **multi_doc_investigator.py** — Nova skill que cruza informacoes de todos os documentos de uma sessao. Fluxo: lista arquivos da sessao via `session_file_service` → para cada arquivo `ready`, le o texto extraido e busca chunks relevantes via `ephemeral_rag_service.search_relevant_chunks` (top 5 por arquivo, max 30 total) → envia chunks com nomes de fonte ao LLM (gpt-4o-mini) com prompt de "Investigador Forense" que obriga citacao de fontes → retorna dossie + rodape com arquivos consultados. Limita contexto a 25k chars. Trata arquivos em processamento e ausentes. Keywords: documentos, comparar, cruzar, investigar, dossie, contrato, consolidar.
+
+### Por que:
+Feature de alto valor para clientes que fazem upload de dezenas de documentos e querem respostas complexas cruzando informacoes entre eles (ex: "qual o valor total de todos os contratos?"). Usa infraestrutura existente (RAG lexical + session files) sem dependencias novas. GC automatico via session_gc_service.
+
+---
+
+## 2026-03-27 04:30 — Claude Code (claude-sonnet-4-6) — Planner reconhece skills dinamicas
+
+### Arquivos modificados:
+- `backend/agents/prompts.py`
+- `backend/agents/orchestrator.py`
+
+### O que foi feito:
+1. **prompts.py** — Adicionado paragrafo no `PLANNER_SYSTEM_PROMPT` explicando que skills dinamicas podem ser usadas como `action` no plano (ex: `action="local_lead_extractor"`).
+
+2. **orchestrator.py** — No `_PLANNER_ACTION_TO_TOOL` mapping, adicionado fallback: se a action nao esta no mapa fixo mas e um skill_id valido (`skills_loader.is_skill(step.action)`), usa o skill_id diretamente como `_forced_tool_name`. Isso garante `tool_choice` forcado para a skill correta.
+
+### Por que:
+Sem esse fix, o planner so conhecia 8 actions fixas. Skills novas (web_form_operator, local_lead_extractor) so funcionariam no loop ReAct (nao-deterministico). Com o fix, o planner pode gerar `action="local_lead_extractor"` e o orchestrator forca a tool correta via `tool_choice`, garantindo execucao deterministica.
+
+---
+
+## 2026-03-27 04:00 — Claude Code (claude-sonnet-4-6) — 3 features: RPA, Lead Extractor, Auto-Healing
+
+### Arquivos modificados:
+- `backend/skills/web_form_operator.py` (NOVO)
+- `backend/skills/lead_extractor.py` (NOVO)
+- `backend/agents/executor.py`
+
+### O que foi feito:
+
+1. **web_form_operator.py** — Nova skill de RPA. Recebe URL + dados, navega via browser_service, extrai HTML dos formularios, LLM mapeia campos para acoes (write/click), executa no Browserbase. Keywords: formulario, preencher, cadastrar, crm.
+
+2. **lead_extractor.py** — Nova skill de extracao de leads. Recebe nicho + localizacao + plataforma (web/google_maps/instagram). Gera script Python com DuckDuckGo Search, executa no E2B sandbox, parseia resultados e retorna tabela Markdown + upload CSV ao Supabase. Keywords: lead, prospectar, buscar empresas, b2b, sdr.
+
+3. **executor.py** — Implementado loop de auto-healing no `_execute_python`. Se codigo falha, extrai erro e chama gpt-4o-mini para reescrever o codigo corrigido. Reexecuta ate 2x adicionais (3 tentativas total). Invisivel para o orchestrator e frontend — so loga no terminal. Remove markdown da resposta do LLM se necessario. Se todas as tentativas falham, retorna ultimo erro formatado.
+
+### Por que:
+- RPA: permite ao usuario pedir "cadastra o Joao Silva no CRM" e a IA executa autonomamente.
+- Leads: funcionalidade de prospecao B2B — usuario pede leads e recebe CSV pronto para trabalhar.
+- Auto-Healing: estabilidade critica — se LLM esquece um import ou gera syntax error, a propria ferramenta corrige sem engasgar a plataforma.
+
+---
+
+## 2026-03-27 03:00 — Claude Code (claude-sonnet-4-6) — Fix slides preto/branco no export
+
+### Arquivos modificados:
+- `backend/services/file_service.py`
+
+### O que foi feito:
+1. **file_service.py** — Criado `_SHOW_SLIDE_JS`, um helper JS robusto para isolar slides antes do screenshot. Além de `display` e `opacity`, agora força `visibility: visible`, `position: relative`, `transform: none`, `min-height: 100vh`, `width: 100%`, adiciona classe `active` e força reflow via `document.body.offsetHeight`. Timeout aumentado de 300ms para 600ms. Aplicado nas 3 funções: `generate_pdf_playwright`, `html_to_screenshot`, `html_to_pptx`.
+
+### Por quê:
+Bug: slides após o primeiro eram exportados como imagem preta ou branca. O JS anterior só mudava `display` e `opacity`, insuficiente quando o CSS da apresentação usa `position: absolute`, `transform`, transitions ou backgrounds dependentes de classes. O slide ficava "visível" mas sem dimensão real no viewport.
+
+---
+
+## 2026-03-27 02:30 — Claude Code (claude-sonnet-4-6) — Export dialog com opções de slide, tamanho e resolução
+
+### Arquivos modificados:
+- `backend/api/export.py`
+- `backend/services/file_service.py`
+- `components/chat/DesignPreviewModal.tsx`
+
+### O que foi feito:
+1. **export.py** — `ExportHtmlRequest` ganhou campos opcionais: `slide_index`, `page_size`, `resolution`. Route passa params às funções de serviço e detecta retorno ZIP para multi-imagem.
+
+2. **file_service.py** — Adicionadas tabelas de viewport (`_PAGE_VIEWPORTS`, `_RES_VIEWPORTS`). `generate_pdf_playwright`: viewport dinâmico por page_size, seleção de slide específico, reportlab pagesize dinâmico. `html_to_screenshot`: viewport por resolução, ZIP com todas as imagens quando multi-slide sem slide_index. `html_to_pptx`: viewport dinâmico, slide_index, dimensões PPTX dinâmicas em EMUs.
+
+3. **DesignPreviewModal.tsx** — Painel inline de opções de export (só para apresentações): escolha de slides (todos ou atual), tamanho da página (Widescreen/A4/Letter) para PDF/PPTX, resolução (HD/Full HD) para PNG/JPEG. `downloadHtmlExport` passa opções extras e detecta ZIP. Designs single-page mantêm export direto sem opções.
+
+### Por quê:
+Usuário pediu que na hora de baixar apresentações, pudesse escolher quais slides exportar e em que formato/tamanho. O design deve se ajustar responsivamente ao formato escolhido (viewport do Playwright muda antes da captura, CSS responsivo reflui o conteúdo).
+
+---
+
+## 2026-03-27 01:00 — Claude Code (claude-opus-4-6) — Fix multi-slide: preview, modal, export
+
+### Arquivos modificados:
+- `components/chat/PresentationCard.tsx`
+- `components/chat/DesignPreviewModal.tsx`
+- `backend/services/file_service.py`
+
+### O que foi feito:
+1. **PresentationCard.tsx** — Reescrito para detectar apresentações multi-slide (regex em `.slide` class). Para apresentações: thumbnail 16:9 (não quadrado), mostra apenas o 1o slide, badge com contagem de slides, remove scripts de navegação do thumbnail. Para designs single-page: mantém comportamento original (1:1 square).
+
+2. **DesignPreviewModal.tsx** — Adicionado modo apresentação automático. Quando detecta multi-slide: usa iframe viewer com navegação de slides (prev/next, dots, teclado, postMessage), sem Fabric.js. Export envia o HTML original ao backend (não um PNG do canvas). Para designs single-page: mantém Fabric.js editor com sidebar.
+
+3. **file_service.py** — `generate_pdf_playwright`: agora detecta `.slide, .slide-container` e gera PDF multi-página (screenshot por slide + reportlab). `html_to_screenshot`: mostra apenas o 1o slide em apresentações. `html_to_pptx`: seletor atualizado para `.slide, .slide-container` (consistência).
+
+### Por quê:
+Bug reportado: apresentação com 10 slides aparecia toda sobreposta no thumbnail (forçava 1080x1080 quadrado), o modal Fabric.js só capturava 1 slide, e o PDF tinha apenas 1 página. Root cause: todo o sistema de preview/edit/export era projetado para designs single-page (posters, cards), não apresentações multi-slide.
+
+---
+
+## 2026-03-26 23:59 — Claude Code (claude-opus-4-6)
+
+### Arquivos modificados:
+- `backend/agents/orchestrator.py`
+
+### O que foi feito:
+1. **orchestrator.py** — Corrigido acknowledgment do planner em planos complexos: agora é enviado como `pre_action` (bolha temporária) em vez de `chunk`, para não poluir o conteúdo do step terminal. Anteriormente, o acknowledgment era concatenado com o HTML do design_generator nos chunks, fazendo o frontend não detectar `<!DOCTYPE` no início e renderizar o HTML como texto cru ao invés do PresentationCard.
+
+### Por quê:
+Bug reportado: ao pedir uma apresentação (fluxo deep_research → slide_generator → design_generator), o HTML gerado era exibido como texto cru no chat ao invés de abrir o PresentationCard. Causa: o acknowledgment do planner ("Ok, vou pesquisar...") era enviado como `chunk` antes do HTML, quebrando a detecção `startsWith('<!DOCTYPE')` no frontend.
+
+---
+
 ## 2026-03-26 — Claude Code (claude-sonnet-4-6) — Skill: Gerador de Slides (slide_generator)
 
 ### Arquivos criados:

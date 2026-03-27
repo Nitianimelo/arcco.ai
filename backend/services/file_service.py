@@ -9,47 +9,128 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent / "pdf_templates"
 
+# ── Tabelas de viewport para export responsivo ────────────────────────────────
 
-async def generate_pdf_playwright(html_content: str) -> bytes:
+_PAGE_VIEWPORTS = {
+    "widescreen":       (1280, 720),
+    "a4-landscape":     (1122, 794),
+    "a4-portrait":      (794, 1122),
+    "letter-landscape": (1056, 816),
+    "letter-portrait":  (816, 1056),
+}
+
+_RES_VIEWPORTS = {
+    "hd-720":  (1280, 720),
+    "hd-1080": (1920, 1080),
+}
+
+# JS que isola um slide para screenshot — força visibilidade, dimensão e reflow
+_SHOW_SLIDE_JS = """(slideIdx) => {
+    const slides = document.querySelectorAll('.slide, .slide-container');
+    slides.forEach((s, idx) => {
+        if (idx === slideIdx) {
+            s.style.display = '';
+            s.style.opacity = '1';
+            s.style.visibility = 'visible';
+            s.style.position = 'relative';
+            s.style.transform = 'none';
+            s.style.minHeight = '100vh';
+            s.style.width = '100%';
+            s.classList.add('active');
+        } else {
+            s.style.display = 'none';
+            s.style.opacity = '0';
+            s.style.visibility = 'hidden';
+            s.classList.remove('active');
+        }
+    });
+    // Força reflow
+    document.body.offsetHeight;
+}"""
+
+
+async def generate_pdf_playwright(
+    html_content: str,
+    slide_index: Optional[int] = None,
+    page_size: Optional[str] = None,
+) -> bytes:
     """
     Gera PDF de alta qualidade usando Playwright para renderizar HTML+Tailwind CSS.
-    Injeta automaticamente o CDN do Tailwind se não estiver presente.
+    Para apresentações multi-slide (.slide), captura cada slide como uma página separada.
+    O viewport se adapta ao page_size escolhido para export responsivo.
     """
 
     def _sync_render() -> bytes:
         from playwright.sync_api import sync_playwright
 
-        # Injeta Tailwind CDN caso o HTML não tenha estilo próprio
-        tailwind_cdn = '<script src="https://cdn.tailwindcss.com"></script>'
-        if "tailwindcss" not in html_content and "cdn.tailwindcss" not in html_content:
-            if "<head>" in html_content:
-                inject_html = html_content.replace("<head>", f"<head>{tailwind_cdn}", 1)
-            elif "<html" in html_content:
-                inject_html = html_content.replace("<html", f"{tailwind_cdn}<html", 1)
-            else:
-                inject_html = tailwind_cdn + html_content
-        else:
-            inject_html = html_content
+        inject_html = _inject_tailwind_if_needed(html_content)
+        vw, vh = _PAGE_VIEWPORTS.get(page_size or "widescreen", (1280, 720))
 
         with sync_playwright() as p:
             browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
-            page = browser.new_page()
+            page = browser.new_page(viewport={"width": vw, "height": vh})
             try:
                 page.set_content(inject_html, wait_until="networkidle", timeout=30_000)
-                pdf_bytes = page.pdf(
-                    format="A4",
-                    print_background=True,
-                    margin={"top": "1.5cm", "right": "1.5cm", "bottom": "1.5cm", "left": "1.5cm"},
-                )
+
+                slide_count = page.evaluate("() => document.querySelectorAll('.slide, .slide-container').length")
+
+                if slide_count and int(slide_count) > 1:
+                    # Determina quais slides capturar
+                    if slide_index is not None:
+                        indices = [slide_index]
+                    else:
+                        indices = list(range(int(slide_count)))
+
+                    screenshots: list[bytes] = []
+                    for i in indices:
+                        page.evaluate(_SHOW_SLIDE_JS, i)
+                        page.wait_for_timeout(600)
+                        screenshots.append(page.screenshot(full_page=False, type="png"))
+
+                    # Combina screenshots em PDF multi-página com reportlab
+                    from reportlab.lib.pagesizes import A4, letter, landscape as rl_landscape
+                    from reportlab.lib.utils import ImageReader
+                    from reportlab.pdfgen import canvas as pdf_canvas
+                    import io as _io
+
+                    _RL_SIZES = {
+                        "widescreen":       (vw, vh),
+                        "a4-landscape":     rl_landscape(A4),
+                        "a4-portrait":      A4,
+                        "letter-landscape": rl_landscape(letter),
+                        "letter-portrait":  letter,
+                    }
+                    rl_size = _RL_SIZES.get(page_size or "widescreen", (vw, vh))
+                    page_w, page_h = rl_size
+
+                    pdf_buf = _io.BytesIO()
+                    c = pdf_canvas.Canvas(pdf_buf, pagesize=rl_size)
+                    for img_bytes in screenshots:
+                        img_reader = ImageReader(_io.BytesIO(img_bytes))
+                        iw, ih = img_reader.getSize()
+                        scale = min(page_w / iw, page_h / ih)
+                        draw_w, draw_h = iw * scale, ih * scale
+                        x = (page_w - draw_w) / 2
+                        y = (page_h - draw_h) / 2
+                        c.drawImage(img_reader, x, y, draw_w, draw_h)
+                        c.showPage()
+                    c.save()
+                    return pdf_buf.getvalue()
+                else:
+                    pdf_bytes = page.pdf(
+                        format="A4",
+                        print_background=True,
+                        margin={"top": "1.5cm", "right": "1.5cm", "bottom": "1.5cm", "left": "1.5cm"},
+                    )
+                    return pdf_bytes
             finally:
                 browser.close()
-        return pdf_bytes
 
     return await asyncio.to_thread(_sync_render)
 
@@ -233,70 +314,119 @@ def _inject_tailwind_if_needed(html_content: str) -> str:
     return html_content
 
 
-async def html_to_screenshot(html_content: str, img_format: str = "png") -> bytes:
+async def html_to_screenshot(
+    html_content: str,
+    img_format: str = "png",
+    slide_index: Optional[int] = None,
+    resolution: Optional[str] = None,
+) -> Union[bytes, tuple]:
     """
     Captura screenshot de um HTML via Playwright.
-    img_format: "png" ou "jpeg"
+    - slide_index: None = todos os slides (ZIP), int = slide específico
+    - resolution: viewport size ("hd-720", "hd-1080")
+    Retorna bytes (imagem única) ou tuple (zip_bytes, mime, ext) para multi-slide.
     """
     inject = _inject_tailwind_if_needed(html_content)
     fmt = img_format.lower() if img_format.lower() in ("png", "jpeg") else "png"
+    vw, vh = _RES_VIEWPORTS.get(resolution or "hd-720", (1280, 720))
 
-    def _sync() -> bytes:
+    def _sync() -> Union[bytes, tuple]:
+        import zipfile
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
-            page = browser.new_page(viewport={"width": 1280, "height": 720})
+            page = browser.new_page(viewport={"width": vw, "height": vh})
             try:
                 page.set_content(inject, wait_until="networkidle", timeout=30_000)
-                data = page.screenshot(full_page=False, type=fmt)
+                slide_count = page.evaluate("() => document.querySelectorAll('.slide, .slide-container').length")
+
+                if slide_count and int(slide_count) > 1:
+                    if slide_index is not None:
+                        # Slide específico
+                        page.evaluate(_SHOW_SLIDE_JS, slide_index)
+                        page.wait_for_timeout(600)
+                        return page.screenshot(full_page=False, type=fmt)
+                    else:
+                        # Todos os slides → ZIP
+                        screenshots: list[bytes] = []
+                        for i in range(int(slide_count)):
+                            page.evaluate(_SHOW_SLIDE_JS, i)
+                            page.wait_for_timeout(600)
+                            screenshots.append(page.screenshot(full_page=False, type=fmt))
+
+                        zip_buf = io.BytesIO()
+                        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                            for idx, img_bytes in enumerate(screenshots):
+                                zf.writestr(f"slide_{idx + 1}.{fmt}", img_bytes)
+                        return (zip_buf.getvalue(), "application/zip", "zip")
+                else:
+                    # Documento simples
+                    return page.screenshot(full_page=False, type=fmt)
             finally:
                 browser.close()
-        return data
 
     return await asyncio.to_thread(_sync)
 
 
-async def html_to_pptx(html_content: str, title: str = "Apresentação") -> bytes:
+async def html_to_pptx(
+    html_content: str,
+    title: str = "Apresentação",
+    slide_index: Optional[int] = None,
+    page_size: Optional[str] = None,
+) -> bytes:
     """
     Converte HTML com slides (.slide) em PPTX via screenshots Playwright.
     Cada <section class="slide"> vira um slide independente.
     Se não houver .slide, usa um único slide com screenshot full.
+    O viewport e dimensões do PPTX se adaptam ao page_size escolhido.
     """
     inject = _inject_tailwind_if_needed(html_content)
+    vw, vh = _PAGE_VIEWPORTS.get(page_size or "widescreen", (1280, 720))
+
+    # Dimensões do PPTX em EMUs (English Metric Units) — 914400 EMUs = 1 inch
+    _PPTX_DIMS = {
+        "widescreen":       (12192000, 6858000),   # 13.33 x 7.5 in
+        "a4-landscape":     (10691812, 7562088),    # 11.69 x 8.27 in
+        "a4-portrait":      (7562088, 10691812),    # 8.27 x 11.69 in
+        "letter-landscape": (10058400, 7772400),    # 11.0 x 8.5 in
+        "letter-portrait":  (7772400, 10058400),    # 8.5 x 11.0 in
+    }
+    pptx_w, pptx_h = _PPTX_DIMS.get(page_size or "widescreen", (12192000, 6858000))
 
     def _sync() -> bytes:
         import io as _io
         from playwright.sync_api import sync_playwright
-        from pptx import Presentation
-        from pptx.util import Inches
+        from pptx import Presentation as PptxPresentation
 
         screenshots: list[bytes] = []
 
         with sync_playwright() as p:
             browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
-            page = browser.new_page(viewport={"width": 1280, "height": 720})
+            page = browser.new_page(viewport={"width": vw, "height": vh})
             try:
                 page.set_content(inject, wait_until="networkidle", timeout=30_000)
-                slide_count = page.evaluate("() => document.querySelectorAll('.slide').length")
+                slide_count = page.evaluate("() => document.querySelectorAll('.slide, .slide-container').length")
 
                 if slide_count and slide_count > 0:
-                    for i in range(int(slide_count)):
-                        # Mostra apenas o slide i, esconde os outros
-                        page.evaluate(f"""() => {{
-                            const slides = document.querySelectorAll('.slide');
-                            slides.forEach((s, idx) => s.style.display = idx === {i} ? 'flex' : 'none');
-                        }}""")
-                        page.wait_for_timeout(300)
+                    # Determina quais slides capturar
+                    if slide_index is not None:
+                        indices = [slide_index] if 0 <= slide_index < slide_count else [0]
+                    else:
+                        indices = list(range(int(slide_count)))
+
+                    for i in indices:
+                        page.evaluate(_SHOW_SLIDE_JS, i)
+                        page.wait_for_timeout(600)
                         screenshots.append(page.screenshot(full_page=False, type="png"))
                 else:
                     screenshots.append(page.screenshot(full_page=False, type="png"))
             finally:
                 browser.close()
 
-        # Monta o PPTX
-        prs = Presentation()
-        prs.slide_width = Inches(13.33)
-        prs.slide_height = Inches(7.5)
+        # Monta o PPTX com dimensões dinâmicas
+        prs = PptxPresentation()
+        prs.slide_width = pptx_w
+        prs.slide_height = pptx_h
         blank_layout = prs.slide_layouts[6]
 
         for img_bytes in screenshots:

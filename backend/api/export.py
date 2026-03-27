@@ -7,6 +7,7 @@ Rotas:
 """
 
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
@@ -27,6 +28,9 @@ class ExportHtmlRequest(BaseModel):
     html: str
     title: str
     format: str  # "pdf" | "pptx" | "png" | "jpeg"
+    slide_index: Optional[int] = None    # None = todos os slides, 0-based = slide específico
+    page_size: Optional[str] = None      # "widescreen", "a4-landscape", "a4-portrait", "letter-landscape", "letter-portrait"
+    resolution: Optional[str] = None     # "hd-720", "hd-1080"
 
 
 @router.post("/export-doc")
@@ -84,22 +88,39 @@ async def export_html(req: ExportHtmlRequest):
     try:
         if fmt == "pdf":
             from backend.services.file_service import generate_pdf_playwright
-            file_bytes = await generate_pdf_playwright(req.html)
+            file_bytes = await generate_pdf_playwright(
+                req.html,
+                slide_index=req.slide_index,
+                page_size=req.page_size,
+            )
             mime = "application/pdf"
             ext = "pdf"
 
         elif fmt == "pptx":
             from backend.services.file_service import html_to_pptx
-            file_bytes = await html_to_pptx(req.html, title)
+            file_bytes = await html_to_pptx(
+                req.html, title,
+                slide_index=req.slide_index,
+                page_size=req.page_size,
+            )
             mime = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
             ext = "pptx"
 
         elif fmt in ("png", "jpeg", "jpg"):
             real_fmt = "jpeg" if fmt in ("jpeg", "jpg") else "png"
             from backend.services.file_service import html_to_screenshot
-            file_bytes = await html_to_screenshot(req.html, real_fmt)
-            mime = f"image/{real_fmt}"
-            ext = real_fmt
+            result = await html_to_screenshot(
+                req.html, real_fmt,
+                slide_index=req.slide_index,
+                resolution=req.resolution,
+            )
+            # Se retorno é tuple, é ZIP multi-imagem (bytes, mime, ext)
+            if isinstance(result, tuple):
+                file_bytes, mime, ext = result
+            else:
+                file_bytes = result
+                mime = f"image/{real_fmt}"
+                ext = real_fmt
 
         else:
             raise HTTPException(status_code=400, detail=f"Formato inválido: {fmt}. Use 'pdf', 'pptx', 'png' ou 'jpeg'.")

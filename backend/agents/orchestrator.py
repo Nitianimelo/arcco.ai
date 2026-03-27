@@ -664,7 +664,12 @@ async def orchestrate_and_stream(
     
     # ── Acknowledgment rápido (sempre, se disponível) ──
     if plan_output.acknowledgment:
-        yield sse("chunk", plan_output.acknowledgment)
+        if plan_output.is_complex:
+            # Planos complexos: acknowledgment como mensagem temporária de thinking
+            # para não poluir os chunks do step terminal (ex: HTML do design_generator)
+            yield sse("pre_action", plan_output.acknowledgment)
+        else:
+            yield sse("chunk", plan_output.acknowledgment)
 
     # ── Clarificação (se necessária, pausa o pipeline) ──
     if plan_output.needs_clarification and plan_output.questions:
@@ -743,6 +748,9 @@ async def orchestrate_and_stream(
                 "design_generator": "ask_design_generator",
             }
             _forced_tool_name = _PLANNER_ACTION_TO_TOOL.get(step.action)
+            # Skills dinamicas: se a action do planner e um skill_id, usa direto
+            if not _forced_tool_name and skills_loader.is_skill(step.action):
+                _forced_tool_name = step.action
             _tool_choice = (
                 {"type": "function", "function": {"name": _forced_tool_name}}
                 if _forced_tool_name
