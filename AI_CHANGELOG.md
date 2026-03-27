@@ -3,6 +3,22 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-27 08:30 — Claude Code (claude-sonnet-4-6) — Fix deploy Hostinger: Certbot + HTTP temporario
+
+### Arquivos modificados:
+- `docker-compose.yml`
+- `nginx/nginx.conf`
+
+### O que foi feito:
+1. **docker-compose.yml** — Substituido volume host-mounted (`/docker/arccoai/certbot/conf`) por Docker volumes persistentes (`certbot-etc`, `certbot-var`). Adicionado servico `certbot` (certbot/certbot:latest) que executa `certonly --webroot` para gerar certificados SSL automaticamente via ACME challenge.
+
+2. **nginx/nginx.conf** — Bloco HTTPS (443 ssl) comentado temporariamente. Servidor HTTP (80) agora serve a aplicacao completa (API, admin, health, frontend). Adicionado `location /.well-known/acme-challenge/` para validacao do Certbot. Removido redirect 301 HTTP→HTTPS. Removido `text/html` duplicado do gzip_types (fix warning). Removido `http2` do listen (deprecated em nginx recente).
+
+### Por que:
+Nginx crashava em loop no Hostinger porque os certificados SSL nao existiam no path `/etc/letsencrypt/live/app.arccoai.com/`. O pipeline de deploy da Hostinger apaga arquivos locais, entao volumes host-mounted nao persistem. Com Docker volumes + Certbot como servico, os certificados sao gerados automaticamente e persistem entre deploys. Apos Certbot gerar os certs, basta descomentar o bloco HTTPS e fazer novo push.
+
+---
+
 ## 2026-03-27 06:00 — Claude Code (claude-sonnet-4-6) — Atualização de prompts: Supervisor, Planner, QA
 
 ### Arquivos modificados:
