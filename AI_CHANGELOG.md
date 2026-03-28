@@ -3,6 +3,25 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-27 — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Redesign completo do painel de pensamento/steps do agente:
+   - Removido o indicador "Trabalhando" de dentro do balão da mensagem do assistente
+   - Balão vazio do assistente agora é escondido enquanto o agente está processando (evita bolha vazia no topo)
+   - Criado painel unificado "Activity Panel" que fica abaixo das mensagens (perto do input), combinando: thinking indicator + steps + loading state
+   - Agent mode: painel com borda arredondada, header com status (Processando/Concluído) e timer, steps com ícones (✓ done, ● running, · pending), thoughts indentados com borda lateral, mensagem pre_action com spinner na base do painel, botão "Recolher" quando concluído, modo collapsed compacto com seta
+   - Non-agent mode: indicador simples com dot pulsante e mensagem de thinking
+   - Melhor espaçamento (space-y-3), tipografia mais limpa (text-xs, tracking), cores mais sutis (emerald para done, indigo para running)
+
+2. **ArccoChat.tsx (chunk handler)** — No modo agente, `chatThinkingVisible` agora NÃO é desligado quando o primeiro chunk chega. As mensagens de `pre_action` ("vou abrir o browser...") persistem no painel durante toda a execução dos steps. No chat mode (não-agente), comportamento mantido (esconde após 800ms).
+
+### Por quê:
+O painel de pensamento aparecia no topo (dentro do balão da mensagem), longe do input. Usuário pediu para ficar mais perto do input e mais profissional. Agora fica abaixo de todas as mensagens, com visual clean. As mensagens de pre_action ficam visíveis durante toda a execução.
+
 ## 2026-03-27 12:00 — Claude Code (claude-sonnet-4-6) — Frontend responsivo para mobile
 
 ### Arquivos modificados:

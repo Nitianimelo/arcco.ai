@@ -938,8 +938,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
               setAgentThoughts(prev =>
                 prev.map(s => s.status === 'running' ? { ...s, status: 'done' as const } : s)
               );
-              // Esconde thinking panel com tempo mínimo garantido de 800ms (ambos os modos)
-              if (chatThinkingStartRef.current > 0) {
+              // Esconde thinking panel — só no chat mode (no agent mode, o painel cuida)
+              if (!isAgentMode && chatThinkingStartRef.current > 0) {
                 const elapsed = Date.now() - chatThinkingStartRef.current;
                 const delay = Math.max(0, 800 - elapsed);
                 chatThinkingTimerRef.current = setTimeout(() => {
@@ -1639,6 +1639,9 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   const isLastAssistant = msg.role === 'assistant' && msgIndex === messages.length - 1;
                   const isStreaming = isLastAssistant && isLoading && msg.content.length > 0;
 
+                  // Esconde balão vazio quando thinking está ativo (indicador movido pro painel abaixo)
+                  if (isLastAssistant && !msg.content && (chatThinkingVisible || isLoading)) return null;
+
                   return (
                     <div
                       key={msg.id}
@@ -1660,85 +1663,153 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                         } ${msg.isError ? 'border border-red-500/30 bg-red-500/10' : ''} ${isStreaming ? 'animate-typing-border' : ''
                         }`}
                       >
-                        {isLastAssistant && chatThinkingVisible ? (
-                          <div className="flex flex-col gap-2.5 animate-in fade-in duration-300">
-                            <div className="flex items-center gap-2">
-                              <div className="w-3.5 h-3.5 rounded-full border-[1.5px] border-indigo-400/80 border-t-transparent animate-spin flex-shrink-0" />
-                              <span className="text-sm text-neutral-400 font-medium">Trabalhando</span>
-                            </div>
-                            <div className="pl-5 border-l border-[#2a2a2a] ml-[3px] animate-in fade-in slide-in-from-left-1 duration-500">
-                              <p className="text-xs text-neutral-600 leading-relaxed">
-                                {chatThinkingMessage}
-                              </p>
-                            </div>
-                          </div>
-                        ) : renderContent(msg.content)}
+                        {renderContent(msg.content)}
                       </div>
                     </div>
                   );
                 })}
 
-                {/* Inline Steps — mostra steps do orquestrador inline no chat (apenas agent mode) */}
-                {isAgentMode && agentThoughts.length > 0 && (() => {
-                  const allDone = agentThoughts.every(s => s.status === 'done');
-                  const actionSteps = agentThoughts.filter(s => !s.isThought);
-                  const collapsed = allDone && !isThoughtsExpanded;
+                {/* ── Activity Panel — pensamento + steps do agente (unificado, perto do input) ── */}
+                {(() => {
+                  // Non-agent mode: indicador de thinking simples
+                  if (!isAgentMode && chatThinkingVisible && isLoading) {
+                    return (
+                      <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px] py-2">
+                        <div className="flex items-center gap-3 px-1 animate-in fade-in duration-300">
+                          <div className="relative flex items-center justify-center w-5 h-5 flex-shrink-0">
+                            <div className="absolute inset-0 rounded-full border border-indigo-500/20 animate-ping" />
+                            <div className="w-2 h-2 rounded-full bg-indigo-400/80" />
+                          </div>
+                          <span className="text-sm text-neutral-500">{chatThinkingMessage || 'Processando...'}</span>
+                        </div>
+                      </div>
+                    );
+                  }
 
-                  return (
-                    <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px]">
-                      {collapsed ? (
+                  if (!isAgentMode) return null;
+
+                  const hasSteps = agentThoughts.length > 0;
+                  const allDone = hasSteps && agentThoughts.every(s => s.status === 'done');
+                  const actionSteps = agentThoughts.filter(s => !s.isThought);
+                  const stepsCollapsed = allDone && !isThoughtsExpanded;
+
+                  if (!hasSteps && !isLoading) return null;
+
+                  // Loading sem steps ainda
+                  if (!hasSteps && isLoading) {
+                    return (
+                      <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px] py-2">
+                        <div className="flex items-center gap-3 px-1 animate-in fade-in duration-300">
+                          <img src={arccoEmblemUrl} alt="" className="w-4 h-4 object-contain animate-pulse-soft flex-shrink-0" />
+                          <span className="text-sm text-neutral-500 animate-pulse-soft">Analisando...</span>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // Collapsed — resumo compacto
+                  if (stepsCollapsed) {
+                    return (
+                      <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px]">
                         <button
                           onClick={() => setIsThoughtsExpanded(true)}
-                          className="flex items-center gap-1.5 text-sm text-neutral-600 hover:text-neutral-400 transition-colors py-1"
+                          className="flex items-center gap-2 text-xs text-neutral-600 hover:text-neutral-400 transition-colors py-2 group"
                         >
-                          <span className="text-neutral-700">&#9662;</span>
-                          <span>{actionSteps.length} etapa{actionSteps.length !== 1 ? 's' : ''} · {elapsedSeconds}s</span>
+                          <span className="text-neutral-700 group-hover:text-neutral-500 transition-colors text-[10px]">&#9656;</span>
+                          <span>{actionSteps.length} etapa{actionSteps.length !== 1 ? 's' : ''}</span>
+                          <span className="text-neutral-800">·</span>
+                          <span className="tabular-nums">{elapsedSeconds}s</span>
                         </button>
-                      ) : (
-                        <div className="space-y-3 py-1">
+                      </div>
+                    );
+                  }
+
+                  // Expanded — painel completo
+                  return (
+                    <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px]">
+                      <div className="rounded-xl border border-[#1c1c20] bg-[#0a0a0d]/60 overflow-hidden">
+                        {/* Header */}
+                        <div className="flex items-center justify-between px-4 py-2.5">
+                          <div className="flex items-center gap-2.5">
+                            {!allDone ? (
+                              <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+                            ) : (
+                              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500/60" />
+                            )}
+                            <span className="text-[11px] font-medium text-neutral-500 tracking-wider uppercase">
+                              {allDone ? 'Concluído' : 'Processando'}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-neutral-700 tabular-nums font-mono">
+                            {elapsedSeconds > 0 && `${elapsedSeconds}s`}
+                          </span>
+                        </div>
+
+                        <div className="h-px bg-[#1c1c20]" />
+
+                        {/* Steps */}
+                        <div className="px-4 py-3 space-y-3">
                           {agentThoughts.map((step, i) => {
-                            const isRunning = step.status === 'running';
+                            const isStepRunning = step.status === 'running';
                             const label = step.label.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\u200d\ufe0f]/gu, '').trim();
 
                             if (step.isThought) {
                               return (
-                                <div key={i} className="flex items-start gap-2.5 animate-step-enter" style={{ animationDelay: `${i * 40}ms` }}>
-                                  <img
-                                    src={arccoEmblemUrl}
-                                    alt=""
-                                    className={`w-4 h-4 object-contain mt-0.5 flex-shrink-0 ${isRunning ? 'animate-pulse-soft' : 'opacity-30'}`}
-                                  />
-                                  <span className={`text-sm italic ${isRunning ? 'text-neutral-500 animate-pulse-soft' : 'text-neutral-700'}`}>
+                                <div key={i} className="pl-6 border-l border-[#1c1c20] ml-0.5 animate-step-enter" style={{ animationDelay: `${i * 40}ms` }}>
+                                  <p className={`text-xs leading-relaxed italic ${isStepRunning ? 'text-neutral-500' : 'text-neutral-700'}`}>
                                     {label}
-                                  </span>
+                                    {isStepRunning && <span className="animate-cursor-blink ml-0.5 not-italic text-neutral-500">&#9612;</span>}
+                                  </p>
                                 </div>
                               );
                             }
 
                             return (
-                              <div key={i} className="flex items-start gap-2.5 animate-step-enter" style={{ animationDelay: `${i * 40}ms` }}>
-                                <img
-                                  src={arccoEmblemUrl}
-                                  alt=""
-                                  className={`w-4 h-4 object-contain mt-0.5 flex-shrink-0 ${isRunning ? 'animate-pulse-soft' : 'opacity-30'}`}
-                                />
-                                <span className={`text-sm ${isRunning ? 'text-neutral-400 animate-pulse-soft' : 'text-neutral-600'}`}>
+                              <div key={i} className="flex items-start gap-3 animate-step-enter" style={{ animationDelay: `${i * 40}ms` }}>
+                                {step.status === 'done' ? (
+                                  <span className="text-[10px] text-emerald-600/50 mt-0.5 flex-shrink-0 w-4 text-center">&#10003;</span>
+                                ) : isStepRunning ? (
+                                  <div className="w-4 flex justify-center flex-shrink-0 mt-1">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+                                  </div>
+                                ) : (
+                                  <span className="text-[10px] text-neutral-700 mt-0.5 flex-shrink-0 w-4 text-center">&#183;</span>
+                                )}
+                                <span className={`text-xs leading-relaxed ${
+                                  isStepRunning ? 'text-neutral-300' : step.status === 'done' ? 'text-neutral-600' : 'text-neutral-700'
+                                }`}>
                                   {label}
+                                  {isStepRunning && <span className="animate-cursor-blink ml-0.5 text-neutral-400">&#9612;</span>}
                                 </span>
                               </div>
                             );
                           })}
-                          {allDone && (
-                            <button
-                              onClick={() => setIsThoughtsExpanded(false)}
-                              className="flex items-center gap-1.5 text-sm text-neutral-600 hover:text-neutral-400 transition-colors pt-1"
-                            >
-                              <span className="text-neutral-700">&#9652;</span>
-                              <span>{actionSteps.length} etapa{actionSteps.length !== 1 ? 's' : ''} · {elapsedSeconds}s</span>
-                            </button>
+
+                          {/* Mensagem de thinking atual (pre_action) */}
+                          {chatThinkingVisible && chatThinkingMessage && !allDone && (
+                            <div className="flex items-center gap-3 pt-2 border-t border-[#1c1c20] animate-in fade-in duration-300">
+                              <div className="w-4 flex justify-center flex-shrink-0">
+                                <div className="w-3 h-3 rounded-full border-[1.5px] border-indigo-400/60 border-t-transparent animate-spin" />
+                              </div>
+                              <span className="text-xs text-neutral-500 leading-relaxed">{chatThinkingMessage}</span>
+                            </div>
                           )}
                         </div>
-                      )}
+
+                        {/* Botão recolher quando concluído */}
+                        {allDone && (
+                          <>
+                            <div className="h-px bg-[#1c1c20]" />
+                            <button
+                              onClick={() => setIsThoughtsExpanded(false)}
+                              className="w-full flex items-center justify-center gap-1.5 px-4 py-2 text-[10px] text-neutral-600 hover:text-neutral-400 transition-colors"
+                            >
+                              <span>&#9652;</span>
+                              <span>Recolher</span>
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   );
                 })()}
@@ -1799,19 +1870,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   />
                 )}
 
-                {/* Loading — Agent mode: aguardando primeiro step inline */}
-                {isLoading && isAgentMode && agentThoughts.length === 0 && (
-                  <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px] py-1">
-                    <div className="flex items-center gap-2 animate-step-enter">
-                      <img
-                        src={arccoEmblemUrl}
-                        alt=""
-                        className="w-4 h-4 object-contain animate-pulse-soft flex-shrink-0"
-                      />
-                      <span className="text-sm text-neutral-500 animate-pulse-soft">Analisando...</span>
-                    </div>
-                  </div>
-                )}
+                {/* Loading state agora integrado no Activity Panel acima */}
 
 
                 {/* Botão Parar — aparece durante execução do agente */}
