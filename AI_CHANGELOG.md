@@ -3,6 +3,19 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-27 22:00 — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `nginx/nginx.conf`
+
+### O que foi feito:
+1. **nginx.conf** — Bloco HTTP agora serve o site completo (API + frontend) sem redirect pro HTTPS. Site funciona via HTTP quando não há certificado SSL real.
+
+### Por quê:
+Rate limit do Let's Encrypt atingido. Site precisa funcionar via HTTP até 29/03.
+
+---
+
 ## 2026-03-27 — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:
