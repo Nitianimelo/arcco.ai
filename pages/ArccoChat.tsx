@@ -446,33 +446,69 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     return "Boa noite";
   };
 
+  const getWeatherSubtitle = (loc: typeof userLocation) => {
+    if (!loc?.temp) return null;
+    const code = loc.weatherCode ?? 0;
+    const temp = loc.temp;
+    const city = loc.city;
+
+    // Clima extremo tem prioridade
+    if (code >= 95) return `Tempestade em ${city}! Melhor ficar no aconchego e criar algo incrivel aqui dentro.`;
+    if (code >= 71 && code <= 77) return `Nevando em ${city}! Perfeito para um cafe quente e produtividade.`;
+
+    // Chuva
+    if (code >= 51 && code <= 82) {
+      if (temp < 15) return `Chuva e friozinho em ${city}. Dia perfeito para focar com tudo.`;
+      return `Chovendo em ${city}, mas aqui dentro o clima e de criatividade. Vamos nessa?`;
+    }
+
+    // Nevoeiro
+    if (code >= 45 && code <= 48) return `Neblina em ${city}. Enquanto la fora ta nebuloso, aqui a visao e clara.`;
+
+    // Calor
+    if (temp >= 35) return `${temp} graus em ${city}! Ta quente, mas suas ideias podem ser ainda mais.`;
+    if (temp >= 28) return `Calorzao em ${city} hoje. Que tal transformar essa energia em algo produtivo?`;
+
+    // Frio
+    if (temp <= 10) return `${temp} graus em ${city}! Dia de cobertor e produtividade com cafe.`;
+    if (temp <= 18) return `Friozinho em ${city} hoje. Otimo clima para se concentrar. No que trabalhamos?`;
+
+    // Tempo bom / Parcialmente nublado
+    if (code <= 3) {
+      if (temp >= 22 && temp <= 28) return `Dia lindo em ${city}! ${temp} graus e ceu aberto. Vamos aproveitar essa energia?`;
+      return `Tempo firme em ${city}. Tudo alinhado pra um dia produtivo.`;
+    }
+
+    return `${temp} graus em ${city}. Como posso te ajudar hoje?`;
+  };
+
   const getSubtitle = () => {
     const now = new Date();
     const hour = now.getHours();
-    const day = now.getDay(); // 0=Dom, 1=Seg, ..., 6=Sáb
+    const day = now.getDay();
     const isWeekend = day === 0 || day === 6;
 
     if (hour >= 5 && hour < 12) {
       if (day === 1) return "Segunda-feira com energia! Como posso te ajudar hoje?";
       if (day === 5) return "Sexta chegou! Vamos fechar a semana com tudo. O que fazemos?";
       if (isWeekend) return "Fim de semana produtivo! O que vamos criar juntos?";
-      return "Mais um dia para criar algo incrível. Por onde começamos?";
+      return "Mais um dia para criar algo incrivel. Por onde comecamos?";
     }
     if (hour >= 12 && hour < 18) {
-      if (day === 5) return "Tarde de sexta! Últimos sprints do dia. No que posso ajudar?";
-      if (isWeekend) return "Tarde de fim de semana! Em que posso ser útil?";
-      return "A tarde é boa para grandes ideias. O que resolvemos hoje?";
+      if (day === 5) return "Tarde de sexta! Ultimos sprints do dia. No que posso ajudar?";
+      if (isWeekend) return "Tarde de fim de semana! Em que posso ser util?";
+      return "A tarde e boa para grandes ideias. O que resolvemos hoje?";
     }
     if (hour >= 18 && hour < 23) {
-      if (isWeekend) return "Boa noite! Ótima hora para criar algo memorável. Por onde vamos?";
-      return "Encerrando o dia ou só aquecendo? Pode contar comigo.";
+      if (isWeekend) return "Otima hora para criar algo memoravel. Por onde vamos?";
+      return "Encerrando o dia ou so aquecendo? Pode contar comigo.";
     }
     return "Madrugada produtiva! O que faremos juntos?";
   };
 
-  const displayName = userName.trim() || 'Usuário';
+  const displayName = userName.trim() || 'Usuario';
   const [greetingTime] = useState(getGreeting());
-  const [greetingSubtitle] = useState(getSubtitle());
+  const [greetingFallback] = useState(getSubtitle());
   const [suggestionHints] = useState(() => {
     const hour = new Date().getHours();
     const seed = Math.floor(hour / 3);
@@ -1575,10 +1611,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                       </h1>
                     </div>
                     <p className="text-lg md:text-xl font-normal text-neutral-500 tracking-tight leading-snug mt-1">
-                      {userLocation
-                        ? `Como está aí em ${userLocation.city}? ${greetingSubtitle}`
-                        : greetingSubtitle
-                      }
+                      {getWeatherSubtitle(userLocation) || greetingFallback}
                     </p>
                   </>
                 )}
