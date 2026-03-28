@@ -342,10 +342,18 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   };
 
   // Location + Weather (IP-based, no permission needed)
-  const [userLocation, setUserLocation] = useState<{ city: string; temp?: number; weatherCode?: number } | null>(null);
+  const [userLocation, setUserLocation] = useState<{
+    city: string;
+    temp?: number;
+    weatherCode?: number;
+    tempMin?: number;
+    tempMax?: number;
+    humidity?: number;
+    windSpeed?: number;
+  } | null>(null);
 
   useEffect(() => {
-    const CACHE_KEY = 'arcco_location_v2';
+    const CACHE_KEY = 'arcco_location_v3';
     const CACHE_TTL = 30 * 60 * 1000; // 30 min
 
     // Check valid cache
@@ -362,19 +370,47 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
     const fetchLocation = async () => {
       try {
-        // Proxied via backend — evita bloqueio Safari ITP / ad-blockers
+        // Proxied via backend — usa X-Forwarded-For para IP real do usuario
         const res = await fetch('/api/agent/location');
+        if (!res.ok) throw new Error('backend failed');
         const data = await res.json();
-        if (!data.city) return;
+        if (!data.city) throw new Error('no city');
 
-        const location: { city: string; temp?: number; weatherCode?: number } = { city: data.city };
-        if (data.temp !== undefined) location.temp = data.temp;
-        if (data.weather_code !== undefined) location.weatherCode = data.weather_code;
+        const location: typeof userLocation = { city: data.city };
+        if (data.temp !== undefined) location!.temp = data.temp;
+        if (data.weather_code !== undefined) location!.weatherCode = data.weather_code;
+        if (data.temp_min !== undefined) location!.tempMin = data.temp_min;
+        if (data.temp_max !== undefined) location!.tempMax = data.temp_max;
+        if (data.humidity !== undefined) location!.humidity = data.humidity;
+        if (data.wind_speed !== undefined) location!.windSpeed = data.wind_speed;
 
         setUserLocation(location);
         localStorage.setItem(CACHE_KEY, JSON.stringify({ data: location, timestamp: Date.now() }));
-      } catch (e) {
-        console.warn('[Arcco] Location fetch failed:', e);
+      } catch {
+        // Fallback: API direta no browser (pode ser bloqueada por ad-blockers)
+        try {
+          const geo = await fetch('https://ipwho.is/');
+          const geoData = await geo.json();
+          if (geoData?.city) {
+            const fallback: typeof userLocation = { city: geoData.city };
+            // Tentar pegar clima tambem
+            if (geoData.latitude && geoData.longitude) {
+              try {
+                const w = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${geoData.latitude}&longitude=${geoData.longitude}&current_weather=true&timezone=auto`);
+                const wd = await w.json();
+                const cw = wd?.current_weather;
+                if (cw) {
+                  fallback!.temp = Math.round(cw.temperature);
+                  fallback!.weatherCode = cw.weathercode ?? 0;
+                }
+              } catch { /* sem clima, pelo menos tem cidade */ }
+            }
+            setUserLocation(fallback);
+            localStorage.setItem(CACHE_KEY, JSON.stringify({ data: fallback, timestamp: Date.now() }));
+          }
+        } catch (e) {
+          console.warn('[Arcco] Location fetch failed:', e);
+        }
       }
     };
 
@@ -389,6 +425,17 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     if (code <= 77) return '❄️';
     if (code <= 82) return '🌦️';
     return '⛈️';
+  };
+
+  const getWeatherDesc = (code: number) => {
+    if (code === 0) return 'Ceu limpo';
+    if (code <= 3) return 'Parcialmente nublado';
+    if (code <= 48) return 'Nevoeiro';
+    if (code <= 55) return 'Garoa';
+    if (code <= 67) return 'Chuva';
+    if (code <= 77) return 'Neve';
+    if (code <= 82) return 'Pancadas de chuva';
+    return 'Tempestade';
   };
 
   // Dynamic Greeting Logic
@@ -1476,6 +1523,19 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                         <>
                           <span className="text-neutral-700">·</span>
                           <span>{userLocation.temp}°C</span>
+                          <span className="text-neutral-500">{getWeatherDesc(userLocation.weatherCode ?? 0)}</span>
+                        </>
+                      )}
+                      {userLocation.tempMin !== undefined && userLocation.tempMax !== undefined && (
+                        <>
+                          <span className="text-neutral-700">·</span>
+                          <span className="text-neutral-500">{userLocation.tempMin}°/{userLocation.tempMax}°</span>
+                        </>
+                      )}
+                      {userLocation.humidity !== undefined && (
+                        <>
+                          <span className="text-neutral-700">·</span>
+                          <span className="text-neutral-500">{userLocation.humidity}%</span>
                         </>
                       )}
                     </>
