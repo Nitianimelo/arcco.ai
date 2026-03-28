@@ -1068,7 +1068,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   };
 
   const renderInputArea = (variant: 'centered' | 'bottom') => (
-    <div className={`relative group w-full ${variant === 'centered' ? 'max-w-2xl' : 'max-w-4xl mx-auto'}`}>
+    <div className={`relative group w-full ${variant === 'centered' ? 'max-w-2xl px-3 md:px-0' : 'max-w-4xl mx-auto px-2 md:px-0'}`}>
 
       {/* Spy Pages — card de entrada de URLs, aparece acima do input */}
       {spyPagesActive && !isLoading && (
@@ -1304,12 +1304,12 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
         <DotGridBackground />
 
         {/* Header */}
-        <div className="h-16 border-b border-[#222] flex items-center px-6 bg-[#0a0a0a]/80 backdrop-blur-md relative z-20 transition-opacity duration-500">
+        <div className="h-14 md:h-16 border-b border-[#222] flex items-center pl-14 md:pl-6 pr-3 md:pr-6 bg-[#0a0a0a]/80 backdrop-blur-md relative z-20 transition-opacity duration-500">
 
           {/* Projeto ativo — badge + botões de edição */}
           {project && (
             <div className="flex items-center gap-2 mr-4">
-              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-sm font-medium max-w-[180px]">
+              <div className="flex items-center gap-1.5 px-2 md:px-3 py-1 md:py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs md:text-sm font-medium max-w-[120px] md:max-w-[180px]">
                 <Folder size={13} className="text-indigo-400 flex-shrink-0" />
                 <span className="truncate">{project.name}</span>
               </div>
@@ -1556,11 +1556,11 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                           <img
                             src={arccoEmblemUrl}
                             alt="Arcco"
-                            className={`w-[50px] h-[50px] object-contain opacity-75 ${isStreaming ? 'animate-pulse' : ''}`}
+                            className={`w-8 h-8 md:w-[50px] md:h-[50px] object-contain opacity-75 ${isStreaming ? 'animate-pulse' : ''}`}
                           />
                         </div>
                       )}
-                      <div className={`max-w-[85%] md:max-w-[80%] rounded-2xl px-5 py-4 relative group
+                      <div className={`max-w-[95%] sm:max-w-[85%] md:max-w-[80%] rounded-2xl px-5 py-4 relative group
                                   ${msg.role === 'user'
                           ? 'bg-[#222] text-white rounded-tr-sm shadow-md'
                           : 'bg-transparent text-neutral-200'
@@ -1592,7 +1592,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   const collapsed = allDone && !isThoughtsExpanded;
 
                   return (
-                    <div className="w-full max-w-[85%] md:max-w-[80%] pl-[62px]">
+                    <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px]">
                       {collapsed ? (
                         <button
                           onClick={() => setIsThoughtsExpanded(true)}
@@ -1652,13 +1652,13 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
                 {/* Browser Agent Card — mostra card estilo Manus quando o agente navega */}
                 {browserAction && (
-                  <div className="w-full max-w-[85%] md:max-w-[80%]">
+                  <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%]">
                     <BrowserAgentCard action={browserAction as any} />
                   </div>
                 )}
 
                 {generatedFiles.length > 0 && (
-                  <div className="w-full max-w-[85%] md:max-w-[80%] flex flex-col gap-3">
+                  <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] flex flex-col gap-3">
                     {generatedFiles.map(file => (
                       <FilePreviewCard
                         key={file.url}
@@ -1673,7 +1673,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
                 {/* Clarification Card — perguntas antes de executar o pipeline */}
                 {clarificationQuestions && !isLoading && (
-                  <div className="w-full max-w-[85%] md:max-w-[80%]">
+                  <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%]">
                     <ClarificationCard
                       questions={clarificationQuestions}
                       onSubmit={(answers) => {
@@ -1689,7 +1689,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
                 {/* Text Document Artifact — botões DOCX / PDF para documentos escritos */}
                 {textDocArtifact && !isLoading && (
-                  <div className="w-full max-w-[85%] md:max-w-[80%]">
+                  <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%]">
                     <TextDocCard
                       title={textDocArtifact.title}
                       content={textDocArtifact.content}
@@ -1708,7 +1708,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
                 {/* Loading — Agent mode: aguardando primeiro step inline */}
                 {isLoading && isAgentMode && agentThoughts.length === 0 && (
-                  <div className="w-full max-w-[85%] md:max-w-[80%] pl-[62px] py-1">
+                  <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px] py-1">
                     <div className="flex items-center gap-2 animate-step-enter">
                       <img
                         src={arccoEmblemUrl}
@@ -1748,7 +1748,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
         </div>
 
         {messages.length > 0 && (
-          <div className="p-4 bg-transparent border-t border-[#222] z-10 relative backdrop-blur-sm flex flex-col gap-4">
+          <div className="p-3 md:p-4 bg-transparent border-t border-[#222] z-10 relative backdrop-blur-sm flex flex-col gap-4">
             {renderInputArea('bottom')}
           </div>
         )}

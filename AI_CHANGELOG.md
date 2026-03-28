@@ -3,6 +3,31 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-27 12:00 — Claude Code (claude-sonnet-4-6) — Frontend responsivo para mobile
+
+### Arquivos modificados:
+- `App.tsx`
+- `components/Sidebar.tsx`
+- `pages/ArccoChat.tsx`
+- `pages/AdminPage.tsx`
+- `components/SettingsModal.tsx`
+
+### O que foi feito:
+1. **App.tsx** — Adicionado estado `isMobile` (detecta <768px) e `isMobileSidebarOpen`. Botao hamburger (Menu icon) fixo no canto superior esquerdo, visivel apenas no mobile. Margem do main condicional (ml-0 no mobile). Novas props `isMobile`, `isMobileOpen`, `onMobileClose` passadas ao Sidebar.
+
+2. **Sidebar.tsx** — Convertido para drawer mobile: overlay escuro (bg-black/60 backdrop-blur), sidebar desliza com translate-x (slide in/out). `effectiveCollapsed` ignora estado collapsed no mobile (sempre expandido). Wrappers `handleNavigateWithClose`, `handleLoadSessionWithClose`, `handleSelectProjectWithClose` fecham o drawer ao navegar. Botoes collapse/expand escondidos no mobile.
+
+3. **ArccoChat.tsx** — Header: h-14 no mobile (h-16 desktop), pl-14 para dar espaco ao hamburger. Mensagens: max-w-[95%] no mobile (85% sm, 80% md). Avatar: w-8 h-8 no mobile (50px desktop). Steps indentation: pl-0 no mobile. Input area: px-3/px-2 no mobile. Bottom bar: p-3 no mobile.
+
+4. **AdminPage.tsx** — Grid de cards: grid-cols-1 mobile, sm:2, lg:3. Tabs: overflow-x-auto scrollavel, labels hidden no mobile (so icones). Paddings: px-4 mobile, px-6 desktop.
+
+5. **SettingsModal.tsx** — Largura: w-full max-w-[90vw] no mobile, w-[860px] no desktop. Margem m-4 no mobile.
+
+### Por que:
+O frontend era desktop-first sem suporte mobile. Sidebar ocupava espaco fixo, nao havia hamburger menu, paddings eram grandes demais para telas pequenas, e modais tinham largura fixa que transbordava.
+
+---
+
 ## 2026-03-27 10:00 — Claude Code (claude-sonnet-4-6) — Fix definitivo SSL: entrypoint self-signed bootstrap
 
 ### Arquivos modificados:

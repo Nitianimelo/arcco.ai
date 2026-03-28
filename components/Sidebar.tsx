@@ -43,6 +43,9 @@ interface SidebarProps {
   onTriggerUpsell: (feature: string) => void;
   onCollapsedChange?: (collapsed: boolean) => void;
   onDisplayNameChange?: (displayName: string | null) => void;
+  isMobile?: boolean;
+  isMobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
 interface NavButtonProps {
@@ -146,8 +149,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onTriggerUpsell,
   onCollapsedChange,
   onDisplayNameChange,
+  isMobile = false,
+  isMobileOpen = false,
+  onMobileClose,
 }) => {
   const [collapsed, setCollapsed] = useState(false);
+  const effectiveCollapsed = isMobile ? false : collapsed;
+
+  const handleNavigateWithClose = (view: ViewState) => {
+    onNavigate(view);
+    if (isMobile) onMobileClose?.();
+  };
+
+  const handleLoadSessionWithClose = (sessionId: string) => {
+    if (onLoadSession) onLoadSession(sessionId);
+    if (isMobile) onMobileClose?.();
+  };
+
+  const handleNewInteractionWithClose = () => {
+    onNewInteraction?.();
+    if (isMobile) onMobileClose?.();
+  };
+
+  const handleSelectProjectWithClose = (projectId: string | null) => {
+    onSelectProject?.(projectId);
+    if (isMobile) onMobileClose?.();
+  };
+
   const [toolsOpen, setToolsOpen] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [recentSessions, setRecentSessions] = useState<ChatSession[]>([]);
@@ -248,16 +276,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
+    <>
+    {/* Mobile overlay */}
+    {isMobile && isMobileOpen && (
+      <div
+        className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+        onClick={onMobileClose}
+      />
+    )}
+
     <aside
       className={`h-screen border-r border-[#262629] flex flex-col fixed left-0 top-0 z-50 shadow-[4px_0_24px_rgba(0,0,0,0.3)] transition-all duration-300 ease-in-out
-        ${collapsed ? 'w-16' : 'w-64'}`}
+        ${isMobile
+          ? `w-64 ${isMobileOpen ? 'translate-x-0' : '-translate-x-full'}`
+          : (effectiveCollapsed ? 'w-16' : 'w-64')
+        }`}
       style={{ backgroundColor: 'var(--bg-sidebar)' }}
     >
 
       {/* 1. Logo + botão colapsar */}
-      <div className={`flex items-center shrink-0 pt-5 pb-6 ${collapsed ? 'justify-center px-0' : 'justify-between px-4'}`}>
-        {!collapsed && (
-          <div className="flex items-center gap-2 cursor-pointer" onClick={() => onNavigate('ARCCO_CHAT')}>
+      <div className={`flex items-center shrink-0 pt-5 pb-6 ${effectiveCollapsed ? 'justify-center px-0' : 'justify-between px-4'}`}>
+        {!effectiveCollapsed && (
+          <div className="flex items-center gap-2 cursor-pointer" onClick={() => handleNavigateWithClose('ARCCO_CHAT')}>
             <img
               src="https://qscezcbpwvnkqoevulbw.supabase.co/storage/v1/object/public/Chipro%20calculadora/arcco%20(1).png"
               alt="Arcco Logo"
@@ -266,8 +306,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         )}
 
-        {collapsed && (
-          <div className="cursor-pointer" onClick={() => onNavigate('ARCCO_CHAT')}>
+        {effectiveCollapsed && (
+          <div className="cursor-pointer" onClick={() => handleNavigateWithClose('ARCCO_CHAT')}>
             <img
               src="https://qscezcbpwvnkqoevulbw.supabase.co/storage/v1/object/public/Chipro%20calculadora/arcco%20(1).png"
               alt="Arcco Logo"
@@ -276,7 +316,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         )}
 
-        {!collapsed && (
+        {!effectiveCollapsed && !isMobile && (
           <div className="relative group/collapse">
             <button
               onClick={() => setCollapsed(true)}
@@ -291,8 +331,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      {/* Botão expandir — só aparece quando colapsado */}
-      {collapsed && (
+      {/* Botão expandir — só aparece quando colapsado (desktop) */}
+      {effectiveCollapsed && !isMobile && (
         <div className="flex justify-center pb-1 shrink-0">
           <div className="relative group/expand">
             <button
@@ -309,35 +349,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
       )}
 
       {/* 2. Nova Interação + Projetos + Tools */}
-      <div className={`pb-2 shrink-0 space-y-0.5 ${collapsed ? 'px-1' : 'px-2'}`}>
+      <div className={`pb-2 shrink-0 space-y-0.5 ${effectiveCollapsed ? 'px-1' : 'px-2'}`}>
         <NavButton
           item={{ id: 'ARCCO_CHAT', label: 'Nova Interação', icon: MessageSquare }}
           isActive={currentView === 'ARCCO_CHAT'}
           userPlan={userPlan}
-          collapsed={collapsed}
-          onNavigate={onNavigate}
-          onClickOverride={onNewInteraction}
+          collapsed={effectiveCollapsed}
+          onNavigate={handleNavigateWithClose}
+          onClickOverride={handleNewInteractionWithClose}
           onTriggerUpsell={onTriggerUpsell}
         />
         <NavButton
           item={{ id: 'ESPECIALISTAS', label: 'Especialistas', icon: Users, disabled: true }}
           isActive={false}
           userPlan={userPlan}
-          collapsed={collapsed}
-          onNavigate={onNavigate}
+          collapsed={effectiveCollapsed}
+          onNavigate={handleNavigateWithClose}
           onTriggerUpsell={onTriggerUpsell}
         />
 
         {/* Projetos com sub-menu e Modal */}
         <div>
           <button
-            title={collapsed ? 'Projetos' : undefined}
+            title={effectiveCollapsed ? 'Projetos' : undefined}
             onClick={() => {
-              if (collapsed) return;
+              if (effectiveCollapsed) return;
               setProjectsOpen(!projectsOpen);
             }}
             className={`group relative w-full flex items-center transition-all duration-200 outline-none rounded-lg text-sm font-medium
-              ${collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5'}
+              ${effectiveCollapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5'}
               text-neutral-400 hover:text-white hover:bg-white/[0.03] border-l-2 border-transparent`}
           >
             <div className={`relative flex items-center justify-center transition-transform duration-300 group-hover:scale-110`}>
@@ -346,7 +386,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="transition-colors duration-200 text-neutral-500 group-hover:text-neutral-200"
               />
             </div>
-            {!collapsed && (
+            {!effectiveCollapsed && (
               <>
                 <span className="flex-1 text-left">Projetos</span>
                 <span
@@ -364,7 +404,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
           </button>
 
-          {projectsOpen && !collapsed && (
+          {projectsOpen && !effectiveCollapsed && (
             <div className="mt-0.5 ml-3 border-l border-[#313134] pl-3 space-y-0.5 pb-1">
               {projectsLoading ? (
                 <div className="px-2 py-2 text-[11px] text-neutral-600">Carregando...</div>
@@ -374,7 +414,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 projects.map(proj => (
                   <div key={proj.id} className="relative group/proj">
                     <button
-                      onClick={() => onSelectProject?.(selectedProjectId === proj.id ? null : proj.id)}
+                      onClick={() => handleSelectProjectWithClose(selectedProjectId === proj.id ? null : proj.id)}
                       className={`w-full flex items-center gap-2.5 px-2 py-2 text-sm rounded-lg transition-colors
                         ${selectedProjectId === proj.id
                           ? 'text-white bg-indigo-500/10 border border-indigo-500/30'
@@ -397,13 +437,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Tools com sub-menu */}
         <div>
           <button
-            title={collapsed ? 'Tools' : undefined}
+            title={effectiveCollapsed ? 'Tools' : undefined}
             onClick={() => {
-              if (collapsed) return;
+              if (effectiveCollapsed) return;
               setToolsOpen(!toolsOpen);
             }}
             className={`group relative w-full flex items-center transition-all duration-200 outline-none rounded-lg text-sm font-medium
-              ${collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5'}
+              ${effectiveCollapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5'}
               ${isToolsActive
                 ? 'bg-white/[0.06] border-l-2 border-indigo-500 text-white'
                 : 'text-neutral-400 hover:text-white hover:bg-white/[0.03] border-l-2 border-transparent'
@@ -418,7 +458,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   }`}
               />
             </div>
-            {!collapsed && (
+            {!effectiveCollapsed && (
               <>
                 <span className="flex-1 text-left">Tools</span>
                 {toolsOpen
@@ -429,11 +469,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
           </button>
 
-          {toolsOpen && !collapsed && (
+          {toolsOpen && !effectiveCollapsed && (
             <div className="mt-0.5 ml-3 border-l border-[#313134] pl-3 space-y-0.5">
               <div className="relative group/tools-my">
                 <button
-                  onClick={() => onNavigate('TOOLS_MY')}
+                  onClick={() => handleNavigateWithClose('TOOLS_MY')}
                   className={`w-full flex items-center gap-2.5 px-2 py-2 text-sm rounded-lg transition-colors
                     ${currentView === 'TOOLS_MY'
                       ? 'text-white bg-white/[0.05]'
@@ -449,7 +489,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
               <div className="relative group/tools-store">
                 <button
-                  onClick={() => onNavigate('TOOLS_STORE')}
+                  onClick={() => handleNavigateWithClose('TOOLS_STORE')}
                   className={`w-full flex items-center gap-2.5 px-2 py-2 text-sm rounded-lg transition-colors
                     ${currentView === 'TOOLS_STORE'
                       ? 'text-white bg-white/[0.05]'
@@ -470,14 +510,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* 3. Sessões recentes — rolável (só no expandido) */}
       <div className="flex-1 overflow-y-auto scrollbar-hide px-2 min-h-0">
-        {!collapsed && recentSessions.length > 0 && (
+        {!effectiveCollapsed && recentSessions.length > 0 && (
           <div className="pt-1 border-t border-[#262629]">
-            <SectionHeader collapsed={collapsed} label="Recentes" icon={<Clock size={10} className="text-neutral-600" />} />
+            <SectionHeader collapsed={effectiveCollapsed} label="Recentes" icon={<Clock size={10} className="text-neutral-600" />} />
             <div className="space-y-0.5 px-2">
               {recentSessions.map((session) => (
                 <div key={session.id} className="relative group w-full flex items-center">
                   <button
-                    onClick={() => { if (onLoadSession) onLoadSession(session.id); }}
+                    onClick={() => handleLoadSessionWithClose(session.id)}
                     className="w-full flex items-center gap-3 px-3 py-2 text-sm text-neutral-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
                   >
                     <MessageCircle size={16} className="text-neutral-600 group-hover:text-indigo-400 transition-colors flex-shrink-0" />
@@ -497,16 +537,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* 4. Apps */}
-      <div className={`pt-2 pb-1 border-t border-[#262629] shrink-0 ${collapsed ? 'px-1' : 'px-2'}`}>
-        <SectionHeader collapsed={collapsed} label="APPS" />
+      <div className={`pt-2 pb-1 border-t border-[#262629] shrink-0 ${effectiveCollapsed ? 'px-1' : 'px-2'}`}>
+        <SectionHeader collapsed={effectiveCollapsed} label="APPS" />
         {appTools.map((item) => (
           <NavButton
             key={item.id}
             item={item}
             isActive={currentView === item.id}
             userPlan={userPlan}
-            collapsed={collapsed}
-            onNavigate={onNavigate}
+            collapsed={effectiveCollapsed}
+            onNavigate={handleNavigateWithClose}
             onTriggerUpsell={onTriggerUpsell}
           />
         ))}
@@ -515,23 +555,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
           item={{ id: 'SETTINGS', label: 'Configurações', icon: Settings }}
           isActive={false}
           userPlan={userPlan}
-          collapsed={collapsed}
-          onNavigate={onNavigate}
+          collapsed={effectiveCollapsed}
+          onNavigate={handleNavigateWithClose}
           onClickOverride={() => setShowSettings(true)}
           onTriggerUpsell={onTriggerUpsell}
         />
       </div>
 
       {/* 5. Conta */}
-      <div className={`border-t border-[#262629] shrink-0 ${collapsed ? 'p-2' : 'p-4'}`}>
-        <div className={`flex items-center rounded-xl hover:bg-neutral-900/50 cursor-pointer transition-colors group ${collapsed ? 'justify-center p-1' : 'gap-3 p-2'}`}>
+      <div className={`border-t border-[#262629] shrink-0 ${effectiveCollapsed ? 'p-2' : 'p-4'}`}>
+        <div className={`flex items-center rounded-xl hover:bg-neutral-900/50 cursor-pointer transition-colors group ${effectiveCollapsed ? 'justify-center p-1' : 'gap-3 p-2'}`}>
           <div
-            title={collapsed ? `${userName} · ${userPlan}` : undefined}
+            title={effectiveCollapsed ? `${userName} · ${userPlan}` : undefined}
             className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
           >
             {userName.charAt(0)}
           </div>
-          {!collapsed && (
+          {!effectiveCollapsed && (
             <>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-white truncate">{userName}</p>
@@ -672,5 +712,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       )}
 
     </aside>
+    </>
   );
 };

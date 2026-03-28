@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Menu } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import ArccoChatPage from './pages/ArccoChat';
 import { ArccoComputerPage } from './pages/ArccoComputer';
@@ -29,6 +30,18 @@ function App() {
 
   const [currentView, setCurrentView] = useState<ViewState>('ARCCO_CHAT');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' && window.innerWidth < 768);
+
+  useEffect(() => {
+    const handler = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      if (!mobile) setIsMobileSidebarOpen(false);
+    };
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
   const [initialChatIntent, setInitialChatIntent] = useState<string | null>(null);
 
   // New: Chat Session ID to force reset
@@ -244,9 +257,22 @@ function App() {
         onLogout={handleLogout}
         onCollapsedChange={setIsSidebarCollapsed}
         onDisplayNameChange={setPreferredDisplayName}
+        isMobile={isMobile}
+        isMobileOpen={isMobileSidebarOpen}
+        onMobileClose={() => setIsMobileSidebarOpen(false)}
       />
 
-      <main className={`flex-1 relative transition-all duration-300 ${isSidebarCollapsed ? 'ml-16' : 'ml-64'}`}>
+      {isMobile && !isMobileSidebarOpen && (
+        <button
+          onClick={() => setIsMobileSidebarOpen(true)}
+          className="fixed top-4 left-4 z-40 p-2 bg-[#111113] border border-[#262629] rounded-lg text-neutral-400 hover:text-white transition-colors md:hidden"
+          aria-label="Abrir menu"
+        >
+          <Menu size={20} />
+        </button>
+      )}
+
+      <main className={`flex-1 relative transition-all duration-300 ${isMobile ? 'ml-0' : (isSidebarCollapsed ? 'ml-16' : 'ml-64')}`}>
         {renderContent()}
       </main>
     </div>

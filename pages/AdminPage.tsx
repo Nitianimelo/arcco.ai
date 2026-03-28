@@ -1123,7 +1123,7 @@ export const AdminPage: React.FC = () => {
     <div className="min-h-screen text-white" style={{ backgroundColor: 'var(--bg-base)' }}>
       {/* Topo */}
       <div className="border-b border-neutral-900 bg-[#0a0a0a]">
-        <div className="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 md:px-6 py-4 md:py-5 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-red-500/20 to-orange-500/20 border border-red-500/20 flex items-center justify-center">
               <Shield size={18} className="text-red-400" />
@@ -1144,9 +1144,9 @@ export const AdminPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-6">
+      <div className="max-w-7xl mx-auto px-4 md:px-6 py-4 md:py-6">
         {/* Cards de resumo */}
-        <div className="grid grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
           <div className="bg-[#0f0f0f] border border-neutral-900 rounded-xl p-4 flex items-center gap-4">
             <div className="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center">
               <Users size={20} className="text-indigo-400" />
@@ -1176,18 +1176,18 @@ export const AdminPage: React.FC = () => {
         )}
 
         {/* NavegaÃ§Ã£o por tabs */}
-        <div className="flex gap-1 mb-6 bg-[#0f0f0f] border border-neutral-900 rounded-xl p-1 w-fit">
+        <div className="flex gap-1 mb-6 bg-[#0f0f0f] border border-neutral-900 rounded-xl p-1 w-fit max-w-full overflow-x-auto scrollbar-hide">
           {tabs.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${activeTab === tab.id
+              className={`flex items-center gap-2 px-3 md:px-4 py-2 rounded-md text-sm font-medium transition-colors whitespace-nowrap ${activeTab === tab.id
                 ? 'bg-[#1c1c1c] text-white'
                 : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.03]'
                 }`}
             >
               {tab.icon}
-              {tab.label}
+              <span className="hidden sm:inline">{tab.label}</span>
               <span className={`text-xs px-1.5 py-0.5 rounded ${activeTab === tab.id ? 'bg-neutral-700 text-neutral-200' : 'bg-neutral-800 text-neutral-600'
                 }`}>
                 {tab.count}
