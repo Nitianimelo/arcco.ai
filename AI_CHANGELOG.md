@@ -3,6 +3,28 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-29 (7) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `backend/core/config.py`
+- `backend/api/admin.py`
+- `pages/AdminPage.tsx`
+
+### O que foi feito:
+1. **config.py** — Adicionados campos `admin_username` (default: "nitiani") e `admin_password` (default: "96947188") ao `AgentConfig`, lidos de env vars `ADMIN_USERNAME` / `ADMIN_PASSWORD`.
+2. **admin.py** — Implementado sistema de autenticação do painel admin:
+   - `POST /api/admin/login` (rota pública) — valida credenciais com `secrets.compare_digest`, retorna token SHA256 determinístico `sha256(user:pass:arcco_admin)`.
+   - Função `verify_admin` como FastAPI Dependency — valida Bearer token em todas as rotas protegidas.
+   - `Depends(verify_admin)` aplicado a todas as 12 rotas existentes.
+3. **AdminPage.tsx** — Tela de login adicionada antes do painel:
+   - Estado `adminToken` persistido em `localStorage`.
+   - Formulário de login com usuário/senha, mensagem de erro, botão com loading.
+   - Helper `adminFetch` injeta `Authorization: Bearer {token}` em todas as 10 chamadas ao backend; auto-logout em resposta 401.
+   - Botão "Sair" adicionado ao header do painel.
+
+### Por quê:
+Painel admin estava totalmente sem autenticação — qualquer pessoa com a URL acessava e podia modificar prompts, modelos e tools de todos os agentes. Credenciais ficam apenas no backend (config.py / env vars), nunca expostas ao frontend.
+
 ## 2026-03-29 (6) — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:

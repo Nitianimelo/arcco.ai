@@ -18,15 +18,17 @@ COMO AS ALTERAÇÕES SÃO SALVAS:
 """
 
 import ast
+import hashlib
 import json
 import logging
 import re
+import secrets
 import time
 from pathlib import Path
 from typing import Any, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from backend.agents import registry
@@ -37,6 +39,41 @@ from backend.services.execution_log_service import get_execution_details, list_e
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ── Auth do painel admin ───────────────────────────────────────────────────────
+
+def _admin_token() -> str:
+    """Gera token determinístico a partir das credenciais. Nunca exposto ao frontend."""
+    from backend.core.config import get_config
+    cfg = get_config()
+    return hashlib.sha256(f"{cfg.admin_username}:{cfg.admin_password}:arcco_admin".encode()).hexdigest()
+
+
+async def verify_admin(authorization: str = Header(default="")) -> None:
+    """Dependency FastAPI — valida Bearer token em todas as rotas protegidas."""
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Token de admin necessário")
+    token = authorization[7:]
+    if not secrets.compare_digest(token, _admin_token()):
+        raise HTTPException(status_code=401, detail="Credenciais inválidas")
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@router.post("/login")
+async def admin_login(req: LoginRequest):
+    """Rota pública — valida usuário/senha e retorna o token de sessão."""
+    from backend.core.config import get_config
+    cfg = get_config()
+    valid_user = secrets.compare_digest(req.username, cfg.admin_username)
+    valid_pass = secrets.compare_digest(req.password, cfg.admin_password)
+    if not (valid_user and valid_pass):
+        raise HTTPException(status_code=401, detail="Usuário ou senha incorretos")
+    return {"token": _admin_token()}
 
 # ── Caminhos dos arquivos-fonte dos agentes ───────────────────────────────────
 
@@ -161,27 +198,27 @@ _MODELS_CACHE_TTL = 3600  # segundos (1 hora)
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
-@router.get("/agents")
+@router.get("/agents", dependencies=[Depends(verify_admin)])
 async def list_agents():
     """Lista todos os agentes com suas configurações atuais (memória + overrides)."""
     return {"agents": registry.get_all()}
 
 
-@router.post("/agents/reload-models")
+@router.post("/agents/reload-models", dependencies=[Depends(verify_admin)])
 async def reload_agent_models():
     """Recarrega os modelos dos agentes a partir do Supabase sem tocar em prompts/tools."""
     agents = registry.reload_models_from_supabase()
     return {"success": True, "agents": agents}
 
 
-@router.get("/executions")
+@router.get("/executions", dependencies=[Depends(verify_admin)])
 async def list_executions(limit: int = 100):
     """Lista execuções recentes do sistema para o painel admin."""
     rows = await list_execution_summaries(limit=limit)
     return {"executions": rows}
 
 
-@router.get("/executions/{execution_id}")
+@router.get("/executions/{execution_id}", dependencies=[Depends(verify_admin)])
 async def execution_details(execution_id: str):
     """Retorna execução principal + agentes + logs detalhados."""
     result = await get_execution_details(execution_id)
@@ -190,7 +227,7 @@ async def execution_details(execution_id: str):
     return result
 
 
-@router.get("/agents/{agent_id}")
+@router.get("/agents/{agent_id}", dependencies=[Depends(verify_admin)])
 async def get_agent(agent_id: str):
     """Retorna a configuração atual de um agente específico."""
     agent = registry.get_agent(agent_id)
@@ -199,7 +236,7 @@ async def get_agent(agent_id: str):
     return agent
 
 
-@router.put("/agents/{agent_id}")
+@router.put("/agents/{agent_id}", dependencies=[Depends(verify_admin)])
 async def update_agent(agent_id: str, req: "AgentUpdateRequest"):
     """
     Salva alterações de um agente.
@@ -268,7 +305,7 @@ async def update_agent(agent_id: str, req: "AgentUpdateRequest"):
     return {"success": True, "agent": registry.get_agent(agent_id)}
 
 
-@router.post("/agents/reset/{agent_id}")
+@router.post("/agents/reset/{agent_id}", dependencies=[Depends(verify_admin)])
 async def reset_agent(agent_id: str):
     """
     Reseta o agente para os valores padrão definidos nos arquivos .py.
@@ -312,7 +349,7 @@ async def reset_agent(agent_id: str):
     return {"success": True, "agent": registry.get_agent(agent_id)}
 
 
-@router.get("/models")
+@router.get("/models", dependencies=[Depends(verify_admin)])
 async def list_models():
     """
     Retorna todos os modelos disponíveis no OpenRouter com preços por 1M de tokens.
@@ -383,18 +420,18 @@ async def list_models():
     return {"models": models, "cached": False}
 
 
-@router.get("/chat-models")
+@router.get("/chat-models", dependencies=[Depends(verify_admin)])
 async def get_chat_models():
     return {"models": list_chat_models(force_refresh=True)}
 
 
-@router.post("/chat-models")
+@router.post("/chat-models", dependencies=[Depends(verify_admin)])
 async def post_chat_model(req: "ChatModelRequest"):
     created = create_chat_model(req.model_dump())
     return {"success": True, "model": created}
 
 
-@router.put("/chat-models/{model_id}")
+@router.put("/chat-models/{model_id}", dependencies=[Depends(verify_admin)])
 async def put_chat_model(model_id: str, req: "ChatModelRequest"):
     updated = update_chat_model(model_id, req.model_dump(exclude_unset=True))
     if not updated:
@@ -402,7 +439,7 @@ async def put_chat_model(model_id: str, req: "ChatModelRequest"):
     return {"success": True, "model": updated}
 
 
-@router.delete("/chat-models/{model_id}")
+@router.delete("/chat-models/{model_id}", dependencies=[Depends(verify_admin)])
 async def remove_chat_model(model_id: str):
     deleted = delete_chat_model(model_id)
     if not deleted:

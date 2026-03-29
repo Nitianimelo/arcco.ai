@@ -72,6 +72,10 @@ class AgentConfig:
     # CORS
     cors_origins: str = "*"
 
+    # Admin panel credentials (override via env vars ADMIN_USERNAME / ADMIN_PASSWORD)
+    admin_username: str = "nitiani"
+    admin_password: str = "96947188"
+
     def __post_init__(self):
         self.api_key = os.getenv("ANTHROPIC_API_KEY", self.api_key)
         self.model = os.getenv("AGENT_MODEL", "claude-sonnet-4-5-20250929")
@@ -105,6 +109,8 @@ class AgentConfig:
         self.deep_research_browser_concurrency = int(os.getenv("DEEP_RESEARCH_CONCURRENCY", str(self.deep_research_browser_concurrency)))
         self.deep_research_timeout = int(os.getenv("DEEP_RESEARCH_TIMEOUT", str(self.deep_research_timeout)))
         self.cors_origins = os.getenv("CORS_ORIGINS", self.cors_origins)
+        self.admin_username = os.getenv("ADMIN_USERNAME", self.admin_username)
+        self.admin_password = os.getenv("ADMIN_PASSWORD", self.admin_password)
         self.workspace_path = Path(os.getenv("AGENT_WORKSPACE", "/tmp/agent_workspace"))
         self.log_level = os.getenv("LOG_LEVEL", self.log_level)
 

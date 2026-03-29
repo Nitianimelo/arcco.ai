@@ -757,8 +757,62 @@ export const AdminPage: React.FC = () => {
   const [copiedExecutionId, setCopiedExecutionId] = useState<string | null>(null);
   const [downloadedExecutionId, setDownloadedExecutionId] = useState<string | null>(null);
 
-  // '' = usa Vite proxy (/api/admin/* â†’ localhost:8001). NÃ£o hardcodar localhost aqui.
+  // ── Auth admin ──────────────────────────────────────────────────────────────
+  const [adminToken, setAdminToken] = useState<string | null>(() =>
+    localStorage.getItem('arcco_admin_token'));
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
+
+  // '' = usa Vite proxy (/api/admin/* → localhost:8001). Não hardcodar localhost aqui.
   const backendUrl = '';
+
+  /** Fetch autenticado — injeta Bearer token e auto-logout em 401 */
+  const adminFetch = (input: string, init?: RequestInit) =>
+    fetch(input, {
+      ...init,
+      headers: {
+        ...(init?.headers as Record<string, string> || {}),
+        'Authorization': `Bearer ${adminToken ?? ''}`,
+      },
+    }).then(res => {
+      if (res.status === 401) {
+        localStorage.removeItem('arcco_admin_token');
+        setAdminToken(null);
+        throw new Error('Sessão expirada — faça login novamente.');
+      }
+      return res;
+    });
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginLoading(true);
+    setLoginError('');
+    try {
+      const res = await fetch(`${backendUrl}/api/admin/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as any).detail || 'Credenciais inválidas');
+      }
+      const data = await res.json();
+      localStorage.setItem('arcco_admin_token', data.token);
+      setAdminToken(data.token);
+    } catch (err: any) {
+      setLoginError(err.message || 'Erro ao fazer login');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('arcco_admin_token');
+    setAdminToken(null);
+  };
 
   // â”€â”€ Busca de dados Supabase â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -788,7 +842,7 @@ export const AdminPage: React.FC = () => {
   const fetchModels = async () => {
     setModelsLoading(true);
     try {
-      const res = await fetch(`${backendUrl}/api/admin/models`);
+      const res = await adminFetch(`${backendUrl}/api/admin/models`);
       if (!res.ok) return;
       const data = await res.json();
       setOrModels(data.models || []);
@@ -800,7 +854,7 @@ export const AdminPage: React.FC = () => {
     setAgentsLoading(true);
     setAgentsError(null);
     try {
-      const res = await fetch(`${backendUrl}/api/admin/agents`);
+      const res = await adminFetch(`${backendUrl}/api/admin/agents`);
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
       const data = await res.json();
       const rows = (data.agents || []) as AgentConfig[];
@@ -820,7 +874,7 @@ export const AdminPage: React.FC = () => {
     setReloadingAgentModels(true);
     setAgentsError(null);
     try {
-      const res = await fetch(`${backendUrl}/api/admin/agents/reload-models`, {
+      const res = await adminFetch(`${backendUrl}/api/admin/agents/reload-models`, {
         method: 'POST',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
@@ -842,7 +896,7 @@ export const AdminPage: React.FC = () => {
     setChatConfigsLoading(true);
     setChatConfigsError(null);
     try {
-      const res = await fetch(`${backendUrl}/api/admin/chat-models`);
+      const res = await adminFetch(`${backendUrl}/api/admin/chat-models`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       const rows = (data.models || []) as ChatConfigRow[];
@@ -858,7 +912,7 @@ export const AdminPage: React.FC = () => {
     if (!options?.silent) setExecutionsLoading(true);
     if (!options?.silent) setExecutionsError(null);
     try {
-      const res = await fetch(`${backendUrl}/api/admin/executions?limit=100`);
+      const res = await adminFetch(`${backendUrl}/api/admin/executions?limit=100`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       const rows = data.executions || [];
@@ -879,7 +933,7 @@ export const AdminPage: React.FC = () => {
   const fetchExecutionDetail = async (executionId: string, options?: { silent?: boolean }) => {
     if (!options?.silent) setExecutionDetailLoading(true);
     try {
-      const res = await fetch(`${backendUrl}/api/admin/executions/${executionId}`);
+      const res = await adminFetch(`${backendUrl}/api/admin/executions/${executionId}`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setExecutionDetail(data);
@@ -1028,7 +1082,7 @@ export const AdminPage: React.FC = () => {
 
   /** Envia alteraÃ§Ãµes de um agente para o backend (PUT /api/admin/agents/{id}) */
   const saveAgent = async (id: string, data: Partial<AgentConfig>) => {
-    const res = await fetch(`${backendUrl}/api/admin/agents/${id}`, {
+    const res = await adminFetch(`${backendUrl}/api/admin/agents/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -1041,7 +1095,7 @@ export const AdminPage: React.FC = () => {
 
   /** Reseta um agente para os valores padrÃ£o (POST /api/admin/agents/reset/{id}) */
   const resetAgent = async (id: string) => {
-    const res = await fetch(`${backendUrl}/api/admin/agents/reset/${id}`, { method: 'POST' });
+    const res = await adminFetch(`${backendUrl}/api/admin/agents/reset/${id}`, { method: 'POST' });
     if (!res.ok) throw new Error(`Erro ao resetar: ${await res.text()}`);
     const updated = await res.json();
     setAgents(prev => prev.map(a => a.id === id ? updated.agent : a));
@@ -1052,7 +1106,7 @@ export const AdminPage: React.FC = () => {
       ? `${backendUrl}/api/admin/chat-models/${config.id}`
       : `${backendUrl}/api/admin/chat-models`;
     const method = config.id ? 'PUT' : 'POST';
-    const res = await fetch(url, {
+    const res = await adminFetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config),
@@ -1072,7 +1126,7 @@ export const AdminPage: React.FC = () => {
       return;
     }
 
-    const res = await fetch(`${backendUrl}/api/admin/chat-models/${config.id}`, {
+    const res = await adminFetch(`${backendUrl}/api/admin/chat-models/${config.id}`, {
       method: 'DELETE',
     });
     if (!res.ok) throw new Error(await res.text());
@@ -1199,6 +1253,61 @@ export const AdminPage: React.FC = () => {
 
   // â”€â”€ RenderizaÃ§Ã£o â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+  // ── Tela de login ─────────────────────────────────────────────────────────
+  if (!adminToken) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#0a0a0a]">
+        <div className="bg-[#0f0f0f] border border-neutral-800 rounded-2xl p-8 w-full max-w-sm">
+          <div className="flex items-center gap-3 mb-8">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-red-500/20 to-orange-500/20 border border-red-500/20 flex items-center justify-center">
+              <Shield size={18} className="text-red-400" />
+            </div>
+            <div>
+              <h1 className="text-base font-semibold text-white">Painel Admin</h1>
+              <p className="text-xs text-neutral-500">Acesso restrito</p>
+            </div>
+          </div>
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">Usuário</label>
+              <input
+                type="text"
+                value={loginUsername}
+                onChange={e => setLoginUsername(e.target.value)}
+                className="w-full bg-[#1a1a1a] border border-neutral-800 text-white text-sm rounded-lg px-3 py-2.5 outline-none focus:border-indigo-500/50 transition-colors"
+                autoComplete="username"
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">Senha</label>
+              <input
+                type="password"
+                value={loginPassword}
+                onChange={e => setLoginPassword(e.target.value)}
+                className="w-full bg-[#1a1a1a] border border-neutral-800 text-white text-sm rounded-lg px-3 py-2.5 outline-none focus:border-indigo-500/50 transition-colors"
+                autoComplete="current-password"
+              />
+            </div>
+            {loginError && (
+              <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-red-400">
+                <AlertTriangle size={13} /> {loginError}
+              </div>
+            )}
+            <button
+              type="submit"
+              disabled={loginLoading || !loginUsername || !loginPassword}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {loginLoading ? <Loader2 size={15} className="animate-spin" /> : <Shield size={15} />}
+              {loginLoading ? 'Entrando...' : 'Entrar'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen text-white" style={{ backgroundColor: 'var(--bg-base)' }}>
       {/* Topo */}
@@ -1213,14 +1322,23 @@ export const AdminPage: React.FC = () => {
               <p className="text-xs text-neutral-500">Arcco Agents â€” Acesso restrito</p>
             </div>
           </div>
-          <button
-            onClick={fetchData}
-            disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-300 text-sm transition-colors border border-neutral-800 disabled:opacity-50"
-          >
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-            Atualizar
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={fetchData}
+              disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-300 text-sm transition-colors border border-neutral-800 disabled:opacity-50"
+            >
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+              Atualizar
+            </button>
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-neutral-900 hover:bg-red-500/10 text-neutral-500 hover:text-red-400 text-sm transition-colors border border-neutral-800 hover:border-red-500/20"
+            >
+              <XCircle size={14} />
+              Sair
+            </button>
+          </div>
         </div>
       </div>
 
