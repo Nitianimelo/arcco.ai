@@ -455,7 +455,7 @@ async def _execute_python(code: str) -> str:
                             "sem ```python, sem explicacao."
                         ),
                     }],
-                    model="openai/gpt-4o-mini",
+                    model="google/gemini-2.5-flash",
                     max_tokens=4000,
                     temperature=0.1,
                 )
@@ -1076,7 +1076,3 @@ async def _analyze_web_pages(args: dict) -> str:
     except Exception as exc:
         logger.error(f"[EXECUTOR] Erro em analyze_web_pages: {exc}")
         return f"Erro ao analisar sites: {exc}"
-
-    except Exception as exc:
-        logger.error("Erro ao gerenciar arquivo do Computer (action=%s): %s", action, exc)
-        return f"Erro ao executar '{action}': {exc}"

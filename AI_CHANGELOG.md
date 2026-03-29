@@ -3,6 +3,18 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-29 (9) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `backend/agents/executor.py`
+
+### O que foi feito:
+1. **executor.py** — Removido bloco `except` duplicado e inválido no final de `_analyze_web_pages`. O segundo `except` referenciava `action` (variável inexistente), causando erro de sintaxe Python.
+2. **executor.py** — Auto-healing: modelo trocado de `openai/gpt-4o-mini` para `google/gemini-2.5-flash`, eliminando dependência de saldo OpenAI.
+
+### Por quê:
+Dois bugs fatais: erro de sintaxe que impedia o módulo de carregar, e dependência de créditos OpenAI no auto-healing.
+
 ## 2026-03-29 (8) — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:
