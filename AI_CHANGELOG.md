@@ -3,6 +3,17 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-29 (8) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `backend/agents/orchestrator.py`
+
+### O que foi feito:
+1. **orchestrator.py** — Fix do bug de clarificação: quando o usuário responde a uma pergunta de clarificação, o planner recebia apenas a última mensagem (ex: "10 slides sobre marketing") sem contexto do pedido original. Agora, em conversas multi-turno (`_user_msgs_count > 1`), o orchestrator constrói `_planner_intent` com as últimas 8 mensagens formatadas como `[Usuário]/[Assistente]`, dando ao planner contexto completo para gerar o plano correto. `user_intent` original é preservado para filtro de skills.
+
+### Por quê:
+O pipeline quebrava após o usuário responder perguntas de clarificação porque o planner via a resposta isolada e não conseguia gerar um plano coerente.
+
 ## 2026-03-29 (7) — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:

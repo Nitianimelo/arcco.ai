@@ -593,6 +593,24 @@ async def orchestrate_and_stream(
         (str(m["content"]) for m in reversed(messages) if m.get("role") == "user"), ""
     )
 
+    # Para o planner, constrói contexto completo em conversas multi-turno.
+    # Ex: quando o usuário responde uma clarificação ("10 slides sobre marketing"),
+    # o planner precisa saber o pedido original para gerar o plano correto.
+    _user_msgs_count = sum(1 for m in messages if m.get("role") == "user")
+    if _user_msgs_count > 1:
+        _recent = messages[-8:] if len(messages) > 8 else messages
+        _parts = []
+        for m in _recent:
+            _role = m.get("role", "")
+            _content = str(m.get("content", "")).strip()
+            if _role == "user" and _content:
+                _parts.append(f"[Usuário]: {_content}")
+            elif _role == "assistant" and _content:
+                _parts.append(f"[Assistente]: {_content[:400]}")
+        _planner_intent = "\n".join(_parts)
+    else:
+        _planner_intent = user_intent
+
     # Monta tools dinamicamente (inclui Computer, Spy Pages e Skills dinâmicas se disponíveis)
     # Skills são filtradas por relevância ao intent do usuário — evita injetar 70 skills desnecessárias
     active_tools = (
@@ -641,7 +659,7 @@ async def orchestrate_and_stream(
             route="generate_plan",
             input_payload={"user_intent": user_intent},
         )
-    plan_output = await generate_plan(user_intent, planner_model)
+    plan_output = await generate_plan(_planner_intent, planner_model)
     if execution_logger:
         await execution_logger.log_event(
             execution_id,
