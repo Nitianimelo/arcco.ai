@@ -28,6 +28,8 @@ REGRAS OBRIGATÓRIAS DE ROTEAMENTO (leia com atenção):
 
 2. NAVEGADOR COMPLETO (ask_browser): Use APENAS quando o site exigir JavaScript para renderizar (SPAs, apps React, dashboards), interação (login, cliques, scroll), ou quando ask_web_search não trouxer dados suficientes de um site específico.
    - NÃO use ask_browser para pesquisas do Google ou buscas simples — use ask_web_search.
+   - REGRA DE AUTONOMIA: Ao usar ask_browser, NUNCA peça confirmação ao usuário sobre quais ações executar. Infira as ações necessárias (cliques, scrolls, preenchimentos) com base no objetivo e envie tudo em uma única chamada. Exemplos: se o objetivo é "aceitar banner de cookies e ler o artigo", autonomamente inclua as actions: click(text="Aceitar"), scroll(down, 1000), scrape. Se o objetivo é "fazer login e acessar dashboard", inclua: write(#email, valor), write(#password, valor), click(text="Entrar"), wait(2000), scrape.
+   - SELETORES INTELIGENTES: Quando não souber o seletor CSS exato, prefira seletores de texto Playwright que são mais robustos: text="Aceitar cookies", text="Ver mais", text="Entrar". Eles localizam elementos pelo texto visível e funcionam mesmo quando as classes CSS mudam.
 
 3. ARTEFATOS NÃO VISUAIS (execute_python): Para gerar arquivos não visuais ou orientados a dados — como CSV, JSON, gráficos PNG, imagens geradas por código, arquivos compactados, saídas analíticas e outros artefatos produzidos programaticamente — use execute_python. Se o código salvar arquivos físicos no sandbox, o sistema publicará esses artefatos e exibirá os cards automaticamente.
 
@@ -228,7 +230,7 @@ Sua função é analisar o pedido do usuário e dividi-lo em passos de execuçã
 FERRAMENTAS BASE (ações):
 - web_search: Busca rápida na internet. Use para fatos, notícias, preços, dados atuais. Rápido (< 2s).
 - python: Executa código Python no sandbox E2B. Use para cálculos, processamento de dados, gerar CSV/JSON/gráficos PNG e saídas analíticas. O código tem auto-correção automática se falhar.
-- browser: Acessa uma URL específica via Browserbase. Use APENAS quando precisar de JavaScript renderizado, interação com página (cliques, scroll) ou leitura de SPAs. NÃO use para buscas simples.
+- browser: Acessa uma URL via Browserbase com interação completa (cliques, scroll, formulários, SPAs). Use APENAS quando precisar de JavaScript renderizado ou interação real com a página. NÃO use para buscas simples. CRÍTICO: agrupe todo o objetivo de navegação em UM ÚNICO passo — passe todas as ações necessárias (click, scroll, write, scrape) em um único array de actions. Nunca crie passos de browser separados para cada ação individual.
 - file_modifier: Modifica PDFs, Planilhas Excel ou PPTX já existentes na conversa.
 - text_generator: Escreve documentos de texto (contratos, relatórios, propostas, artigos). Retorna conteúdo em tag <doc> para download.
 - design_generator: Desenha HTML/CSS visual (posts, banners, slides, apresentações, flyers, landing pages). Use como ÚLTIMO passo quando o deliverable é visual.

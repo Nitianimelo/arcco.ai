@@ -573,7 +573,7 @@ SUPERVISOR_TOOLS = [
                                 },
                                 "selector": {
                                     "type": "string",
-                                    "description": "Seletor CSS do elemento (para click e write)"
+                                    "description": "Seletor CSS ou de texto do elemento (para click, write e press). Use CSS como '#email', '.btn-submit' ou seletores de texto Playwright como 'text=\"Aceitar\"', 'text=\"Entrar\"' quando não souber a classe CSS exata — eles localizam pelo texto visível e são mais robustos."
                                 },
                                 "text": {
                                     "type": "string",

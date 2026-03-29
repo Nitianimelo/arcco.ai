@@ -3,6 +3,24 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-29 (2) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `backend/agents/prompts.py`
+- `backend/agents/tools.py`
+
+### O que foi feito:
+1. **prompts.py** — Regra 2 do `CHAT_SYSTEM_PROMPT` (`ask_browser`) expandida com dois sub-itens:
+   - REGRA DE AUTONOMIA: instrui o Supervisor a inferir e incluir todas as ações de browser (click, scroll, write, scrape) em uma única chamada, sem pedir confirmação ao usuário.
+   - SELETORES INTELIGENTES: ensina o Supervisor a usar seletores de texto Playwright (`text="Aceitar"`) como alternativa mais robusta quando o CSS selector não for óbvio.
+2. **prompts.py** — Linha `browser` do `PLANNER_SYSTEM_PROMPT` atualizada: instrui o Planner a agrupar todo o objetivo de navegação em UM ÚNICO passo com todas as actions, nunca criar passos separados para cada ação individual de browser.
+3. **tools.py** — Campo `selector` nos items do array `actions` da tool `ask_browser` atualizado: descrição agora menciona seletores de texto Playwright (`text="..."`) além de CSS, com exemplos práticos.
+
+### Por quê:
+Melhorar a autonomia do Browser Agent — o Supervisor passou a inferir ações de browser sozinho (scroll, click, cookie banners), o Planner agrupa toda a navegação em 1 passo eficiente, e o LLM sabe que pode usar seletores robustos baseados em texto visível.
+
+---
+
 ## 2026-03-29 — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:
