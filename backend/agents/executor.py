@@ -411,8 +411,7 @@ async def _execute_python(code: str) -> str:
 
         def sync_e2b_exec():
             logger.info("[E2B] Iniciando execução de código Python (%s chars).", len(code))
-            # E2B v2 API: usar Sandbox.create() ao invés do construtor
-            sandbox = Sandbox.create(api_key=e2b_api_key)
+            sandbox = Sandbox(api_key=e2b_api_key)
             try:
                 before_snapshot = snapshot_artifacts(sandbox)
                 result_str, error_msg = _run_code_and_collect(sandbox, code, before_snapshot)
@@ -479,7 +478,7 @@ async def _execute_python(code: str) -> str:
 
             # Re-executa o codigo corrigido
             def sync_retry(retry_code=current_code):
-                sandbox = Sandbox.create(api_key=e2b_api_key)
+                sandbox = Sandbox(api_key=e2b_api_key)
                 try:
                     before = snapshot_artifacts(sandbox)
                     return _run_code_and_collect(sandbox, retry_code, before)
