@@ -3,6 +3,17 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-29 (6) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `nginx/nginx.conf`
+
+### O que foi feito:
+1. **nginx.conf** — Blocos `location /api/agent/` (HTTP porta 80 e HTTPS porta 443): timeout aumentado de 120s para 300s e adicionado `proxy_connect_timeout 300s`. Admin mantido em 60s (não executa tarefas longas).
+
+### Por quê:
+A ferramenta `deep_research` pode levar até 180 segundos. O Nginx com timeout padrão/anterior (120s) cortava a conexão com 504 antes do agente terminar. Com 300s (5 minutos), o Nginx aguenta qualquer tarefa de agente incluindo deep_research + browser sessions longas.
+
 ## 2026-03-29 (5) — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:
