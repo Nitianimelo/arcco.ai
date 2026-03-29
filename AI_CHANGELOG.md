@@ -3,6 +3,23 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-29 (4) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `backend/agents/prompts.py`
+
+### O que foi feito:
+1. **prompts.py** — `PLANNER_SYSTEM_PROMPT`: FERRAMENTAS BASE e REGRAS DE DECISÃO substituídos pela Matriz de Decisão Definitiva:
+   - FERRAMENTAS BASE: critérios claros para `text_generator` (leitura longa) vs `design_generator` (impacto visual). `python` especifica geração Excel/CSV. `browser` mantém instrução stateless + passo único.
+   - Nova regra explícita para sequências visuais (carrossel, slides, pitch deck): SEMPRE `slide_generator` → `design_generator`, nunca pular o roteiro.
+   - REGRAS DE DECISÃO reestruturadas em 5 grupos: Sequências Visuais, Texto vs. Design, Relatórios e Dados, Automação Web, Otimização.
+   - Regra `multi_doc_investigator` preservada. Nota "skill não listada → NÃO use" consolidada no bloco Skills.
+
+### Por quê:
+Três inconsistências de roteamento: (1) carrosséis iam direto para design_generator sem slide_generator; (2) fronteira texto/design era ambígua; (3) ausência de critério claro para dados vs. narrativa.
+
+---
+
 ## 2026-03-29 (3) — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:
