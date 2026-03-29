@@ -462,72 +462,113 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     const hour = new Date().getHours();
     const day = new Date().getDay();
     const isWeekend = day === 0 || day === 6;
-    const period = hour < 12 ? "manhã" : hour < 18 ? "tarde" : "noite";
+    const isMorning = hour >= 5 && hour < 12;
+    const isAfternoon = hour >= 12 && hour < 18;
+    const isMidnight = hour >= 0 && hour < 5;
+
+    if (isMidnight) return _pick([
+      `Madrugada silenciosa em ${city}. O que criamos agora?`,
+      `${temp}° e madrugada em ${city}. Qual é o plano?`,
+      `O mundo dorme em ${city}. A gente não. O que saí hoje?`,
+      `Madrugada produtiva em ${city}. Por onde começamos?`,
+      `${city} descansando lá fora. E a gente aqui criando. Vamos?`,
+    ]);
 
     if (code >= 95) return _pick([
-      `Tempestade em ${city} agora.`,
-      `Caindo o mundo lá fora em ${city}.`,
-      `${city} em alerta de tempestade.`,
+      `Tempestade em ${city}. Dia perfeito para criar dentro.`,
+      `Caindo o mundo lá fora em ${city}. O que fazemos agora?`,
+      `${city} em modo tempestade. Melhor lugar é aqui. Vamos?`,
+      `${temp}° e tempestade em ${city}. O que construímos hoje?`,
     ]);
 
     if (code >= 71 && code <= 77) return _pick([
-      `Nevando em ${city}.`,
-      `${city} coberta de neve.`,
-      `Neve em ${city} essa ${period}.`,
+      `Neve em ${city}! Dia raro para criar. O que saí hoje?`,
+      `${city} coberta de neve com ${temp}°. O que fazemos?`,
+      `Nevando em ${city}. Qual é o projeto de hoje?`,
     ]);
 
     if (code >= 51 && code <= 82) return _pick([
-      `Chuva de ${period} em ${city}.`,
-      `Tá chovendo em ${city}.`,
-      `${city} molhada essa ${period}.`,
-      `${temp}° e chuva em ${city}.`,
-      `Chuva e ${temp}° em ${city}.`,
+      `Chovendo em ${city} com ${temp}°. Dia perfeito para criar.`,
+      `Chuva em ${city}. Que projeto tiramos do papel hoje?`,
+      `${city} molhada lá fora. O que construímos enquanto chove?`,
+      `Tempo fechado em ${city}. Vamos criar algo que vale a pena?`,
+      `${temp}° e chuva em ${city}. Melhor lugar é aqui. Por onde vai?`,
+      `Chuva e ${temp}° em ${city}. Tá na hora de produzir. Vamos?`,
     ]);
 
     if (code >= 45 && code <= 48) return _pick([
-      `Neblina em ${city} agora.`,
-      `${city} encoberta essa ${period}.`,
+      `Neblina em ${city} com ${temp}°. Dia misterioso para criar. Vamos?`,
+      `${city} encoberta. O que tiramos do papel hoje?`,
+      `Tempo fechado em ${city}. O que criamos agora?`,
     ]);
 
     if (temp <= 10) return _pick([
-      `${temp}° em ${city} essa ${period}.`,
-      `Gelando em ${city} com ${temp}°.`,
-      `Frio de verdade em ${city}, ${temp}°.`,
-      isWeekend ? `${temp}° em ${city} nesse fim de semana.` : `${city} gelando.`,
+      `Frio de verdade em ${city}, ${temp}°. Dia bom para produzir. Vamos?`,
+      `${temp}° em ${city}. Friozinho inspira. O que criamos hoje?`,
+      `Gelando em ${city}. Melhor ficar aqui criando. Por onde vai?`,
+      isWeekend
+        ? `Fim de semana gelado em ${city}. O que tiramos do papel?`
+        : `${city} com ${temp}°. Que projeto saí hoje?`,
     ]);
 
     if (temp <= 18) return _pick([
-      `Friozinho em ${city}, ${temp}°.`,
-      `${temp}° em ${city} essa ${period}.`,
-      `${city} fresca com ${temp}°.`,
-      `Frio leve em ${city} hoje.`,
+      `Friozinho em ${city} com ${temp}°. Tá na hora de criar. Vamos?`,
+      `${temp}° em ${city}. Dia bom para produzir. O que fazemos?`,
+      `${city} fresca com ${temp}°. Por onde começamos?`,
+      isWeekend
+        ? `Fim de semana fresco em ${city}. O que criamos hoje?`
+        : `Fresco em ${city} e ${temp}°. Que projeto saí hoje?`,
     ]);
 
     if (temp >= 35) return _pick([
-      `${temp}° em ${city}. Calor forte.`,
-      `Calorzão em ${city}, ${temp}°.`,
-      `${city} fervendo com ${temp}°.`,
+      `${temp}° em ${city}. Calor pede resultado. O que vamos criar?`,
+      `Calorzão em ${city} com ${temp}°. Vamos criar algo fora do comum?`,
+      `${city} fervendo com ${temp}°. Tá na hora de produzir. Por onde vai?`,
+      `${temp}° aí em ${city}? O que construímos hoje?`,
     ]);
 
     if (temp >= 28) return _pick([
-      `${temp}° em ${city} hoje.`,
-      `Calor em ${city} essa ${period}.`,
-      isWeekend ? `Fim de semana quente em ${city}.` : `${city} quente com ${temp}°.`,
+      `Calor em ${city} com ${temp}°. O que criamos hoje?`,
+      isWeekend
+        ? `Fim de semana quente em ${city}. Vamos criar o quê?`
+        : `${temp}° em ${city}. Que projeto saí hoje?`,
+      isMorning
+        ? `Manhã quente em ${city} com ${temp}°. Por onde começamos?`
+        : isAfternoon
+          ? `Como tá essa tarde em ${city}, ${temp}°? Vamos criar o quê?`
+          : `Noite quente em ${city} com ${temp}°. O que fazemos agora?`,
+      `${temp}° aí em ${city}. Dia de criar. Por onde vai?`,
     ]);
 
     if (code <= 3) return _pick([
-      `Sol em ${city}, ${temp}°.`,
-      `${city} com céu aberto.`,
-      `Dia de sol em ${city}.`,
-      isWeekend ? `Fim de semana de sol em ${city}.` : `${temp}° e sol em ${city}.`,
-      hour < 12 ? `Manhã de sol em ${city}.` : hour < 18 ? `Tarde aberta em ${city}.` : `Noite clara em ${city}.`,
+      `Dia de sol aí em ${city}? O que vamos criar hoje?`,
+      `${temp}° e céu aberto em ${city}. Por onde começamos?`,
+      isMorning
+        ? `Manhã de sol em ${city} com ${temp}°. Que projeto saí hoje?`
+        : isAfternoon
+          ? `Como tá essa tarde em ${city}, ${temp}°? Vamos criar o quê?`
+          : `Noite clara em ${city}. Qual é o plano agora?`,
+      isWeekend
+        ? `Fim de semana de sol em ${city}. O que tiramos do papel hoje?`
+        : day === 1
+          ? `Segunda de sol em ${city}. Semana nova — o que construímos?`
+          : day === 5
+            ? `Sexta de sol em ${city}. Vamos fechar a semana com o quê?`
+            : `Sol em ${city}, ${temp}°. Tá na hora de criar. Por onde vai?`,
+      `${temp}° e sol em ${city}. O que saí hoje?`,
     ]);
 
     return _pick([
-      `${temp}° em ${city}.`,
-      `Nublado em ${city}, ${temp}°.`,
-      `${city} encoberta hoje.`,
-      `${temp}° essa ${period} em ${city}.`,
+      `Nublado em ${city} com ${temp}°. O que criamos hoje?`,
+      `${city} encoberta e ${temp}°. Que projeto saí hoje?`,
+      isMorning
+        ? `Manhã nublada em ${city}. Por onde começamos?`
+        : isAfternoon
+          ? `Tarde fechada em ${city}, ${temp}°. No que trabalhamos?`
+          : `Noite em ${city} com ${temp}°. O que fazemos agora?`,
+      isWeekend
+        ? `Fim de semana nublado em ${city}. Vamos criar o quê?`
+        : `${temp}° em ${city}. Tá na hora de produzir. Vamos?`,
     ]);
   };
 
@@ -538,36 +579,40 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     const isWeekend = day === 0 || day === 6;
 
     if (hour >= 0 && hour < 5) return _pick([
-      "Madrugada. Silêncio bom para criar.",
-      "Hora estranha, mas estou aqui.",
-      "Madrugada produtiva.",
-      "O mundo dorme, a gente trabalha.",
+      "Madrugada produtiva. O que iremos fazer?",
+      "O mundo dorme. A gente não. Qual é o plano?",
+      "Hora estranha, mas estamos aqui. Por onde vai?",
+      "Silêncio da madrugada. Bom para criar. Vamos?",
+      "Madrugada de criação. O que saí hoje?",
     ]);
 
     if (hour >= 5 && hour < 12) return _pick([
-      day === 1 ? "Segunda de manhã. Semana nova." :
-      day === 5 ? "Sexta cedo. Vamos fechar a semana." :
-      isWeekend ? "Manhã de fim de semana." :
-      "Manhã. Por onde começamos?",
-      "Começo de dia.",
-      "Manhã boa para criar.",
-      day === 0 ? "Domingo de manhã. Ritmo seu." : "Dia novo.",
+      day === 1 ? "Segunda de manhã. Semana nova — o que construímos?" :
+      day === 5 ? "Sexta cedo. Vamos fechar a semana com o quê?" :
+      isWeekend ? "Manhã de fim de semana. O que tiramos do papel?" :
+      "Manhã boa para criar. Por onde começamos?",
+      "Começo de dia. Que projeto saí hoje?",
+      "Manhã. Vamos criar o quê?",
+      "Dia novo em branco. O que fazemos?",
+      "Hora do café e de criar. Por onde vai?",
     ]);
 
     if (hour >= 12 && hour < 18) return _pick([
-      day === 5 ? "Tarde de sexta." :
-      isWeekend ? "Tarde de fim de semana." :
-      "A tarde pede resultado.",
-      "Meio do dia.",
-      "Boa tarde.",
-      "Tarde. No que trabalhamos?",
+      day === 5 ? "Tarde de sexta. Vamos fechar a semana com o quê?" :
+      isWeekend ? "Tarde de fim de semana. O que criamos hoje?" :
+      "A tarde pede resultado. No que trabalhamos?",
+      "Meio do dia. Que projeto saí agora?",
+      "Boa tarde. Vamos criar o quê?",
+      "Tarde produtiva. Por onde vai?",
+      "Como tá essa tarde? Vamos fazer o quê?",
     ]);
 
     return _pick([
-      isWeekend ? "Noite de fim de semana." : "Final de dia.",
-      "A noite também rende.",
-      "Noite de trabalho.",
-      "Encerrando o dia ou só aquecendo?",
+      isWeekend ? "Noite de fim de semana. O que criamos?" : "Final de dia. Ainda tem tempo. O que fazemos?",
+      "A noite também rende. Qual é o plano?",
+      "Noite de trabalho. Por onde começamos?",
+      "Encerrando o dia ou só aquecendo? Vamos criar o quê?",
+      "Noite boa para produzir. O que saí hoje?",
     ]);
   };
 
@@ -1613,35 +1658,6 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             <div className="h-full flex flex-col items-center justify-center p-4 -mt-16">
 
               <div className="flex flex-col items-center text-center mb-10">
-
-                {/* Weather badge — aparece apenas quando location carregou */}
-                <div className={`flex items-center gap-2 mb-6 px-3.5 py-1.5 rounded-full bg-[#111] border border-[#222] text-[12px] text-neutral-400 transition-all duration-500 ${userLocation ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-                  {userLocation && (
-                    <>
-                      <span>{getWeatherEmoji(userLocation.weatherCode ?? 0)}</span>
-                      <span className="text-neutral-300">{userLocation.city}</span>
-                      {userLocation.temp !== undefined && (
-                        <>
-                          <span className="text-neutral-700">·</span>
-                          <span>{userLocation.temp}°C</span>
-                          <span className="text-neutral-500">{getWeatherDesc(userLocation.weatherCode ?? 0)}</span>
-                        </>
-                      )}
-                      {userLocation.tempMin !== undefined && userLocation.tempMax !== undefined && (
-                        <>
-                          <span className="text-neutral-700">·</span>
-                          <span className="text-neutral-500">{userLocation.tempMin}°/{userLocation.tempMax}°</span>
-                        </>
-                      )}
-                      {userLocation.humidity !== undefined && (
-                        <>
-                          <span className="text-neutral-700">·</span>
-                          <span className="text-neutral-500">{userLocation.humidity}%</span>
-                        </>
-                      )}
-                    </>
-                  )}
-                </div>
 
                 {/* Greeting */}
                 {project ? (

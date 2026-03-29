@@ -3,6 +3,19 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-29 (10) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Removido badge/card de clima (Fortaleza 27°C) do greeting state.
+2. **ArccoChat.tsx** — `getWeatherSubtitle` reescrita com ~35 frases criativas e action-oriented que mencionam cidade, temperatura e horário. Ex: "Dia de sol aí em Fortaleza? O que vamos criar hoje?", "Chovendo em São Paulo com 18°. Que projeto tiramos do papel?".
+3. **ArccoChat.tsx** — `getSubtitle` (fallback sem localização) reescrita com ~20 frases por período (madrugada/manhã/tarde/noite) com chamada para ação.
+
+### Por quê:
+Saudação estava genérica e sem personalidade. Agora usa os dados de clima/localização já coletados de forma criativa no texto, sem exibir card separado.
+
 ## 2026-03-29 (9) — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:
