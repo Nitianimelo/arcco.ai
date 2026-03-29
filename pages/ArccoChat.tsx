@@ -439,6 +439,14 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   };
 
   // Dynamic Greeting Logic
+
+  // Seed determinístico por hora+dia — muda entre sessões/horas sem flickar durante a sessão
+  const _greetSeed = (() => {
+    const d = new Date();
+    return d.getHours() * 7 + d.getDate() * 31 + d.getMonth() * 13;
+  })();
+  const _pick = <T,>(arr: T[]): T => arr[_greetSeed % arr.length];
+
   const getGreeting = () => {
     const hour = new Date().getHours();
     if (hour >= 5 && hour < 12) return "Bom dia";
@@ -451,35 +459,76 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     const code = loc.weatherCode ?? 0;
     const temp = loc.temp;
     const city = loc.city;
+    const hour = new Date().getHours();
+    const day = new Date().getDay();
+    const isWeekend = day === 0 || day === 6;
+    const period = hour < 12 ? "manhã" : hour < 18 ? "tarde" : "noite";
 
-    // Clima extremo tem prioridade
-    if (code >= 95) return `Tempestade em ${city}! Melhor ficar no aconchego e criar algo incrivel aqui dentro.`;
-    if (code >= 71 && code <= 77) return `Nevando em ${city}! Perfeito para um cafe quente e produtividade.`;
+    if (code >= 95) return _pick([
+      `Tempestade em ${city} agora.`,
+      `Caindo o mundo lá fora em ${city}.`,
+      `${city} em alerta de tempestade.`,
+    ]);
 
-    // Chuva
-    if (code >= 51 && code <= 82) {
-      if (temp < 15) return `Chuva e friozinho em ${city}. Dia perfeito para focar com tudo.`;
-      return `Chovendo em ${city}, mas aqui dentro o clima e de criatividade. Vamos nessa?`;
-    }
+    if (code >= 71 && code <= 77) return _pick([
+      `Nevando em ${city}.`,
+      `${city} coberta de neve.`,
+      `Neve em ${city} essa ${period}.`,
+    ]);
 
-    // Nevoeiro
-    if (code >= 45 && code <= 48) return `Neblina em ${city}. Enquanto la fora ta nebuloso, aqui a visao e clara.`;
+    if (code >= 51 && code <= 82) return _pick([
+      `Chuva de ${period} em ${city}.`,
+      `Tá chovendo em ${city}.`,
+      `${city} molhada essa ${period}.`,
+      `${temp}° e chuva em ${city}.`,
+      `Chuva e ${temp}° em ${city}.`,
+    ]);
 
-    // Calor
-    if (temp >= 35) return `${temp} graus em ${city}! Ta quente, mas suas ideias podem ser ainda mais.`;
-    if (temp >= 28) return `Calorzao em ${city} hoje. Que tal transformar essa energia em algo produtivo?`;
+    if (code >= 45 && code <= 48) return _pick([
+      `Neblina em ${city} agora.`,
+      `${city} encoberta essa ${period}.`,
+    ]);
 
-    // Frio
-    if (temp <= 10) return `${temp} graus em ${city}! Dia de cobertor e produtividade com cafe.`;
-    if (temp <= 18) return `Friozinho em ${city} hoje. Otimo clima para se concentrar. No que trabalhamos?`;
+    if (temp <= 10) return _pick([
+      `${temp}° em ${city} essa ${period}.`,
+      `Gelando em ${city} com ${temp}°.`,
+      `Frio de verdade em ${city}, ${temp}°.`,
+      isWeekend ? `${temp}° em ${city} nesse fim de semana.` : `${city} gelando.`,
+    ]);
 
-    // Tempo bom / Parcialmente nublado
-    if (code <= 3) {
-      if (temp >= 22 && temp <= 28) return `Dia lindo em ${city}! ${temp} graus e ceu aberto. Vamos aproveitar essa energia?`;
-      return `Tempo firme em ${city}. Tudo alinhado pra um dia produtivo.`;
-    }
+    if (temp <= 18) return _pick([
+      `Friozinho em ${city}, ${temp}°.`,
+      `${temp}° em ${city} essa ${period}.`,
+      `${city} fresca com ${temp}°.`,
+      `Frio leve em ${city} hoje.`,
+    ]);
 
-    return `${temp} graus em ${city}. Como posso te ajudar hoje?`;
+    if (temp >= 35) return _pick([
+      `${temp}° em ${city}. Calor forte.`,
+      `Calorzão em ${city}, ${temp}°.`,
+      `${city} fervendo com ${temp}°.`,
+    ]);
+
+    if (temp >= 28) return _pick([
+      `${temp}° em ${city} hoje.`,
+      `Calor em ${city} essa ${period}.`,
+      isWeekend ? `Fim de semana quente em ${city}.` : `${city} quente com ${temp}°.`,
+    ]);
+
+    if (code <= 3) return _pick([
+      `Sol em ${city}, ${temp}°.`,
+      `${city} com céu aberto.`,
+      `Dia de sol em ${city}.`,
+      isWeekend ? `Fim de semana de sol em ${city}.` : `${temp}° e sol em ${city}.`,
+      hour < 12 ? `Manhã de sol em ${city}.` : hour < 18 ? `Tarde aberta em ${city}.` : `Noite clara em ${city}.`,
+    ]);
+
+    return _pick([
+      `${temp}° em ${city}.`,
+      `Nublado em ${city}, ${temp}°.`,
+      `${city} encoberta hoje.`,
+      `${temp}° essa ${period} em ${city}.`,
+    ]);
   };
 
   const getSubtitle = () => {
@@ -488,22 +537,38 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     const day = now.getDay();
     const isWeekend = day === 0 || day === 6;
 
-    if (hour >= 5 && hour < 12) {
-      if (day === 1) return "Segunda-feira com energia! Como posso te ajudar hoje?";
-      if (day === 5) return "Sexta chegou! Vamos fechar a semana com tudo. O que fazemos?";
-      if (isWeekend) return "Fim de semana produtivo! O que vamos criar juntos?";
-      return "Mais um dia para criar algo incrivel. Por onde comecamos?";
-    }
-    if (hour >= 12 && hour < 18) {
-      if (day === 5) return "Tarde de sexta! Ultimos sprints do dia. No que posso ajudar?";
-      if (isWeekend) return "Tarde de fim de semana! Em que posso ser util?";
-      return "A tarde e boa para grandes ideias. O que resolvemos hoje?";
-    }
-    if (hour >= 18 && hour < 23) {
-      if (isWeekend) return "Otima hora para criar algo memoravel. Por onde vamos?";
-      return "Encerrando o dia ou so aquecendo? Pode contar comigo.";
-    }
-    return "Madrugada produtiva! O que faremos juntos?";
+    if (hour >= 0 && hour < 5) return _pick([
+      "Madrugada. Silêncio bom para criar.",
+      "Hora estranha, mas estou aqui.",
+      "Madrugada produtiva.",
+      "O mundo dorme, a gente trabalha.",
+    ]);
+
+    if (hour >= 5 && hour < 12) return _pick([
+      day === 1 ? "Segunda de manhã. Semana nova." :
+      day === 5 ? "Sexta cedo. Vamos fechar a semana." :
+      isWeekend ? "Manhã de fim de semana." :
+      "Manhã. Por onde começamos?",
+      "Começo de dia.",
+      "Manhã boa para criar.",
+      day === 0 ? "Domingo de manhã. Ritmo seu." : "Dia novo.",
+    ]);
+
+    if (hour >= 12 && hour < 18) return _pick([
+      day === 5 ? "Tarde de sexta." :
+      isWeekend ? "Tarde de fim de semana." :
+      "A tarde pede resultado.",
+      "Meio do dia.",
+      "Boa tarde.",
+      "Tarde. No que trabalhamos?",
+    ]);
+
+    return _pick([
+      isWeekend ? "Noite de fim de semana." : "Final de dia.",
+      "A noite também rende.",
+      "Noite de trabalho.",
+      "Encerrando o dia ou só aquecendo?",
+    ]);
   };
 
   const displayName = userName.trim() || 'Usuario';
@@ -1669,16 +1734,15 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   );
                 })}
 
-                {/* ── Activity Panel — pensamento + steps do agente (unificado, perto do input) ── */}
+                {/* ── Activity Panel — steps do agente flutuando no chat (sem card) ── */}
                 {(() => {
-                  // Non-agent mode: indicador de thinking simples
+                  // Non-agent mode: indicador de thinking minimalista
                   if (!isAgentMode && chatThinkingVisible && isLoading) {
                     return (
-                      <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px] py-2">
-                        <div className="flex items-center gap-3 px-1 animate-in fade-in duration-300">
-                          <div className="relative flex items-center justify-center w-5 h-5 flex-shrink-0">
-                            <div className="absolute inset-0 rounded-full border border-indigo-500/20 animate-ping" />
-                            <div className="w-2 h-2 rounded-full bg-indigo-400/80" />
+                      <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px] py-1 animate-in fade-in duration-300">
+                        <div className="flex items-center gap-2.5">
+                          <div className="relative flex-shrink-0">
+                            <div className="w-1.5 h-1.5 rounded-full bg-indigo-400/60 animate-pulse" />
                           </div>
                           <span className="text-sm text-neutral-500">{chatThinkingMessage || 'Processando...'}</span>
                         </div>
@@ -1695,27 +1759,29 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
                   if (!hasSteps && !isLoading) return null;
 
-                  // Loading sem steps ainda
+                  // Loading sem steps — pulso discreto
                   if (!hasSteps && isLoading) {
                     return (
-                      <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px] py-2">
-                        <div className="flex items-center gap-3 px-1 animate-in fade-in duration-300">
-                          <img src={arccoEmblemUrl} alt="" className="w-4 h-4 object-contain animate-pulse-soft flex-shrink-0" />
-                          <span className="text-sm text-neutral-500 animate-pulse-soft">Analisando...</span>
+                      <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px] py-1 animate-in fade-in duration-300">
+                        <div className="flex items-center gap-2.5">
+                          <img src={arccoEmblemUrl} alt="" className="w-3.5 h-3.5 object-contain animate-pulse-soft flex-shrink-0 opacity-40" />
+                          <span className="text-sm text-neutral-600 animate-pulse-soft">Analisando...</span>
                         </div>
                       </div>
                     );
                   }
 
-                  // Collapsed — resumo compacto
+                  // Collapsed — linha única e discreta
                   if (stepsCollapsed) {
                     return (
                       <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px]">
                         <button
                           onClick={() => setIsThoughtsExpanded(true)}
-                          className="flex items-center gap-2 text-xs text-neutral-600 hover:text-neutral-400 transition-colors py-2 group"
+                          className="flex items-center gap-2 text-xs text-neutral-700 hover:text-neutral-500 transition-colors py-1.5 group"
                         >
-                          <span className="text-neutral-700 group-hover:text-neutral-500 transition-colors text-[10px]">&#9656;</span>
+                          <svg width="9" height="9" viewBox="0 0 9 9" fill="none" className="flex-shrink-0 text-neutral-700 group-hover:text-neutral-500 transition-colors">
+                            <path d="M2.5 1.5L6.5 4.5L2.5 7.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
                           <span>{actionSteps.length} etapa{actionSteps.length !== 1 ? 's' : ''}</span>
                           <span className="text-neutral-800">·</span>
                           <span className="tabular-nums">{elapsedSeconds}s</span>
@@ -1724,92 +1790,77 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                     );
                   }
 
-                  // Expanded — painel completo
+                  // Expanded — lista flutuante, sem card
                   return (
                     <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px]">
-                      <div className="rounded-xl border border-[#1c1c20] bg-[#0a0a0d]/60 overflow-hidden">
-                        {/* Header */}
-                        <div className="flex items-center justify-between px-4 py-2.5">
-                          <div className="flex items-center gap-2.5">
-                            {!allDone ? (
-                              <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
-                            ) : (
-                              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500/60" />
-                            )}
-                            <span className="text-[11px] font-medium text-neutral-500 tracking-wider uppercase">
-                              {allDone ? 'Concluído' : 'Processando'}
-                            </span>
-                          </div>
-                          <span className="text-[10px] text-neutral-700 tabular-nums font-mono">
-                            {elapsedSeconds > 0 && `${elapsedSeconds}s`}
-                          </span>
-                        </div>
+                      <div className="py-0.5 space-y-1.5">
+                        {agentThoughts.map((step, i) => {
+                          const isStepRunning = step.status === 'running';
+                          const label = step.label.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\u200d\ufe0f]/gu, '').trim();
 
-                        <div className="h-px bg-[#1c1c20]" />
-
-                        {/* Steps */}
-                        <div className="px-4 py-3 space-y-3">
-                          {agentThoughts.map((step, i) => {
-                            const isStepRunning = step.status === 'running';
-                            const label = step.label.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\u200d\ufe0f]/gu, '').trim();
-
-                            if (step.isThought) {
-                              return (
-                                <div key={i} className="pl-6 border-l border-[#1c1c20] ml-0.5 animate-step-enter" style={{ animationDelay: `${i * 40}ms` }}>
-                                  <p className={`text-xs leading-relaxed italic ${isStepRunning ? 'text-neutral-500' : 'text-neutral-700'}`}>
-                                    {label}
-                                    {isStepRunning && <span className="animate-cursor-blink ml-0.5 not-italic text-neutral-500">&#9612;</span>}
-                                  </p>
-                                </div>
-                              );
-                            }
-
+                          // Thought — texto de raciocínio interno, mais discreto
+                          if (step.isThought) {
                             return (
-                              <div key={i} className="flex items-start gap-3 animate-step-enter" style={{ animationDelay: `${i * 40}ms` }}>
-                                {step.status === 'done' ? (
-                                  <span className="text-[10px] text-emerald-600/50 mt-0.5 flex-shrink-0 w-4 text-center">&#10003;</span>
-                                ) : isStepRunning ? (
-                                  <div className="w-4 flex justify-center flex-shrink-0 mt-1">
-                                    <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
-                                  </div>
-                                ) : (
-                                  <span className="text-[10px] text-neutral-700 mt-0.5 flex-shrink-0 w-4 text-center">&#183;</span>
-                                )}
-                                <span className={`text-xs leading-relaxed ${
-                                  isStepRunning ? 'text-neutral-300' : step.status === 'done' ? 'text-neutral-600' : 'text-neutral-700'
-                                }`}>
+                              <div key={i} className="pl-[22px] animate-step-enter" style={{ animationDelay: `${i * 35}ms` }}>
+                                <span className={`text-xs leading-relaxed italic ${isStepRunning ? 'text-neutral-600' : 'text-neutral-800'}`}>
                                   {label}
-                                  {isStepRunning && <span className="animate-cursor-blink ml-0.5 text-neutral-400">&#9612;</span>}
                                 </span>
                               </div>
                             );
-                          })}
+                          }
 
-                          {/* Mensagem de thinking atual (pre_action) */}
-                          {chatThinkingVisible && chatThinkingMessage && !allDone && (
-                            <div className="flex items-center gap-3 pt-2 border-t border-[#1c1c20] animate-in fade-in duration-300">
-                              <div className="w-4 flex justify-center flex-shrink-0">
-                                <div className="w-3 h-3 rounded-full border-[1.5px] border-indigo-400/60 border-t-transparent animate-spin" />
-                              </div>
-                              <span className="text-xs text-neutral-500 leading-relaxed">{chatThinkingMessage}</span>
+                          // Action step
+                          return (
+                            <div key={i} className="flex items-center gap-2.5 animate-step-enter" style={{ animationDelay: `${i * 35}ms` }}>
+                              {/* Ícone de estado */}
+                              <span className="flex-shrink-0 w-[14px] flex justify-center">
+                                {step.status === 'done' ? (
+                                  <span className="text-[11px] text-emerald-600/60 animate-check-pop leading-none">✓</span>
+                                ) : isStepRunning ? (
+                                  <div className="w-[5px] h-[5px] rounded-full bg-indigo-400 animate-ring-pulse" />
+                                ) : (
+                                  <span className="text-[10px] text-neutral-800 leading-none">·</span>
+                                )}
+                              </span>
+                              {/* Label do step */}
+                              <span className={`text-sm leading-snug ${
+                                isStepRunning
+                                  ? 'shimmer-text text-neutral-400'
+                                  : step.status === 'done'
+                                  ? 'text-neutral-700'
+                                  : 'text-neutral-800'
+                              }`}>
+                                {label}
+                              </span>
                             </div>
-                          )}
-                        </div>
+                          );
+                        })}
 
-                        {/* Botão recolher quando concluído */}
-                        {allDone && (
-                          <>
-                            <div className="h-px bg-[#1c1c20]" />
-                            <button
-                              onClick={() => setIsThoughtsExpanded(false)}
-                              className="w-full flex items-center justify-center gap-1.5 px-4 py-2 text-[10px] text-neutral-600 hover:text-neutral-400 transition-colors"
-                            >
-                              <span>&#9652;</span>
-                              <span>Recolher</span>
-                            </button>
-                          </>
+                        {/* Pre-action message — o que o agente está fazendo agora */}
+                        {chatThinkingVisible && chatThinkingMessage && !allDone && (
+                          <div className="flex items-center gap-2.5 animate-in fade-in duration-300 pt-0.5">
+                            <span className="flex-shrink-0 w-[14px] flex justify-center">
+                              <div className="w-[11px] h-[11px] rounded-full border border-indigo-400/40 border-t-transparent animate-spin" />
+                            </span>
+                            <span className="text-sm text-neutral-500 leading-snug">{chatThinkingMessage}</span>
+                          </div>
                         )}
                       </div>
+
+                      {/* Recolher — só quando concluído */}
+                      {allDone && (
+                        <button
+                          onClick={() => setIsThoughtsExpanded(false)}
+                          className="flex items-center gap-1.5 text-xs text-neutral-800 hover:text-neutral-600 transition-colors mt-2 group"
+                        >
+                          <svg width="9" height="9" viewBox="0 0 9 9" fill="none" className="flex-shrink-0 group-hover:text-neutral-600 transition-colors">
+                            <path d="M1.5 6.5L4.5 2.5L7.5 6.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                          <span>Recolher</span>
+                          <span className="text-neutral-900">·</span>
+                          <span className="tabular-nums">{elapsedSeconds}s</span>
+                        </button>
+                      )}
                     </div>
                   );
                 })()}

@@ -3,6 +3,67 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-29 — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Redesign das funções de saudação (`getWeatherSubtitle` e `getSubtitle`):
+   - Removido o horário literal "Você chegou às HH:MM" (substituído por contexto qualitativo).
+   - Adicionado helper `_pick(arr)` com seed determinístico (`hora * 7 + dia * 31 + mês * 13`) — seleciona variante diferente a cada hora/dia sem flickar durante a sessão.
+   - `getWeatherSubtitle`: cada condição agora tem um pool de 3–5 variantes. Ex: chuva → ["Chuva de tarde em SP.", "Tá chovendo em SP.", "SP molhada essa tarde.", ...]. Inclui combinações de clima + temperatura + parte do dia + fim de semana.
+   - `getSubtitle` (fallback sem clima): pool de variantes por faixa horária + dia da semana (segunda, sexta, domingo, madrugada, etc.).
+   - Frases são curtas e naturais — a IA demonstra saber onde o usuário está e o momento sem explicitar o relógio.
+
+### Por quê:
+Usuário não queria o horário exato. Queria que a IA demonstrasse awareness contextual (parte do dia, clima, fim de semana, madrugada) de forma fluida e variada, misturando diferentes sinais a cada sessão.
+
+---
+
+## 2026-03-28 (2) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Redesign completo do Activity Panel (painel de steps do agente):
+   - Removido o card/wrapper com borda e fundo escuro — o painel agora flutua livremente no chat, sem caixa.
+   - Tipografia Inter (sans-serif) em `text-sm`, substituindo a aparência de "terminal".
+   - Steps ativos: efeito `shimmer-text` (gradiente animado indigo/violet sobre o texto) — elegante e discreto.
+   - Steps concluídos: texto em `text-neutral-700` com ✓ verde suave + animação `animate-check-pop`.
+   - Steps pending: ponto central cinza.
+   - Thoughts (raciocínio interno): texto italic, indentado, `text-xs`, muito discreto.
+   - Pre-action message: linha com spinner circular fino (`border-t-transparent animate-spin`) e `text-neutral-500`.
+   - Estado loading (sem steps): logo Arcco em `animate-pulse-soft` + "Analisando..." bem suave.
+   - Estado collapsed: seta SVG + "N etapas · Xs" em `text-neutral-700`, muito discreto.
+   - Botão "Recolher" quando concluído: seta SVG up + contador de tempo, linha única.
+   - Ícone de estado running: dot `w-[5px]` com `animate-ring-pulse` (glow sutil).
+   - Non-agent thinking: dot `bg-indigo-400/60 animate-pulse` + texto `text-neutral-500`.
+
+### Por quê:
+Redesign pedido pelo usuário. O painel anterior tinha visual de "terminal" (card escuro com borda, fonte pequena, layout denso). Novo design é solto no chat, fonte maior, animações elegantes, inspirado em Claude Code e interfaces de IAs agênticas modernas.
+
+---
+
+## 2026-03-28 — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `pages/AdminPage.tsx`
+
+### O que foi feito:
+1. **AdminPage.tsx** — Corrigido botão "Copiar logs consolidados" que falhava silenciosamente em HTTP:
+   - `copyExecutionLogs()`: adicionado try/catch em torno de `navigator.clipboard.writeText()` com fallback via `document.execCommand('copy')` usando textarea temporário oculto (funciona em HTTP/não-HTTPS).
+   - Adicionada função `downloadExecutionLogs()` que baixa os logs como arquivo `.json` diretamente (não depende de Clipboard API nem HTTPS).
+   - Adicionado estado `downloadedExecutionId` para feedback visual do botão download.
+   - Adicionado import de `Download` de `lucide-react`.
+   - Na UI: botão "Copiar" agora fica ao lado de novo botão "Baixar .json" (verde) — alternativa robusta quando copy falha.
+
+### Por quê:
+`navigator.clipboard.writeText()` exige "secure context" (HTTPS ou localhost). O site está temporariamente em HTTP enquanto SSL não é renovado. O botão copy não funcionava e o usuário não conseguia extrair logs para debugar erros no fluxo dos agentes.
+
+---
+
 ## 2026-03-27 22:00 — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:

@@ -46,7 +46,8 @@ import {
   Code2,
   Monitor,
   FileText,
-  Trash2
+  Trash2,
+  Download
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { AdminUsersTab } from '../components/admin/AdminUsersTab';
@@ -754,6 +755,7 @@ export const AdminPage: React.FC = () => {
   const [executionDetail, setExecutionDetail] = useState<any | null>(null);
   const [executionDetailLoading, setExecutionDetailLoading] = useState(false);
   const [copiedExecutionId, setCopiedExecutionId] = useState<string | null>(null);
+  const [downloadedExecutionId, setDownloadedExecutionId] = useState<string | null>(null);
 
   // '' = usa Vite proxy (/api/admin/* â†’ localhost:8001). NÃ£o hardcodar localhost aqui.
   const backendUrl = '';
@@ -941,9 +943,87 @@ export const AdminPage: React.FC = () => {
       })),
     };
 
-    await navigator.clipboard.writeText(JSON.stringify(condensed, null, 2));
+    const text = JSON.stringify(condensed, null, 2);
+
+    // navigator.clipboard requer HTTPS (secure context) — fallback para HTTP via execCommand
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.top = '-9999px';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
+
     setCopiedExecutionId(execution?.id || 'copied');
     window.setTimeout(() => setCopiedExecutionId((current) => (current === (execution?.id || 'copied') ? null : current)), 2000);
+  };
+
+  /** Baixa os logs de execução como arquivo JSON */
+  const downloadExecutionLogs = (detail: any) => {
+    const execution = detail?.execution || null;
+    const agents = detail?.agents || [];
+    const logs = detail?.logs || [];
+
+    const condensed = {
+      execution: {
+        id: execution?.id,
+        status: execution?.status,
+        request_text: execution?.request_text,
+        started_at: execution?.started_at,
+        finished_at: execution?.finished_at,
+        duration_ms: execution?.duration_ms,
+        final_error: execution?.final_error,
+        metadata: execution?.metadata || {},
+      },
+      summary: {
+        agent_count: agents.length,
+        log_count: logs.length,
+        failed_agents: agents.filter((a: any) => a.status === 'failed').length,
+        error_events: logs.filter((l: any) => l.level === 'error').length,
+      },
+      agents: agents.map((agent: any) => ({
+        id: agent.id,
+        agent_key: agent.agent_key,
+        agent_name: agent.agent_name,
+        model: agent.model,
+        status: agent.status,
+        duration_ms: agent.duration_ms,
+        error_text: agent.error_text,
+        input_payload: agent.input_payload,
+        output_payload: agent.output_payload,
+      })),
+      logs: logs.map((log: any) => ({
+        id: log.id,
+        created_at: log.created_at,
+        level: log.level,
+        event_type: log.event_type,
+        message: log.message,
+        tool_name: log.tool_name,
+        tool_args: log.tool_args,
+        tool_result: log.tool_result,
+        raw_payload: log.raw_payload,
+      })),
+    };
+
+    const blob = new Blob([JSON.stringify(condensed, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `arcco-log-${execution?.id?.slice(0, 8) || 'exec'}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    setDownloadedExecutionId(execution?.id || 'downloaded');
+    window.setTimeout(() => setDownloadedExecutionId(null), 2000);
   };
 
   /** Envia alteraÃ§Ãµes de um agente para o backend (PUT /api/admin/agents/{id}) */
@@ -1499,13 +1579,23 @@ export const AdminPage: React.FC = () => {
                     <div className="bg-[#141414] border border-neutral-900 rounded-xl p-4">
                       <div className="flex items-center justify-between gap-3 mb-2">
                         <div className="text-sm font-semibold text-white">Execução principal</div>
-                        <button
-                          onClick={() => copyExecutionLogs(executionDetail)}
-                          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 text-xs transition-colors border border-indigo-500/20"
-                        >
-                          <FileText size={12} />
-                          {copiedExecutionId === executionDetail.execution?.id ? 'Copiado' : 'Copiar logs consolidados'}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => copyExecutionLogs(executionDetail)}
+                            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 text-xs transition-colors border border-indigo-500/20"
+                          >
+                            <FileText size={12} />
+                            {copiedExecutionId === executionDetail.execution?.id ? 'Copiado!' : 'Copiar'}
+                          </button>
+                          <button
+                            onClick={() => downloadExecutionLogs(executionDetail)}
+                            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 text-xs transition-colors border border-emerald-500/20"
+                            title="Baixar como .json (funciona sem HTTPS)"
+                          >
+                            <Download size={12} />
+                            {downloadedExecutionId === executionDetail.execution?.id ? 'Baixado!' : 'Baixar .json'}
+                          </button>
+                        </div>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                         <div><span className="text-neutral-500">ID:</span> <span className="text-neutral-200 break-all">{executionDetail.execution?.id}</span></div>
