@@ -448,7 +448,7 @@ SUPERVISOR_TOOLS = [
         "type": "function",
         "function": {
             "name": "ask_text_generator",
-            "description": "Delega a criaÃ§Ã£o de um documento bruto em texto para preview editÃ¡vel. O usuÃ¡rio exporta depois para DOCX ou PDF.",
+            "description": "Delega a criação de um documento oficial (Contratos, Relatórios, Artigos, Propostas, Manuais). Retorna o conteúdo formatado em Markdown rico (com títulos #, listas e negrito) para exportação perfeita em PDF/DOCX.",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -3,6 +3,17 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-29 (5) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `backend/agents/tools.py`
+
+### O que foi feito:
+1. **tools.py** — Description do `ask_text_generator` em `SUPERVISOR_TOOLS` atualizada: removido "documento bruto em texto", substituído por "documento oficial (Contratos, Relatórios, Artigos, Propostas, Manuais) formatado em Markdown rico (títulos #, listas e negrito) para exportação perfeita em PDF/DOCX".
+
+### Por quê:
+Contradição entre tools.py e prompts.py: o TEXT_GENERATOR_SYSTEM_PROMPT foi atualizado para usar Markdown rico, mas a description da tool ainda dizia "texto bruto", causando conflito no momento em que o LLM lê a definição da ferramenta e decide como populá-la.
+
 ## 2026-03-29 (4) — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:
