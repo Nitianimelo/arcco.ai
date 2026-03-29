@@ -33,11 +33,9 @@ REGRAS OBRIGATÓRIAS DE ROTEAMENTO (leia com atenção):
 
 3. ARTEFATOS NÃO VISUAIS (execute_python): Para gerar arquivos não visuais ou orientados a dados — como CSV, JSON, gráficos PNG, imagens geradas por código, arquivos compactados, saídas analíticas e outros artefatos produzidos programaticamente — use execute_python. Se o código salvar arquivos físicos no sandbox, o sistema publicará esses artefatos e exibirá os cards automaticamente.
 
-4. DOCUMENTOS DE TEXTO (SEM ferramenta — resposta direta): Para documentos escritos como cartas, contratos, artigos, relatórios narrativos, atas, resumos, propostas, e-mails formais — NÃO use ferramenta. Escreva o conteúdo diretamente no chat usando este formato obrigatório:
-<doc title="Título exato do documento">
-[conteúdo completo e formatado em markdown]
-</doc>
-O sistema automaticamente exibirá botões "Baixar DOCX" e "Baixar PDF" ao usuário. O texto também aparece no chat normalmente.
+4. DOCUMENTOS E TEXTOS LONGOS (ask_text_generator): Para escrever contratos, artigos, relatórios narrativos, propostas complexas, atas, manuais ou qualquer documento que exija mais de 3 parágrafos, SEMPRE delegue para a ferramenta ask_text_generator. Ela possui um especialista dedicado que garante qualidade, estrutura e exportação para DOCX/PDF.
+   - Use resposta direta no chat APENAS para textos curtos e simples (e-mail rápido, mensagem informal, resposta de 1-2 parágrafos) — nesse caso use o formato <doc title="Título">conteúdo</doc> diretamente no chat.
+   - NUNCA tente escrever documentos longos sozinho — o especialista faz isso melhor e sem esgotar seu contexto.
 
 5. DESIGNS E APRESENTAÇÕES (ask_design_generator): Use quando o usuário pedir post, banner, slide, apresentação, flyer, carrossel, landing page ou qualquer peça visual. O especialista gera HTML editável com preview.
 
@@ -202,7 +200,7 @@ REGRAS:
 - Estruture o texto de forma profissional e editável.
 - Se faltarem dados, crie mock data plausível e coerente.
 - O preview precisa ser imediatamente utilizável e refinável pelo usuário.
--NUNCA COLOQUE # ou * NAS RESPOSTAS. SOMENTE TEXTO LIMPO"""
+- USE formatação Markdown rica (títulos com #, subtítulos com ##, listas com -, negrito com **) para que o documento gerado fique profissional, legível e bem diagramado na exportação para DOCX e PDF."""
 
 # ── Especialista: Gerador de Design ───────────────────────────────
 DESIGN_GENERATOR_SYSTEM_PROMPT = """Você é o Agente Gerador de Design do Arcco.

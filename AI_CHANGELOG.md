@@ -3,6 +3,22 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-29 (3) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `backend/agents/prompts.py`
+- `backend/agents/planner.py`
+
+### O que foi feito:
+1. **prompts.py** — Regra 4 do `CHAT_SYSTEM_PROMPT` reescrita: remove instrução "SEM ferramenta — resposta direta" que conflitava com o Planner. Agora instrui o Supervisor a SEMPRE delegar documentos longos (>3 parágrafos) para `ask_text_generator`, reservando resposta direta apenas para textos curtos (1-2 parágrafos).
+2. **prompts.py** — `TEXT_GENERATOR_SYSTEM_PROMPT`: substituída a linha "NUNCA COLOQUE # ou *" por instrução oposta — USE formatação Markdown rica (títulos #, listas -, negrito **) para gerar documentos profissionais exportáveis.
+3. **planner.py** — `import re` adicionado. Parsing frágil `if raw_content.startswith("```")` substituído por `re.search(r'\{.*\}', raw_content, re.DOTALL)` — extrai o JSON independentemente de texto introdutório ou blocos markdown que o LLM inclua na resposta.
+
+### Por quê:
+Três fragilidades em produção: (1) conflito de roteamento Supervisor vs Planner para textos longos, (2) documentos exportados sem formatação por restrição incorreta de Markdown, (3) Planner falhando silenciosamente quando o LLM adicionava texto antes do JSON.
+
+---
+
 ## 2026-03-29 (2) — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:

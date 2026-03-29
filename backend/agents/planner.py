@@ -5,6 +5,7 @@ Uses Pydantic and OpenRouter Structured Outputs.
 
 import json
 import logging
+import re
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
@@ -83,13 +84,13 @@ async def generate_plan(user_intent: str, model: str) -> PlannerOutput:
         )
         
         raw_content = data["choices"][0]["message"]["content"].strip()
-        
-        # Strip potential markdown backticks
-        if raw_content.startswith("```"):
-            raw_content = raw_content.split("\n", 1)[1]
-            if raw_content.endswith("```"):
-                raw_content = raw_content.rsplit("\n", 1)[0]
-        
+
+        # Extrai de forma robusta o primeiro bloco JSON encontrado,
+        # ignorando qualquer texto introdutório ou markdown que o LLM adicione antes/depois
+        match = re.search(r'\{.*\}', raw_content, re.DOTALL)
+        if match:
+            raw_content = match.group(0)
+
         parsed_json = json.loads(raw_content)
         return PlannerOutput.model_validate(parsed_json)
         
