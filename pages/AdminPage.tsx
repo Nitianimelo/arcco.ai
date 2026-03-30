@@ -47,7 +47,11 @@ import {
   Monitor,
   FileText,
   Trash2,
-  Download
+  Download,
+  DollarSign,
+  TrendingUp,
+  BarChart3,
+  Activity
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { AdminUsersTab } from '../components/admin/AdminUsersTab';
@@ -76,8 +80,33 @@ interface ApiKeyRow {
   updated_at?: string;
 }
 
-type Tab = 'usuarios' | 'apikeys' | 'orquestracao' | 'chat_normal';
+type Tab = 'usuarios' | 'apikeys' | 'orquestracao' | 'chat_normal' | 'custos';
 type ExtendedTab = Tab | 'logs';
+
+interface TokenUsageSummary {
+  period_days: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  total_executions: number;
+  avg_cost_per_execution: number;
+  by_mode: { mode: string; tokens: number; cost: number; count: number }[];
+  by_model: { model: string; tokens: number; cost: number; count: number }[];
+  by_day: { date: string; tokens: number; cost: number; count: number }[];
+  by_user: { user_id: string; tokens: number; cost: number; count: number }[];
+}
+
+interface TokenExecution {
+  id: string;
+  user_id: string | null;
+  request_source: string;
+  model_used: string | null;
+  total_tokens: number;
+  total_cost_usd: number;
+  status: string;
+  request_text: string;
+  created_at: string;
+  finished_at: string | null;
+}
 
 // ConfiguraÃ§Ã£o de um agente Python (retornada pelo backend)
 interface AgentConfig {
@@ -757,6 +786,14 @@ export const AdminPage: React.FC = () => {
   const [copiedExecutionId, setCopiedExecutionId] = useState<string | null>(null);
   const [downloadedExecutionId, setDownloadedExecutionId] = useState<string | null>(null);
 
+  // ── Aba Custos ──────────────────────────────────────────────────────────────
+  const [tokenSummary, setTokenSummary] = useState<TokenUsageSummary | null>(null);
+  const [tokenSummaryLoading, setTokenSummaryLoading] = useState(false);
+  const [tokenPeriod, setTokenPeriod] = useState<7 | 30 | 90 | 365>(30);
+  const [tokenMode, setTokenMode] = useState<'all' | 'normal' | 'agent'>('all');
+  const [tokenExecutions, setTokenExecutions] = useState<TokenExecution[]>([]);
+  const [tokenExecsLoading, setTokenExecsLoading] = useState(false);
+
   // ── Auth admin ──────────────────────────────────────────────────────────────
   const [adminToken, setAdminToken] = useState<string | null>(() =>
     localStorage.getItem('arcco_admin_token'));
@@ -942,6 +979,30 @@ export const AdminPage: React.FC = () => {
       if (!options?.silent) setExecutionDetail(null);
     } finally {
       if (!options?.silent) setExecutionDetailLoading(false);
+    }
+  };
+
+  const loadTokenUsage = async () => {
+    setTokenSummaryLoading(true);
+    setTokenExecsLoading(true);
+    try {
+      const [summaryRes, execsRes] = await Promise.all([
+        adminFetch(`${backendUrl}/api/admin/token-usage/summary?days=${tokenPeriod}`),
+        adminFetch(`${backendUrl}/api/admin/token-usage/executions?days=${tokenPeriod}&mode=${tokenMode}&limit=200`),
+      ]);
+      if (summaryRes.ok) {
+        const data = await summaryRes.json();
+        setTokenSummary(data);
+      }
+      if (execsRes.ok) {
+        const data = await execsRes.json();
+        setTokenExecutions(data.executions || []);
+      }
+    } catch (err) {
+      console.error('[CUSTOS] Erro ao carregar token usage:', err);
+    } finally {
+      setTokenSummaryLoading(false);
+      setTokenExecsLoading(false);
     }
   };
 
@@ -1176,6 +1237,9 @@ export const AdminPage: React.FC = () => {
     if (activeTab === 'logs') {
       fetchExecutions();
     }
+    if (activeTab === 'custos') {
+      loadTokenUsage();
+    }
   }, [activeTab]);
 
   useEffect(() => {
@@ -1249,6 +1313,7 @@ export const AdminPage: React.FC = () => {
     { id: 'orquestracao', label: 'OrquestraÃ§Ã£o', icon: <GitBranch size={16} />, count: agents.length },
     { id: 'chat_normal', label: 'Chat Normal', icon: <Brain size={16} />, count: chatConfigs.filter(c => c.is_active).length },
     { id: 'logs', label: 'Logs', icon: <Terminal size={16} />, count: executions.length },
+    { id: 'custos', label: 'Custos', icon: <DollarSign size={16} />, count: 0 },
   ];
 
   // â”€â”€ RenderizaÃ§Ã£o â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1784,6 +1849,283 @@ export const AdminPage: React.FC = () => {
                 )}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* ── Tab: Custos ──────────────────────────────────────────────────────── */}
+        {activeTab === 'custos' && (
+          <div className="space-y-5">
+            {/* Header + filtros */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-white">Custos de Tokens</h2>
+                <p className="text-xs text-neutral-500 mt-0.5">Monitoramento de uso de tokens e custo estimado por modelo</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1 bg-[#0f0f0f] border border-neutral-900 rounded-lg p-1">
+                  {([7, 30, 90, 365] as const).map(d => (
+                    <button
+                      key={d}
+                      onClick={() => setTokenPeriod(d)}
+                      className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${tokenPeriod === d ? 'bg-indigo-600 text-white' : 'text-neutral-500 hover:text-neutral-300'}`}
+                    >
+                      {d}d
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1 bg-[#0f0f0f] border border-neutral-900 rounded-lg p-1">
+                  {(['all', 'normal', 'agent'] as const).map(m => (
+                    <button
+                      key={m}
+                      onClick={() => setTokenMode(m)}
+                      className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${tokenMode === m ? 'bg-indigo-600 text-white' : 'text-neutral-500 hover:text-neutral-300'}`}
+                    >
+                      {m === 'all' ? 'Todos' : m === 'normal' ? 'Normal' : 'Agente'}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={loadTokenUsage}
+                  disabled={tokenSummaryLoading}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-400 text-xs transition-colors border border-neutral-800 disabled:opacity-50"
+                >
+                  <RefreshCw size={12} className={tokenSummaryLoading ? 'animate-spin' : ''} />
+                  Atualizar
+                </button>
+              </div>
+            </div>
+
+            {tokenSummaryLoading && (
+              <div className="flex items-center justify-center py-20 text-neutral-500">
+                <RefreshCw size={18} className="animate-spin mr-3" />
+                Calculando custos...
+              </div>
+            )}
+
+            {!tokenSummaryLoading && tokenSummary && (
+              <>
+                {/* 4 cards de resumo */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="bg-[#0f0f0f] border border-neutral-900 rounded-xl p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-7 h-7 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                        <Activity size={14} className="text-blue-400" />
+                      </div>
+                      <span className="text-xs text-neutral-500">Total Tokens</span>
+                    </div>
+                    <p className="text-xl font-bold text-white">
+                      {tokenSummary.total_tokens >= 1_000_000
+                        ? `${(tokenSummary.total_tokens / 1_000_000).toFixed(1)}M`
+                        : tokenSummary.total_tokens >= 1_000
+                          ? `${(tokenSummary.total_tokens / 1_000).toFixed(0)}k`
+                          : tokenSummary.total_tokens}
+                    </p>
+                    <p className="text-xs text-neutral-600 mt-1">últimos {tokenPeriod}d</p>
+                  </div>
+
+                  <div className="bg-[#0f0f0f] border border-neutral-900 rounded-xl p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-7 h-7 rounded-lg bg-green-500/10 flex items-center justify-center">
+                        <DollarSign size={14} className="text-green-400" />
+                      </div>
+                      <span className="text-xs text-neutral-500">Custo Total</span>
+                    </div>
+                    <p className="text-xl font-bold text-white">${tokenSummary.total_cost_usd.toFixed(2)}</p>
+                    <p className="text-xs text-neutral-600 mt-1">USD estimado</p>
+                  </div>
+
+                  <div className="bg-[#0f0f0f] border border-neutral-900 rounded-xl p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-7 h-7 rounded-lg bg-purple-500/10 flex items-center justify-center">
+                        <BarChart3 size={14} className="text-purple-400" />
+                      </div>
+                      <span className="text-xs text-neutral-500">Execuções</span>
+                    </div>
+                    <p className="text-xl font-bold text-white">{tokenSummary.total_executions}</p>
+                    <p className="text-xs text-neutral-600 mt-1">últimos {tokenPeriod}d</p>
+                  </div>
+
+                  <div className="bg-[#0f0f0f] border border-neutral-900 rounded-xl p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-7 h-7 rounded-lg bg-orange-500/10 flex items-center justify-center">
+                        <TrendingUp size={14} className="text-orange-400" />
+                      </div>
+                      <span className="text-xs text-neutral-500">Custo Médio</span>
+                    </div>
+                    <p className="text-xl font-bold text-white">${tokenSummary.avg_cost_per_execution.toFixed(4)}</p>
+                    <p className="text-xs text-neutral-600 mt-1">por execução</p>
+                  </div>
+                </div>
+
+                {/* Por modo */}
+                {tokenSummary.by_mode.length > 0 && (
+                  <div className="bg-[#0f0f0f] border border-neutral-900 rounded-xl p-4">
+                    <div className="text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-3">Por modo</div>
+                    <div className="space-y-2.5">
+                      {tokenSummary.by_mode.map(m => {
+                        const pct = tokenSummary.total_tokens > 0
+                          ? Math.round((m.tokens / tokenSummary.total_tokens) * 100)
+                          : 0;
+                        return (
+                          <div key={m.mode} className="flex items-center gap-3">
+                            <div className="w-16 text-xs text-neutral-400 capitalize shrink-0">
+                              {m.mode === 'normal' ? 'Chat' : m.mode === 'agent' ? 'Agente' : m.mode}
+                            </div>
+                            <div className="flex-1 bg-neutral-900 rounded-full h-2">
+                              <div
+                                className={`h-2 rounded-full ${m.mode === 'agent' ? 'bg-indigo-500' : 'bg-emerald-500'}`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                            <div className="text-xs text-neutral-500 w-8 text-right">{pct}%</div>
+                            <div className="text-xs text-green-400 w-20 text-right">${m.cost.toFixed(3)}</div>
+                            <div className="text-xs text-neutral-600 w-16 text-right">{m.count} exec</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Top Modelos + Consumo por Dia */}
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  <div className="bg-[#0f0f0f] border border-neutral-900 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-neutral-900 text-xs text-neutral-500 uppercase tracking-wider">Top modelos</div>
+                    <div className="divide-y divide-neutral-900">
+                      {tokenSummary.by_model.slice(0, 10).map((m, i) => (
+                        <div key={m.model} className="px-4 py-2.5 flex items-center gap-3">
+                          <span className="text-xs text-neutral-700 w-4 shrink-0">{i + 1}</span>
+                          <span className="text-xs text-neutral-300 flex-1 truncate" title={m.model}>{m.model}</span>
+                          <span className="text-xs text-neutral-500 w-16 text-right">
+                            {m.tokens >= 1_000_000 ? `${(m.tokens / 1_000_000).toFixed(1)}M` : m.tokens >= 1_000 ? `${(m.tokens / 1_000).toFixed(0)}k` : m.tokens} tok
+                          </span>
+                          <span className="text-xs text-green-400 w-16 text-right">${m.cost.toFixed(3)}</span>
+                          <span className="text-xs text-neutral-600 w-10 text-right">{m.count}x</span>
+                        </div>
+                      ))}
+                      {tokenSummary.by_model.length === 0 && (
+                        <div className="px-4 py-6 text-xs text-neutral-600">Nenhum dado disponível</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bg-[#0f0f0f] border border-neutral-900 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-neutral-900 text-xs text-neutral-500 uppercase tracking-wider">Consumo por dia</div>
+                    <div className="divide-y divide-neutral-900">
+                      {tokenSummary.by_day.slice(0, 14).map(d => {
+                        const maxTok = Math.max(...tokenSummary.by_day.map(x => x.tokens), 1);
+                        return (
+                          <div key={d.date} className="px-4 py-2.5 flex items-center gap-3">
+                            <span className="text-xs text-neutral-400 w-20 shrink-0">{d.date}</span>
+                            <div className="flex-1 bg-neutral-900 rounded-full h-1.5">
+                              <div
+                                className="h-1.5 rounded-full bg-indigo-500/60"
+                                style={{ width: `${Math.round((d.tokens / maxTok) * 100)}%` }}
+                              />
+                            </div>
+                            <span className="text-xs text-neutral-500 w-14 text-right">
+                              {d.tokens >= 1_000_000 ? `${(d.tokens / 1_000_000).toFixed(1)}M` : d.tokens >= 1_000 ? `${(d.tokens / 1_000).toFixed(0)}k` : d.tokens} tok
+                            </span>
+                            <span className="text-xs text-green-400 w-14 text-right">${d.cost.toFixed(3)}</span>
+                            <span className="text-xs text-neutral-600 w-8 text-right">{d.count}x</span>
+                          </div>
+                        );
+                      })}
+                      {tokenSummary.by_day.length === 0 && (
+                        <div className="px-4 py-6 text-xs text-neutral-600">Nenhum dado disponível</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Top Usuários */}
+                {tokenSummary.by_user.length > 0 && (
+                  <div className="bg-[#0f0f0f] border border-neutral-900 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-neutral-900 text-xs text-neutral-500 uppercase tracking-wider">Top usuários</div>
+                    <div className="divide-y divide-neutral-900">
+                      {tokenSummary.by_user.slice(0, 10).map((u, i) => (
+                        <div key={u.user_id} className="px-4 py-2.5 flex items-center gap-3">
+                          <span className="text-xs text-neutral-700 w-4 shrink-0">{i + 1}</span>
+                          <span className="text-xs text-neutral-300 flex-1 font-mono truncate" title={u.user_id}>{u.user_id || '(anônimo)'}</span>
+                          <span className="text-xs text-neutral-500 w-16 text-right">
+                            {u.tokens >= 1_000_000 ? `${(u.tokens / 1_000_000).toFixed(1)}M` : u.tokens >= 1_000 ? `${(u.tokens / 1_000).toFixed(0)}k` : u.tokens} tok
+                          </span>
+                          <span className="text-xs text-green-400 w-16 text-right">${u.cost.toFixed(3)}</span>
+                          <span className="text-xs text-neutral-600 w-14 text-right">{u.count} exec</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Execuções recentes */}
+                <div className="bg-[#0f0f0f] border border-neutral-900 rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-neutral-900 flex items-center justify-between">
+                    <span className="text-xs text-neutral-500 uppercase tracking-wider">Execuções recentes</span>
+                    {tokenExecsLoading && <Loader2 size={12} className="animate-spin text-neutral-600" />}
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-neutral-900">
+                          <th className="px-4 py-2 text-left text-neutral-600 font-normal">Data</th>
+                          <th className="px-4 py-2 text-left text-neutral-600 font-normal">Pedido</th>
+                          <th className="px-4 py-2 text-left text-neutral-600 font-normal">Fonte</th>
+                          <th className="px-4 py-2 text-left text-neutral-600 font-normal">Modelo</th>
+                          <th className="px-4 py-2 text-right text-neutral-600 font-normal">Tokens</th>
+                          <th className="px-4 py-2 text-right text-neutral-600 font-normal">Custo</th>
+                          <th className="px-4 py-2 text-center text-neutral-600 font-normal">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-neutral-900">
+                        {tokenExecutions.slice(0, 100).map(exec => (
+                          <tr key={exec.id} className="hover:bg-white/[0.015] transition-colors">
+                            <td className="px-4 py-2 text-neutral-500 whitespace-nowrap">{formatDateTime(exec.created_at)}</td>
+                            <td className="px-4 py-2 text-neutral-300 max-w-[200px] truncate" title={exec.request_text}>{exec.request_text || '—'}</td>
+                            <td className="px-4 py-2 text-neutral-500">{exec.request_source || '—'}</td>
+                            <td className="px-4 py-2 text-neutral-500 max-w-[120px] truncate" title={exec.model_used || ''}>
+                              {exec.model_used ? exec.model_used.split('/').pop() : '—'}
+                            </td>
+                            <td className="px-4 py-2 text-neutral-400 text-right whitespace-nowrap">
+                              {exec.total_tokens >= 1_000 ? `${(exec.total_tokens / 1_000).toFixed(0)}k` : exec.total_tokens || 0}
+                            </td>
+                            <td className="px-4 py-2 text-green-400 text-right whitespace-nowrap">
+                              {exec.total_cost_usd > 0 ? `$${exec.total_cost_usd.toFixed(4)}` : '—'}
+                            </td>
+                            <td className="px-4 py-2 text-center">
+                              <span className={`px-1.5 py-0.5 rounded text-[10px] ${exec.status === 'completed' ? 'text-green-400 bg-green-500/10' : exec.status === 'failed' ? 'text-red-400 bg-red-500/10' : 'text-yellow-400 bg-yellow-500/10'}`}>
+                                {exec.status}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                        {tokenExecutions.length === 0 && (
+                          <tr>
+                            <td colSpan={7} className="px-4 py-8 text-center text-neutral-600">
+                              Nenhuma execução encontrada para o período selecionado
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {!tokenSummaryLoading && !tokenSummary && (
+              <div className="py-20 text-center text-neutral-600">
+                <DollarSign size={32} className="mx-auto mb-3 opacity-30" />
+                <p className="text-sm">Nenhum dado de custo disponível</p>
+                <p className="text-xs mt-1">Verifique se o backend está rodando e se as colunas SQL foram criadas</p>
+                <button
+                  onClick={loadTokenUsage}
+                  className="mt-4 px-4 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-400 text-xs border border-neutral-800 transition-colors"
+                >
+                  Tentar novamente
+                </button>
+              </div>
+            )}
           </div>
         )}
 

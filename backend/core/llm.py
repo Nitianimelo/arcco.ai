@@ -5,11 +5,52 @@ Wrapper para chamadas LLM via OpenRouter e Anthropic.
 import logging
 import re
 import time
+from contextvars import ContextVar
 from typing import Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# ── Token Tracking (ContextVar — isolado por request async) ──────────────────
+# Cada request FastAPI/SSE tem seu próprio contexto assíncrono.
+# call_openrouter e stream_openrouter acumulam automaticamente neste dict.
+
+_token_accumulator: ContextVar[dict | None] = ContextVar("token_accumulator", default=None)
+
+
+def start_token_tracking() -> dict:
+    """
+    Inicia acumulação de tokens para a request atual.
+    Deve ser chamado no início de cada request SSE em chat.py.
+    Retorna o dict de acumulação (pode ser lido depois via get_token_usage()).
+    """
+    acc: dict = {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        # Campos específicos do stream (preenchidos pelo último chunk de usage)
+        "stream_prompt_tokens": 0,
+        "stream_completion_tokens": 0,
+        "stream_total_tokens": 0,
+    }
+    _token_accumulator.set(acc)
+    return acc
+
+
+def get_token_usage() -> dict:
+    """
+    Retorna os tokens acumulados na request atual.
+    Prioriza os valores de stream (mais precisos) sobre os acumulados de call_openrouter.
+    """
+    acc = _token_accumulator.get()
+    if not acc:
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    # Se o stream capturou usage, esses valores são os mais confiáveis para o modo agente
+    # (incluem todos os tokens da última chamada streaming do supervisor)
+    # Para chat normal, stream_* é o único valor preenchido
+    return acc
+
 
 # Regex para remover blocos <think>...</think> de modelos de reasoning
 # (DeepSeek R1, QwQ, Marco-o1, etc. jogam tokens de pensamento no content)
@@ -280,6 +321,15 @@ async def call_openrouter(
         for choice in data.get("choices", []):
             if isinstance(choice.get("message"), dict):
                 _normalize_message(choice["message"])
+
+        # Acumula tokens no ContextVar da request atual (se tracking ativo)
+        _acc = _token_accumulator.get()
+        if _acc is not None:
+            _usage = data.get("usage") or {}
+            _acc["prompt_tokens"]     += int(_usage.get("prompt_tokens", 0) or 0)
+            _acc["completion_tokens"] += int(_usage.get("completion_tokens", 0) or 0)
+            _acc["total_tokens"]      += int(_usage.get("total_tokens", 0) or 0)
+
         return data
 
 async def stream_openrouter(
@@ -305,6 +355,7 @@ async def stream_openrouter(
         "max_tokens": max_tokens,
         "temperature": temperature,
         "stream": True,
+        "stream_options": {"include_usage": True},  # OpenRouter envia usage no último chunk
     }
 
     if tools:
@@ -356,6 +407,16 @@ async def stream_openrouter(
                 if data_str == "[DONE]":
                     break
                 try:
-                    yield json.loads(data_str)
+                    parsed = json.loads(data_str)
+                    # Captura o bloco de usage do último chunk (stream_options: include_usage)
+                    # OpenRouter envia usage no chunk com choices[0].finish_reason = "stop"
+                    _s_acc = _token_accumulator.get()
+                    if _s_acc is not None and parsed.get("usage"):
+                        _s_usage = parsed["usage"]
+                        # Usa set (não +=) pois este é o total acumulado do stream inteiro
+                        _s_acc["stream_prompt_tokens"]     = int(_s_usage.get("prompt_tokens", 0) or 0)
+                        _s_acc["stream_completion_tokens"] = int(_s_usage.get("completion_tokens", 0) or 0)
+                        _s_acc["stream_total_tokens"]      = int(_s_usage.get("total_tokens", 0) or 0)
+                    yield parsed
                 except json.JSONDecodeError:
                     pass

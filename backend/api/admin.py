@@ -464,3 +464,138 @@ class ChatModelRequest(BaseModel):
     system_prompt: str = ""
     is_active: bool = True
     slot_number: Optional[int] = None
+
+
+# ── Endpoints de Token Usage / Custos ─────────────────────────────────────────
+
+def _parse_days_filter(days: int) -> str | None:
+    """Retorna ISO timestamp de corte para filtrar por período."""
+    if days <= 0:
+        return None
+    from datetime import datetime, timezone, timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    return cutoff.isoformat()
+
+
+@router.get("/token-usage/summary", dependencies=[Depends(verify_admin)])
+async def token_usage_summary(days: int = 30):
+    """
+    Resumo completo de uso de tokens e custo estimado.
+    Retorna: totais gerais, por modo (normal/agente), por modelo (top 10),
+             por dia (últimos N dias), por usuário (top 20).
+    """
+    import asyncio as _asyncio
+    from backend.core.supabase_client import get_supabase_client
+
+    cutoff = _parse_days_filter(days)
+    client = get_supabase_client()
+
+    try:
+        # Busca execuções no período
+        rows = await _asyncio.to_thread(
+            client.query,
+            "agent_executions",
+            "id,user_id,request_source,model_used,total_tokens,total_cost_usd,created_at,status",
+            None,
+            "created_at.desc",
+            5000,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar execuções: {exc}")
+
+    # Filtra por período em Python (PostgREST não suporta gte sem SDK completo)
+    if cutoff:
+        rows = [r for r in rows if (r.get("created_at") or "") >= cutoff]
+
+    total_tokens = sum(r.get("total_tokens") or 0 for r in rows)
+    total_cost   = sum(float(r.get("total_cost_usd") or 0) for r in rows)
+    total_execs  = len(rows)
+
+    # Por modo (request_source: "normal" vs "agent")
+    by_mode: dict[str, dict] = {}
+    for r in rows:
+        mode = r.get("request_source") or "agent"
+        if mode not in by_mode:
+            by_mode[mode] = {"mode": mode, "tokens": 0, "cost": 0.0, "count": 0}
+        by_mode[mode]["tokens"] += r.get("total_tokens") or 0
+        by_mode[mode]["cost"]   += float(r.get("total_cost_usd") or 0)
+        by_mode[mode]["count"]  += 1
+
+    # Por modelo (top 10)
+    by_model: dict[str, dict] = {}
+    for r in rows:
+        mdl = r.get("model_used") or "desconhecido"
+        if mdl not in by_model:
+            by_model[mdl] = {"model": mdl, "tokens": 0, "cost": 0.0, "count": 0}
+        by_model[mdl]["tokens"] += r.get("total_tokens") or 0
+        by_model[mdl]["cost"]   += float(r.get("total_cost_usd") or 0)
+        by_model[mdl]["count"]  += 1
+    top_models = sorted(by_model.values(), key=lambda x: x["cost"], reverse=True)[:10]
+
+    # Por dia
+    by_day: dict[str, dict] = {}
+    for r in rows:
+        day = (r.get("created_at") or "")[:10]  # YYYY-MM-DD
+        if not day:
+            continue
+        if day not in by_day:
+            by_day[day] = {"date": day, "tokens": 0, "cost": 0.0, "count": 0}
+        by_day[day]["tokens"] += r.get("total_tokens") or 0
+        by_day[day]["cost"]   += float(r.get("total_cost_usd") or 0)
+        by_day[day]["count"]  += 1
+    days_list = sorted(by_day.values(), key=lambda x: x["date"], reverse=True)
+
+    # Por usuário (top 20)
+    by_user: dict[str, dict] = {}
+    for r in rows:
+        uid = r.get("user_id") or "anônimo"
+        if uid not in by_user:
+            by_user[uid] = {"user_id": uid, "tokens": 0, "cost": 0.0, "count": 0}
+        by_user[uid]["tokens"] += r.get("total_tokens") or 0
+        by_user[uid]["cost"]   += float(r.get("total_cost_usd") or 0)
+        by_user[uid]["count"]  += 1
+    top_users = sorted(by_user.values(), key=lambda x: x["cost"], reverse=True)[:20]
+
+    return {
+        "period_days": days,
+        "total_tokens": total_tokens,
+        "total_cost_usd": round(total_cost, 6),
+        "total_executions": total_execs,
+        "avg_cost_per_execution": round(total_cost / total_execs, 6) if total_execs else 0,
+        "by_mode": list(by_mode.values()),
+        "by_model": top_models,
+        "by_day": days_list,
+        "by_user": top_users,
+    }
+
+
+@router.get("/token-usage/executions", dependencies=[Depends(verify_admin)])
+async def token_usage_executions(limit: int = 200, mode: str = "all", days: int = 30):
+    """
+    Lista execuções com tokens e custo, filtráveis por modo e período.
+    mode: 'all' | 'normal' | 'agent'
+    """
+    import asyncio as _asyncio
+    from backend.core.supabase_client import get_supabase_client
+
+    cutoff = _parse_days_filter(days)
+    client = get_supabase_client()
+
+    try:
+        rows = await _asyncio.to_thread(
+            client.query,
+            "agent_executions",
+            "id,user_id,request_source,model_used,total_tokens,total_cost_usd,status,request_text,created_at,finished_at",
+            None,
+            "created_at.desc",
+            min(limit * 3, 3000),  # busca mais para compensar filtros em Python
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar execuções: {exc}")
+
+    if cutoff:
+        rows = [r for r in rows if (r.get("created_at") or "") >= cutoff]
+    if mode != "all":
+        rows = [r for r in rows if (r.get("request_source") or "agent") == mode]
+
+    return {"executions": rows[:limit], "total": len(rows)}

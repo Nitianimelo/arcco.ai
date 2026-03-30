@@ -29,7 +29,8 @@ from fastapi.responses import StreamingResponse
 
 from backend.agents.orchestrator import orchestrate_and_stream
 from backend.core.config import get_config
-from backend.core.llm import stream_openrouter
+from backend.core.llm import stream_openrouter, start_token_tracking, get_token_usage
+from backend.services.pricing_service import estimate_cost
 from backend.core.supabase_client import get_supabase_client
 from backend.services.session_gc_service import cleanup_expired_sessions
 from backend.services.session_file_service import get_session_inventory, touch_session
@@ -168,6 +169,10 @@ async def _save_conversation_and_update_memory(
     user_id: str,
     user_message: str,
     assistant_response: str,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    total_tokens: int = 0,
+    cost_usd: float = 0.0,
 ) -> None:
     """
     Background task: salva mensagens no Supabase + atualiza memória do usuário.
@@ -193,6 +198,10 @@ async def _save_conversation_and_update_memory(
                     "role": "assistant",
                     "content": assistant_response,
                     "created_at": now,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                    "estimated_cost_usd": round(cost_usd, 6),
                 }
             )
 
@@ -334,12 +343,14 @@ async def chat_endpoint(request: Request):
         request_source=mode,
         supervisor_agent="chat",
         metadata={"model": model, "mode": mode},
+        model_used=model,
     )
 
     async def generate():
         collected_content: list[str] = []
         stream_failed = False
         final_error: str | None = None
+        start_token_tracking()  # inicia acumulação de tokens para esta request
 
         # Emite conversation_id como primeiro evento SSE
         if conv_id:
@@ -405,6 +416,22 @@ async def chat_endpoint(request: Request):
             logger.exception("[CHAT] Stream generation failed")
             yield f'data: {json.dumps({"type": "error", "content": final_error})}\n\n'
         finally:
+            # Coleta tokens acumulados de toda a request (call_openrouter + stream)
+            _usage = get_token_usage()
+            # stream_* tem precedência (inclui todos os tokens do streaming supervisor)
+            _prompt_t      = _usage.get("stream_prompt_tokens") or _usage.get("prompt_tokens", 0)
+            _completion_t  = _usage.get("stream_completion_tokens") or _usage.get("completion_tokens", 0)
+            _total_t       = _usage.get("stream_total_tokens") or _usage.get("total_tokens", 0)
+            # Se não temos stream usage, usa a soma dos call_openrouter
+            if not _total_t:
+                _prompt_t     = _usage.get("prompt_tokens", 0)
+                _completion_t = _usage.get("completion_tokens", 0)
+                _total_t      = _usage.get("total_tokens", 0)
+            try:
+                _cost_usd = await estimate_cost(model, _prompt_t, _completion_t)
+            except Exception:
+                _cost_usd = 0.0
+
             if normal_agent_id:
                 await execution_logger.log_event(
                     execution_id,
@@ -419,12 +446,18 @@ async def chat_endpoint(request: Request):
                     status="failed" if stream_failed else "completed",
                     output_payload={"response_preview": "".join(collected_content)[:1500]},
                     error_text=final_error,
+                    prompt_tokens=_prompt_t,
+                    completion_tokens=_completion_t,
+                    total_tokens=_total_t,
+                    estimated_cost_usd=_cost_usd,
                 )
             await execution_logger.finish_execution(
                 execution_id,
                 status="failed" if stream_failed else "completed",
                 final_error=final_error,
                 metadata={"response_length": len("".join(collected_content))},
+                total_tokens=_total_t,
+                total_cost_usd=_cost_usd,
             )
 
         # Dispara background task ao fim do stream
@@ -436,6 +469,10 @@ async def chat_endpoint(request: Request):
                     user_id=user_id,
                     user_message=user_message,
                     assistant_response=full_response,
+                    prompt_tokens=_prompt_t,
+                    completion_tokens=_completion_t,
+                    total_tokens=_total_t,
+                    cost_usd=_cost_usd,
                 )
             )
 

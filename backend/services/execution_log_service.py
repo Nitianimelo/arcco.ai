@@ -41,6 +41,7 @@ class ExecutionLogService:
         request_source: str,
         supervisor_agent: str = "chat",
         metadata: dict[str, Any] | None = None,
+        model_used: str | None = None,
     ) -> str | None:
         payload = {
             "conversation_id": conversation_id,
@@ -55,6 +56,8 @@ class ExecutionLogService:
             "started_at": _now_iso(),
             "created_at": _now_iso(),
         }
+        if model_used:
+            payload["model_used"] = model_used
         try:
             row = await asyncio.to_thread(get_supabase_client().insert, "agent_executions", payload)
             return row.get("id")
@@ -87,6 +90,8 @@ class ExecutionLogService:
         status: str,
         final_error: str | None = None,
         metadata: dict[str, Any] | None = None,
+        total_tokens: int = 0,
+        total_cost_usd: float = 0.0,
     ) -> None:
         if not execution_id:
             return
@@ -97,6 +102,10 @@ class ExecutionLogService:
         }
         if metadata is not None:
             payload["metadata"] = _safe_json(metadata)
+        if total_tokens:
+            payload["total_tokens"] = total_tokens
+        if total_cost_usd:
+            payload["total_cost_usd"] = round(total_cost_usd, 6)
         try:
             await asyncio.to_thread(get_supabase_client().update, "agent_executions", payload, {"id": execution_id})
         except Exception as exc:
@@ -146,6 +155,10 @@ class ExecutionLogService:
         output_payload: dict[str, Any] | None = None,
         error_text: str | None = None,
         metadata: dict[str, Any] | None = None,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        total_tokens: int = 0,
+        estimated_cost_usd: float = 0.0,
     ) -> None:
         if not execution_agent_id:
             return
@@ -158,6 +171,14 @@ class ExecutionLogService:
             payload["output_payload"] = _safe_json(output_payload)
         if metadata is not None:
             payload["metadata"] = _safe_json(metadata)
+        if prompt_tokens:
+            payload["prompt_tokens"] = prompt_tokens
+        if completion_tokens:
+            payload["completion_tokens"] = completion_tokens
+        if total_tokens:
+            payload["total_tokens"] = total_tokens
+        if estimated_cost_usd:
+            payload["estimated_cost_usd"] = round(estimated_cost_usd, 6)
         try:
             await asyncio.to_thread(get_supabase_client().update, "agent_execution_agents", payload, {"id": execution_agent_id})
         except Exception as exc:

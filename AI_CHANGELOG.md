@@ -3,6 +3,27 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-30 (11) — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `backend/services/pricing_service.py` (NOVO)
+- `backend/core/llm.py`
+- `backend/services/execution_log_service.py`
+- `backend/api/chat.py`
+- `backend/api/admin.py`
+- `pages/AdminPage.tsx`
+
+### O que foi feito:
+1. **pricing_service.py** (NOVO) — Serviço de preços via OpenRouter `/api/v1/models` com cache de 1h. Funções `get_model_prices(model_id)` e `estimate_cost(model_id, prompt_tokens, completion_tokens)`. Fallback de $1.00/$3.00/1M para modelos desconhecidos.
+2. **llm.py** — Adicionado `ContextVar[dict]` para acumulação de tokens por request assíncrona (isolado). Funções `start_token_tracking()` e `get_token_usage()`. `call_openrouter` acumula `usage` no ContextVar. `stream_openrouter` recebe `stream_options: {include_usage: true}` e captura tokens do chunk final (set, não +=).
+3. **execution_log_service.py** — `create_execution()` aceita `model_used`. `finish_execution()` aceita `total_tokens` e `total_cost_usd`. `finish_agent()` aceita `prompt_tokens`, `completion_tokens`, `total_tokens`, `estimated_cost_usd`. Todos persistem no Supabase.
+4. **chat.py** — Importa `start_token_tracking/get_token_usage` e `estimate_cost`. Inicia tracking no começo de `generate()`. No `finally`, lê usage (prioriza `stream_*`), calcula custo e passa para `finish_agent()` e `finish_execution()`. `_save_conversation_and_update_memory` salva tokens na mensagem do assistant.
+5. **admin.py** — 4 novos endpoints: `GET /api/admin/token-usage/summary?days=N` (totais + by_mode + by_model + by_day + by_user), `GET /api/admin/token-usage/executions?days=N&mode=X&limit=N` (lista execuções com tokens/custo). Aggregação feita em Python (PostgREST não suporta GROUP BY).
+6. **AdminPage.tsx** — Aba "Custos" completa: 4 cards (Total Tokens, Custo Total, Execuções, Custo Médio), breakdown por modo (chat vs agente com barra de progresso), Top Modelos, Consumo por Dia, Top Usuários, tabela de execuções recentes. Filtros de período (7/30/90/365d) e modo (Todos/Normal/Agente).
+
+### Por quê:
+Implementação completa de rastreamento de tokens e custos por chamada LLM. Permite ao admin monitorar gastos por modelo, usuário e período, com controle granular para precificação e gestão de custos da plataforma.
+
 ## 2026-03-29 (10) — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:
