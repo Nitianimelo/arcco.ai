@@ -125,6 +125,7 @@ interface ArccoChatPageProps {
   project?: Project | null;
   onProjectUpdated?: (project: Project) => void;
   onProjectDeleted?: () => void;
+  onConversationIdChange?: (conversationId: string) => void;
   onSessionUpdate?: (session: ChatSession) => void;
   initialMessage?: string | null;
   onClearInitialMessage?: () => void;
@@ -213,6 +214,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   project,
   onProjectUpdated,
   onProjectDeleted,
+  onConversationIdChange,
   onSessionUpdate,
   initialMessage,
   onClearInitialMessage,
@@ -264,6 +266,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const [showToolsDropdown, setShowToolsDropdown] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const notifiedFailedFilesRef = useRef<Set<string>>(new Set());
+  const lastInitialMessageRef = useRef<string | null>(null);
 
   const arccoEmblemUrl = "https://qscezcbpwvnkqoevulbw.supabase.co/storage/v1/object/public/Chipro%20calculadora/8.png";
 
@@ -286,7 +289,11 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     setDeleteConfirm(false);
     setShowEditModal(true);
     setIsLoadingFiles(true);
-    projectApi.listFiles(project.id).then(files => {
+    if (!userId) {
+      setIsLoadingFiles(false);
+      return;
+    }
+    projectApi.listFiles(project.id, userId).then(files => {
       setEditFiles(files);
       setIsLoadingFiles(false);
     }).catch(() => setIsLoadingFiles(false));
@@ -295,7 +302,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const handleSaveProject = async () => {
     if (!project || !editName.trim()) return;
     setIsUpdatingProject(true);
-    const updated = await projectApi.update(project.id, {
+    if (!userId) return;
+    const updated = await projectApi.update(userId, project.id, {
       name: editName.trim(),
       instructions: editInstructions,
     });
@@ -311,7 +319,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
   const handleDeleteProjectFile = async (fileId: string) => {
     if (!project) return;
-    await projectApi.deleteFile(project.id, fileId);
+    if (!userId) return;
+    await projectApi.deleteFile(project.id, fileId, userId);
     setEditFiles(prev => prev.filter(f => f.id !== fileId));
   };
 
@@ -319,7 +328,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     const file = e.target.files?.[0];
     if (!file || !project) return;
     setIsUploadingFile(true);
-    const result = await projectApi.uploadFile(project.id, file);
+    if (!userId) return;
+    const result = await projectApi.uploadFile(project.id, userId, file);
     if (result) {
       setEditFiles(prev => [...prev, result as ProjectFile]);
       showToast('Arquivo enviado. Processamento em andamento.', 'success');
@@ -334,7 +344,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     if (!project) return;
     if (!deleteConfirm) { setDeleteConfirm(true); return; }
     setIsDeletingProject(true);
-    await projectApi.delete(project.id);
+    if (!userId) return;
+    await projectApi.delete(project.id, userId);
     setIsDeletingProject(false);
     setShowEditModal(false);
     onProjectDeleted?.();
@@ -715,7 +726,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     setConversationId(chatSessionId);
     const savedMode = getConvMode(chatSessionId);
     if (savedMode !== null) setIsAgentMode(savedMode);
-    conversationApi.getMessages(chatSessionId).then(msgs => {
+    if (!userId) return;
+    conversationApi.getMessages(chatSessionId, userId).then(msgs => {
       setMessages(msgs.map(m => ({
         id: m.id,
         role: m.role as 'user' | 'assistant',
@@ -801,11 +813,13 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   }, [browserAction]);
 
   useEffect(() => {
-    if (initialMessage) {
-      handleSendMessage(initialMessage);
-      if (onClearInitialMessage) onClearInitialMessage();
-    }
-  }, [initialMessage]);
+    if (!initialMessage) return;
+    if (lastInitialMessageRef.current === initialMessage) return;
+    if (!isApiKeyReady || isLoading) return;
+    lastInitialMessageRef.current = initialMessage;
+    handleSendMessage(initialMessage);
+    onClearInitialMessage?.();
+  }, [initialMessage, isApiKeyReady, isLoading, onClearInitialMessage]);
 
   // Timer para elapsed seconds do painel de pensamentos
   useEffect(() => {
@@ -1026,6 +1040,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
           // ID da conversa emitido pelo backend antes do primeiro chunk
           if (type === 'conversation_id') {
             setConversationId(content);
+            onConversationIdChange?.(content);
             saveConvMode(content, isAgentMode);
             return;
           }

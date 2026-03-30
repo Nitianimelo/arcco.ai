@@ -27,9 +27,9 @@ export interface ProjectFile {
 }
 
 export const projectApi = {
-  async get(projectId: string): Promise<Project | null> {
+  async get(projectId: string, userId: string): Promise<Project | null> {
     try {
-      const res = await fetch(`${API_BASE}/projects/${projectId}`);
+      const res = await fetch(`${API_BASE}/projects/${projectId}?user_id=${encodeURIComponent(userId)}`);
       if (!res.ok) return null;
       return res.json();
     } catch {
@@ -64,11 +64,12 @@ export const projectApi = {
   },
 
   async update(
+    userId: string,
     projectId: string,
     data: { name?: string; instructions?: string }
   ): Promise<Project | null> {
     try {
-      const res = await fetch(`${API_BASE}/projects/${projectId}`, {
+      const res = await fetch(`${API_BASE}/projects/${projectId}?user_id=${encodeURIComponent(userId)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
@@ -81,19 +82,19 @@ export const projectApi = {
     }
   },
 
-  async delete(projectId: string): Promise<void> {
+  async delete(projectId: string, userId: string): Promise<void> {
     try {
-      await fetch(`${API_BASE}/projects/${projectId}`, { method: 'DELETE' });
+      await fetch(`${API_BASE}/projects/${projectId}?user_id=${encodeURIComponent(userId)}`, { method: 'DELETE' });
     } catch (e) {
       console.error('[projectApi] Erro ao deletar projeto:', e);
     }
   },
 
-  async uploadFile(projectId: string, file: File): Promise<ProjectFile | null> {
+  async uploadFile(projectId: string, userId: string, file: File): Promise<ProjectFile | null> {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const res = await fetch(`${API_BASE}/projects/${projectId}/files`, {
+      const res = await fetch(`${API_BASE}/projects/${projectId}/files?user_id=${encodeURIComponent(userId)}`, {
         method: 'POST',
         body: formData,
       });
@@ -105,9 +106,9 @@ export const projectApi = {
     }
   },
 
-  async listFiles(projectId: string): Promise<ProjectFile[]> {
+  async listFiles(projectId: string, userId: string): Promise<ProjectFile[]> {
     try {
-      const res = await fetch(`${API_BASE}/projects/${projectId}/files`);
+      const res = await fetch(`${API_BASE}/projects/${projectId}/files?user_id=${encodeURIComponent(userId)}`);
       if (!res.ok) return [];
       const data = await res.json();
       return data.files || [];
@@ -116,9 +117,9 @@ export const projectApi = {
     }
   },
 
-  async deleteFile(projectId: string, fileId: string): Promise<void> {
+  async deleteFile(projectId: string, fileId: string, userId: string): Promise<void> {
     try {
-      await fetch(`${API_BASE}/projects/${projectId}/files/${fileId}`, {
+      await fetch(`${API_BASE}/projects/${projectId}/files/${fileId}?user_id=${encodeURIComponent(userId)}`, {
         method: 'DELETE',
       });
     } catch (e) {

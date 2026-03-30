@@ -91,10 +91,22 @@ async def list_conversations(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _get_owned_conversation(conversation_id: str, user_id: str) -> dict:
+    db = get_supabase_client()
+    rows = db.query(_TABLE, filters={"id": conversation_id}, limit=1)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+    row = rows[0]
+    if row.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Acesso negado para esta conversa")
+    return row
+
+
 @router.get("/conversations/{conversation_id}/messages")
-async def get_messages(conversation_id: str):
+async def get_messages(conversation_id: str, user_id: str = Query(...)):
     """Retorna todas as mensagens de uma conversa em ordem cronológica."""
     try:
+        _get_owned_conversation(conversation_id, user_id)
         db = get_supabase_client()
         rows = db.query(
             _MSG_TABLE,
@@ -111,6 +123,7 @@ async def get_messages(conversation_id: str):
 async def save_messages(conversation_id: str, body: MessagesBatchCreate):
     """Salva batch de mensagens em uma conversa."""
     try:
+        _get_owned_conversation(conversation_id, body.user_id)
         db = get_supabase_client()
         now = _now_iso()
         rows = [
@@ -135,9 +148,10 @@ async def save_messages(conversation_id: str, body: MessagesBatchCreate):
 
 
 @router.delete("/conversations/{conversation_id}")
-async def delete_conversation(conversation_id: str):
+async def delete_conversation(conversation_id: str, user_id: str = Query(...)):
     """Deleta uma conversa e suas mensagens (cascade)."""
     try:
+        _get_owned_conversation(conversation_id, user_id)
         db = get_supabase_client()
         db.delete(_TABLE, {"id": conversation_id})
         return {"deleted": True}
@@ -147,9 +161,10 @@ async def delete_conversation(conversation_id: str):
 
 
 @router.patch("/conversations/{conversation_id}/title")
-async def update_title(conversation_id: str, body: ConversationTitleUpdate):
+async def update_title(conversation_id: str, body: ConversationTitleUpdate, user_id: str = Query(...)):
     """Atualiza o título de uma conversa."""
     try:
+        _get_owned_conversation(conversation_id, user_id)
         db = get_supabase_client()
         now = _now_iso()
         db.update(

@@ -220,7 +220,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (projectFiles.length > 0) {
       setProjectUploadStatus(`Enviando ${projectFiles.length} arquivo(s)...`);
       for (const file of projectFiles) {
-        await projectApi.uploadFile(created.id, file);
+        await projectApi.uploadFile(created.id, userId, file);
       }
       setProjectUploadStatus('');
     }
@@ -271,7 +271,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const handleDeleteSession = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    conversationApi.delete(id).catch(() => {});
+    conversationApi.delete(id, userId).catch(() => {});
     setRecentSessions(prev => prev.filter(s => s.id !== id));
   };
 

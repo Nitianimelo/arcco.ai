@@ -47,6 +47,19 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _get_owned_conversation(conversation_id: str | None, user_id: str | None) -> dict | None:
+    if not conversation_id or not user_id:
+        return None
+    db = get_supabase_client()
+    rows = db.query("conversations", "*", {"id": conversation_id}, None, 1)
+    if not rows:
+        return None
+    row = rows[0]
+    if row.get("user_id") != user_id:
+        return None
+    return row
+
+
 @router.get("/chat-models")
 async def get_public_chat_models():
     models = [item for item in list_chat_models(force_refresh=True) if item.get("is_active")]
@@ -144,7 +157,7 @@ async def _build_extra_context(
         try:
             db = get_supabase_client()
             rows = await asyncio.to_thread(
-                db.query, "projects", "*", {"id": project_id}
+                db.query, "projects", "*", {"id": project_id, "user_id": user_id}
             )
             if rows and rows[0].get("instructions"):
                 parts.append(f"Instruções do projeto ativo:\n{rows[0]['instructions']}")
@@ -153,11 +166,16 @@ async def _build_extra_context(
 
         # RAG — contexto relevante da base de conhecimento (sync → thread)
         try:
-            rag_context = await asyncio.to_thread(
-                search_project_context, project_id, user_message
+            db = get_supabase_client()
+            project_rows = await asyncio.to_thread(
+                db.query, "projects", "id", {"id": project_id, "user_id": user_id}, None, 1
             )
-            if rag_context:
-                parts.append(rag_context)
+            if project_rows:
+                rag_context = await asyncio.to_thread(
+                    search_project_context, project_id, user_message
+                )
+                if rag_context:
+                    parts.append(rag_context)
         except Exception as e:
             logger.warning(f"[CHAT] Falha ao buscar RAG: {e}")
 
@@ -309,8 +327,14 @@ async def chat_endpoint(request: Request):
 
     # Determina/cria conversation_id
     conv_id = conversation_id
+    if conv_id and user_id:
+        owned_conversation = _get_owned_conversation(conv_id, user_id)
+        if not owned_conversation:
+            logger.warning("[CHAT] conversation_id inválido ou sem posse para user_id=%s", user_id)
+            conv_id = None
+
     if not conv_id and user_id:
-        conv_id = str(uuid.uuid4())
+        new_conv_id = str(uuid.uuid4())
         try:
             db = get_supabase_client()
             now = _now_iso()
@@ -322,7 +346,7 @@ async def chat_endpoint(request: Request):
             db.insert(
                 "conversations",
                 {
-                    "id": conv_id,
+                    "id": new_conv_id,
                     "user_id": user_id,
                     "project_id": project_id,
                     "title": title,
@@ -330,6 +354,7 @@ async def chat_endpoint(request: Request):
                     "updated_at": now,
                 },
             )
+            conv_id = new_conv_id
         except Exception as e:
             logger.warning(f"[CHAT] Falha ao criar conversa: {e}")
 
@@ -416,17 +441,12 @@ async def chat_endpoint(request: Request):
             logger.exception("[CHAT] Stream generation failed")
             yield f'data: {json.dumps({"type": "error", "content": final_error})}\n\n'
         finally:
-            # Coleta tokens acumulados de toda a request (call_openrouter + stream)
+            # Soma tokens de chamadas não-stream + stream.
+            # No modo agente, o fluxo usa ambos; priorizar só stream subconta o custo real.
             _usage = get_token_usage()
-            # stream_* tem precedência (inclui todos os tokens do streaming supervisor)
-            _prompt_t      = _usage.get("stream_prompt_tokens") or _usage.get("prompt_tokens", 0)
-            _completion_t  = _usage.get("stream_completion_tokens") or _usage.get("completion_tokens", 0)
-            _total_t       = _usage.get("stream_total_tokens") or _usage.get("total_tokens", 0)
-            # Se não temos stream usage, usa a soma dos call_openrouter
-            if not _total_t:
-                _prompt_t     = _usage.get("prompt_tokens", 0)
-                _completion_t = _usage.get("completion_tokens", 0)
-                _total_t      = _usage.get("total_tokens", 0)
+            _prompt_t = int(_usage.get("prompt_tokens", 0) or 0) + int(_usage.get("stream_prompt_tokens", 0) or 0)
+            _completion_t = int(_usage.get("completion_tokens", 0) or 0) + int(_usage.get("stream_completion_tokens", 0) or 0)
+            _total_t = int(_usage.get("total_tokens", 0) or 0) + int(_usage.get("stream_total_tokens", 0) or 0)
             try:
                 _cost_usd = await estimate_cost(model, _prompt_t, _completion_t)
             except Exception:

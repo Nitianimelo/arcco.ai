@@ -157,6 +157,7 @@ class MessageCreate(BaseModel):
 
 
 class MessagesBatchCreate(BaseModel):
+    user_id: str
     messages: List[MessageCreate]
 
 

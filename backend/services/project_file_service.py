@@ -174,6 +174,12 @@ def get_project_files(project_id: str) -> list:
     )
 
 
+def get_project_file(project_file_id: str) -> dict | None:
+    db = get_supabase_client()
+    rows = db.query("project_files", filters={"id": project_file_id}, limit=1)
+    return rows[0] if rows else None
+
+
 def delete_project_file(project_file_id: str) -> None:
     """Remove row do DB (cascade destrói chunks). Storage já foi limpo após processamento."""
     db = get_supabase_client()

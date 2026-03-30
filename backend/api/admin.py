@@ -478,7 +478,7 @@ def _parse_days_filter(days: int) -> str | None:
 
 
 @router.get("/token-usage/summary", dependencies=[Depends(verify_admin)])
-async def token_usage_summary(days: int = 30):
+async def token_usage_summary(days: int = 30, mode: str = "all"):
     """
     Resumo completo de uso de tokens e custo estimado.
     Retorna: totais gerais, por modo (normal/agente), por modelo (top 10),
@@ -506,6 +506,9 @@ async def token_usage_summary(days: int = 30):
     # Filtra por período em Python (PostgREST não suporta gte sem SDK completo)
     if cutoff:
         rows = [r for r in rows if (r.get("created_at") or "") >= cutoff]
+
+    if mode != "all":
+        rows = [r for r in rows if (r.get("request_source") or "agent") == mode]
 
     total_tokens = sum(r.get("total_tokens") or 0 for r in rows)
     total_cost   = sum(float(r.get("total_cost_usd") or 0) for r in rows)

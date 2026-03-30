@@ -119,7 +119,7 @@ function App() {
       setActiveProject(null);
       return;
     }
-    projectApi.get(selectedProjectId).then(proj => setActiveProject(proj));
+    projectApi.get(selectedProjectId, userId).then(proj => setActiveProject(proj));
     conversationApi.findByProject(userId, selectedProjectId).then(conv => {
       if (conv) {
         setChatSessionId(conv.id);
@@ -198,6 +198,7 @@ function App() {
             userId={userId}
             projectId={selectedProjectId}
             project={activeProject}
+            onConversationIdChange={setChatSessionId}
             onProjectUpdated={(updated) => setActiveProject(updated)}
             onProjectDeleted={() => {
               setSelectedProjectId(null);

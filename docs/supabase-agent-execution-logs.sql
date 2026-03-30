@@ -10,8 +10,11 @@ create table if not exists public.agent_executions (
   request_text text not null,
   request_source text null,
   supervisor_agent text null default 'chat',
+  model_used text null,
   status text not null default 'running',
   final_error text null,
+  total_tokens bigint not null default 0,
+  total_cost_usd numeric(12, 6) not null default 0,
   started_at timestamptz not null default now(),
   finished_at timestamptz null,
   duration_ms integer null,
@@ -34,6 +37,12 @@ create index if not exists idx_agent_executions_session_id
 create index if not exists idx_agent_executions_user_id
   on public.agent_executions (user_id);
 
+create index if not exists idx_agent_executions_model_used
+  on public.agent_executions (model_used);
+
+create index if not exists idx_agent_executions_total_cost_usd
+  on public.agent_executions (total_cost_usd desc);
+
 create table if not exists public.agent_execution_agents (
   id uuid primary key default gen_random_uuid(),
   execution_id uuid not null references public.agent_executions(id) on delete cascade,
@@ -47,6 +56,10 @@ create table if not exists public.agent_execution_agents (
   input_payload jsonb not null default '{}'::jsonb,
   output_payload jsonb not null default '{}'::jsonb,
   error_text text null,
+  prompt_tokens bigint not null default 0,
+  completion_tokens bigint not null default 0,
+  total_tokens bigint not null default 0,
+  estimated_cost_usd numeric(12, 6) not null default 0,
   started_at timestamptz not null default now(),
   finished_at timestamptz null,
   duration_ms integer null,
@@ -65,6 +78,9 @@ create index if not exists idx_agent_execution_agents_agent_key
 
 create index if not exists idx_agent_execution_agents_status
   on public.agent_execution_agents (status);
+
+create index if not exists idx_agent_execution_agents_total_cost_usd
+  on public.agent_execution_agents (estimated_cost_usd desc);
 
 create table if not exists public.agent_execution_logs (
   id bigserial primary key,

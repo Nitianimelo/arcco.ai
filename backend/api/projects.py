@@ -27,6 +27,7 @@ from backend.services.project_file_service import (
     delete_project_file,
     extract_and_store_project_file,
     get_project_files,
+    get_project_file,
     upload_project_file,
 )
 
@@ -41,11 +42,11 @@ def _now_iso() -> str:
 
 
 @router.get("/projects/{project_id}", response_model=ProjectResponse)
-async def get_project(project_id: str):
+async def get_project(project_id: str, user_id: str = Query(...)):
     """Retorna um projeto pelo ID."""
     try:
         db = get_supabase_client()
-        rows = db.query(_TABLE, filters={"id": project_id})
+        rows = db.query(_TABLE, filters={"id": project_id, "user_id": user_id})
         if not rows:
             raise HTTPException(status_code=404, detail="Projeto não encontrado")
         row = rows[0]
@@ -108,10 +109,13 @@ async def create_project(body: ProjectCreate):
 
 
 @router.put("/projects/{project_id}", response_model=ProjectResponse)
-async def update_project(project_id: str, body: ProjectUpdate):
+async def update_project(project_id: str, body: ProjectUpdate, user_id: str = Query(...)):
     """Atualiza nome e/ou instruções de um projeto."""
     try:
         db = get_supabase_client()
+        existing = db.query(_TABLE, filters={"id": project_id, "user_id": user_id}, limit=1)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Projeto não encontrado")
         now = _now_iso()
         data: dict = {"updated_at": now}
         if body.name is not None:
@@ -119,7 +123,7 @@ async def update_project(project_id: str, body: ProjectUpdate):
         if body.instructions is not None:
             data["instructions"] = body.instructions
 
-        rows = db.update(_TABLE, data, {"id": project_id})
+        rows = db.update(_TABLE, data, {"id": project_id, "user_id": user_id})
         if not rows:
             raise HTTPException(status_code=404, detail="Projeto não encontrado")
         row = rows[0]
@@ -139,12 +143,19 @@ async def update_project(project_id: str, body: ProjectUpdate):
 
 
 @router.delete("/projects/{project_id}")
-async def delete_project(project_id: str):
+async def delete_project(project_id: str, user_id: str = Query(...)):
     """Deleta projeto e todos os seus arquivos (cascade)."""
     try:
         db = get_supabase_client()
-        db.delete(_TABLE, {"id": project_id})
+        rows = db.query(_TABLE, filters={"id": project_id, "user_id": user_id}, limit=1)
+        if not rows:
+            raise HTTPException(status_code=404, detail="Projeto não encontrado")
+        # As conversas do projeto não devem migrar para o histórico geral.
+        db.delete("conversations", {"project_id": project_id})
+        db.delete(_TABLE, {"id": project_id, "user_id": user_id})
         return {"deleted": True}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[PROJECTS] Erro ao deletar {project_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -154,15 +165,15 @@ async def delete_project(project_id: str):
 async def upload_file(
     project_id: str,
     background_tasks: BackgroundTasks,
+    user_id: str = Query(...),
     file: UploadFile = File(...),
 ):
     """Upload de arquivo para o projeto. Extração de texto ocorre em background."""
     try:
         db = get_supabase_client()
-        rows = db.query(_TABLE, filters={"id": project_id})
+        rows = db.query(_TABLE, filters={"id": project_id, "user_id": user_id})
         if not rows:
             raise HTTPException(status_code=404, detail="Projeto não encontrado")
-        user_id = rows[0]["user_id"]
 
         content = await file.read()
         mime_type = file.content_type or "application/octet-stream"
@@ -192,22 +203,37 @@ async def upload_file(
 
 
 @router.get("/projects/{project_id}/files")
-async def list_project_files(project_id: str):
+async def list_project_files(project_id: str, user_id: str = Query(...)):
     """Lista arquivos de um projeto."""
     try:
+        db = get_supabase_client()
+        rows = db.query(_TABLE, filters={"id": project_id, "user_id": user_id}, limit=1)
+        if not rows:
+            raise HTTPException(status_code=404, detail="Projeto não encontrado")
         files = get_project_files(project_id)
         return {"files": files}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[PROJECTS] Erro ao listar arquivos de {project_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/projects/{project_id}/files/{file_id}")
-async def delete_file(project_id: str, file_id: str):
+async def delete_file(project_id: str, file_id: str, user_id: str = Query(...)):
     """Deleta arquivo do projeto (storage + DB + chunks)."""
     try:
+        db = get_supabase_client()
+        rows = db.query(_TABLE, filters={"id": project_id, "user_id": user_id}, limit=1)
+        if not rows:
+            raise HTTPException(status_code=404, detail="Projeto não encontrado")
+        file_row = get_project_file(file_id)
+        if not file_row or file_row.get("project_id") != project_id:
+            raise HTTPException(status_code=404, detail="Arquivo não encontrado no projeto")
         delete_project_file(file_id)
         return {"deleted": True}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[PROJECTS] Erro ao deletar arquivo {file_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

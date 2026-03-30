@@ -308,6 +308,16 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, models, loadingModels, onS
 
   const selectedModel = models.find(m => m.id === model);
 
+  useEffect(() => {
+    setName(agent.name);
+    setDesc(agent.description);
+    setPrompt(agent.system_prompt);
+    setModel(agent.model);
+    setToolsJson(JSON.stringify(agent.tools, null, 2));
+    setToolsError('');
+    setSaveError('');
+  }, [agent]);
+
   // Detecta se o usuÃ¡rio modificou algo em relaÃ§Ã£o ao estado original do agente
   const isDirty =
     name !== agent.name ||
@@ -345,8 +355,12 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, models, loadingModels, onS
   const handleReset = async () => {
     if (!confirm(`Resetar "${agent.name}" para o padrÃ£o original?`)) return;
     setResetting(true);
+    setSaveError('');
     try {
       await onReset(agent.id);
+      setSaved(false);
+    } catch (e: any) {
+      setSaveError(e.message || 'Erro ao resetar');
     } finally {
       setResetting(false);
     }
@@ -558,6 +572,7 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [actionError, setActionError] = useState('');
   const selectedModel = models.find(m => m.id === modelId);
 
   useEffect(() => {
@@ -565,6 +580,7 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
     setModelId(config.openrouter_model_id);
     setSystemPrompt(config.system_prompt || '');
     setIsActive(config.is_active);
+    setActionError('');
   }, [config]);
 
   useEffect(() => {
@@ -581,6 +597,7 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
 
   const handleSave = async () => {
     setSaving(true);
+    setActionError('');
     try {
       await onSave({
         ...config,
@@ -591,6 +608,8 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
       });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+    } catch (e: any) {
+      setActionError(e.message || 'Erro ao salvar slot');
     } finally {
       setSaving(false);
     }
@@ -599,8 +618,11 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
   const handleDelete = async () => {
     if (!confirm(`Excluir o slot "${modelName || `Modelo ${config.slot_number}`}"?`)) return;
     setDeleting(true);
+    setActionError('');
     try {
       await onDelete(config);
+    } catch (e: any) {
+      setActionError(e.message || 'Erro ao excluir slot');
     } finally {
       setDeleting(false);
     }
@@ -671,6 +693,12 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
           <span className="text-green-400">In: {fmtPrice(selectedModel.pricing.prompt_1m)}/1M</span>
           <span className="text-blue-400">Out: {fmtPrice(selectedModel.pricing.completion_1m)}/1M</span>
           <span>Contexto: {selectedModel.context_length.toLocaleString('pt-BR')} tokens</span>
+        </div>
+      )}
+
+      {actionError && (
+        <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-red-400">
+          <AlertTriangle size={13} /> {actionError}
         </div>
       )}
 
@@ -987,7 +1015,7 @@ export const AdminPage: React.FC = () => {
     setTokenExecsLoading(true);
     try {
       const [summaryRes, execsRes] = await Promise.all([
-        adminFetch(`${backendUrl}/api/admin/token-usage/summary?days=${tokenPeriod}`),
+        adminFetch(`${backendUrl}/api/admin/token-usage/summary?days=${tokenPeriod}&mode=${tokenMode}`),
         adminFetch(`${backendUrl}/api/admin/token-usage/executions?days=${tokenPeriod}&mode=${tokenMode}&limit=200`),
       ]);
       if (summaryRes.ok) {
@@ -1004,6 +1032,26 @@ export const AdminPage: React.FC = () => {
       setTokenSummaryLoading(false);
       setTokenExecsLoading(false);
     }
+  };
+
+  const refreshActiveTab = async () => {
+    if (activeTab === 'orquestracao') {
+      await Promise.all([fetchAgents(), orModels.length === 0 ? fetchModels() : Promise.resolve()]);
+      return;
+    }
+    if (activeTab === 'chat_normal') {
+      await Promise.all([fetchChatConfigs(), orModels.length === 0 ? fetchModels() : Promise.resolve()]);
+      return;
+    }
+    if (activeTab === 'logs') {
+      await fetchExecutions();
+      return;
+    }
+    if (activeTab === 'custos') {
+      await loadTokenUsage();
+      return;
+    }
+    await fetchData();
   };
 
   const copyExecutionLogs = async (detail: any) => {
@@ -1248,6 +1296,11 @@ export const AdminPage: React.FC = () => {
   }, [activeTab, selectedExecutionId]);
 
   useEffect(() => {
+    if (activeTab !== 'custos') return;
+    loadTokenUsage();
+  }, [activeTab, tokenPeriod, tokenMode]);
+
+  useEffect(() => {
     if (activeTab !== 'logs') return;
     const id = window.setInterval(() => {
       fetchExecutions({ silent: true });
@@ -1389,11 +1442,11 @@ export const AdminPage: React.FC = () => {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={fetchData}
-              disabled={loading}
+              onClick={refreshActiveTab}
+              disabled={loading || agentsLoading || chatConfigsLoading || executionsLoading || tokenSummaryLoading}
               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-300 text-sm transition-colors border border-neutral-800 disabled:opacity-50"
             >
-              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+              <RefreshCw size={14} className={loading || agentsLoading || chatConfigsLoading || executionsLoading || tokenSummaryLoading ? 'animate-spin' : ''} />
               Atualizar
             </button>
             <button

@@ -18,6 +18,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _is_playwright_browser_missing_error(exc: Exception) -> bool:
+    message = str(exc)
+    return (
+        "Executable doesn't exist" in message
+        or "playwright install" in message.lower()
+        or "chrome-headless-shell" in message
+    )
+
+
+def _raise_export_dependency_error(exc: Exception) -> None:
+    raise HTTPException(
+        status_code=503,
+        detail=(
+            "Exportação indisponível no servidor: o browser do Playwright não está instalado. "
+            "Execute `python -m playwright install --with-deps chromium` no ambiente do backend "
+            "ou gere uma nova imagem com essa etapa incluída."
+        ),
+    ) from exc
+
+
 class ExportDocRequest(BaseModel):
     text: str
     title: str
@@ -67,6 +87,8 @@ async def export_doc(req: ExportDocRequest):
     except HTTPException:
         raise
     except Exception as e:
+        if _is_playwright_browser_missing_error(e):
+            _raise_export_dependency_error(e)
         logger.error(f"[EXPORT-DOC] Erro ao exportar '{fmt}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -128,6 +150,8 @@ async def export_html(req: ExportHtmlRequest):
     except HTTPException:
         raise
     except Exception as e:
+        if _is_playwright_browser_missing_error(e):
+            _raise_export_dependency_error(e)
         logger.error(f"[EXPORT-HTML] Erro ao exportar '{fmt}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -60,10 +60,10 @@ export const conversationApi = {
     return convs.length > 0 ? convs[0] : null;
   },
 
-  async getMessages(conversationId: string): Promise<MessageRecord[]> {
+  async getMessages(conversationId: string, userId: string): Promise<MessageRecord[]> {
     try {
       const res = await fetch(
-        `${API_BASE}/conversations/${conversationId}/messages`
+        `${API_BASE}/conversations/${conversationId}/messages?user_id=${encodeURIComponent(userId)}`
       );
       if (!res.ok) return [];
       const data = await res.json();
@@ -75,22 +75,23 @@ export const conversationApi = {
 
   async saveMessages(
     conversationId: string,
+    userId: string,
     messages: Array<{ role: string; content: string }>
   ): Promise<void> {
     try {
       await fetch(`${API_BASE}/conversations/${conversationId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages }),
+        body: JSON.stringify({ user_id: userId, messages }),
       });
     } catch (e) {
       console.error('[conversationApi] Erro ao salvar mensagens:', e);
     }
   },
 
-  async delete(conversationId: string): Promise<void> {
+  async delete(conversationId: string, userId: string): Promise<void> {
     try {
-      await fetch(`${API_BASE}/conversations/${conversationId}`, {
+      await fetch(`${API_BASE}/conversations/${conversationId}?user_id=${encodeURIComponent(userId)}`, {
         method: 'DELETE',
       });
     } catch (e) {
@@ -98,9 +99,9 @@ export const conversationApi = {
     }
   },
 
-  async updateTitle(conversationId: string, title: string): Promise<void> {
+  async updateTitle(conversationId: string, userId: string, title: string): Promise<void> {
     try {
-      await fetch(`${API_BASE}/conversations/${conversationId}/title`, {
+      await fetch(`${API_BASE}/conversations/${conversationId}/title?user_id=${encodeURIComponent(userId)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title }),
