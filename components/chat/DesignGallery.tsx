@@ -2,6 +2,10 @@ import React from 'react';
 import { Monitor } from 'lucide-react';
 import PresentationCard from './PresentationCard';
 
+function extractTitle(html: string, fallback: string): string {
+  return html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() || fallback;
+}
+
 interface DesignGalleryProps {
   designs: string[];
   isStreaming?: boolean;
@@ -33,10 +37,12 @@ const DesignGallery: React.FC<DesignGalleryProps> = ({ designs, isStreaming = fa
         </span>
       </div>
       <div className="flex flex-col gap-4 p-4">
-        {designs.map((design, index) => (
+        {designs.map((design, index) => {
+          const designTitle = extractTitle(design, `Arte ${index + 1}`);
+          return (
           <div key={index} className="rounded-2xl border border-[#1d1d24] bg-[#0d0d12] p-3">
-            <div className="mb-2 text-[10px] uppercase tracking-[0.18em] text-neutral-500">
-              Arte {index + 1}
+            <div className="mb-2 text-[10px] uppercase tracking-[0.18em] text-neutral-500 truncate">
+              {designTitle}
             </div>
             <PresentationCard
               html={design}
@@ -44,7 +50,8 @@ const DesignGallery: React.FC<DesignGalleryProps> = ({ designs, isStreaming = fa
               onOpenPreview={() => onOpenPreview?.(index)}
             />
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

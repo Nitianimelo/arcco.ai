@@ -3,6 +3,87 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-31 00:00 — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `backend/agents/prompts.py`
+- `backend/agents/tools.py`
+
+### O que foi feito:
+1. **prompts.py — CHAT_SYSTEM_PROMPT** — Reescrito completamente com estrutura XML semântica. Seções: `<identity>`, `<core_constraints>` (sandwich topo), `<tool_routing>` com 9 blocos `<tool id>` cada um contendo regras IF/THEN explícitas de quando usar e quando NÃO usar, CoT obrigatório antes de `ask_browser` e `execute_python`, `<response_format>`, `<autonomous_behavior>`, `<prohibited_behaviors>` com anti-exemplos concretos, `<core_constraints_reminder>` (sandwich final repetindo as 5 regras críticas). Cresceu de 74 linhas para ~220 linhas (11.527 chars).
+2. **prompts.py — PLANNER_SYSTEM_PROMPT** — Reescrito com XML: `<identity>` (planner não conversa, só gera JSON), `<available_tools>` com 8 blocos `<tool id>` detalhando quando usar e quando NÃO usar cada ferramenta, `<decision_tree>` com árvore IF/THEN completa cobrindo todos os cenários (dados externos, visual, textual, cálculos, pesquisa profunda, automação web, modificação, resposta direta), `<anti_patterns>` com 6 planos errados vs. corretos com exemplos explícitos, `<output_rules>` com 6 regras de geração de JSON. Cresceu de 32 para ~130 linhas (8.652 chars).
+3. **tools.py — ask_browser (SUPERVISOR_TOOLS)** — Descrição expandida com regra de autonomia (ações agrupadas), seletores robustos, 4 anti-exemplos explícitos (browser no Google, múltiplas chamadas, seletores inventados, esquecer scrape). 2.013 chars.
+4. **tools.py — execute_python (SUPERVISOR_TOOLS)** — Descrição expandida com regras de print() e /tmp/, 5 anti-exemplos explícitos (sem print, caminhos locais, requests na internet, texto narrativo, arquivo fora de /tmp). 1.329 chars.
+
+### Por quê:
+Aplicação de 4 princípios de prompt engineering de alto nível: (1) XML para delimitar blocos semânticos e melhorar atenção do modelo em contextos longos; (2) IF/THEN para eliminar ambiguidade de roteamento e bloquear decisões erradas antes de custarem tokens; (3) chain of thought seletivo para ferramentas de alto risco (browser, python) para aumentar precisão nas ações; (4) anti-exemplos para ensinar o modelo o que evitar antes mesmo de tentar.
+
+---
+
+## 2026-03-30 14:00 — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `components/chat/PresentationCard.tsx`
+- `components/chat/DesignPreviewModal.tsx`
+- `components/chat/DesignGallery.tsx`
+
+### O que foi feito:
+1. **PresentationCard.tsx** — Removido botão "Abrir" redundante do rodapé (o container do card já era clicável via `onClick`). O hover overlay "Visualizar" permanece como único CTA de abertura.
+2. **DesignPreviewModal.tsx** — Substituído painel aninhado de export (3 cliques) por painel flat para apresentações: toggle de slides (Todos/Slide atual) + grid 2×2 de formatos + opções contextuais (tamanho para PDF/PPTX, resolução para PNG/JPEG) + botão "Baixar FORMAT" único. Estado `exportOptionsFor` eliminado; substituído por `selectedFmt`. Design único mantém lista simples de formatos (comportamento anterior, já era 2 cliques).
+3. **DesignGallery.tsx** — Adicionada função `extractTitle()`. Labels da galeria passam de "Arte 1, Arte 2" para o título real extraído da tag `<title>` do HTML de cada design.
+
+### Por quê:
+Melhoria de UX na ferramenta de design: o fluxo de download estava confuso (muitos cliques para apresentações, botão duplicado no card). Agora: 2 cliques para baixar qualquer formato, sem navegação aninhada, e os labels da galeria refletem o conteúdo real.
+
+---
+
+## 2026-03-30 13:00 — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `backend/services/chat_models.py`
+- `backend/api/chat.py`
+- `lib/api-client.ts`
+- `pages/ArccoChat.tsx`
+- `pages/AdminPage.tsx`
+
+### O que foi feito:
+1. **chat_models.py** — Adicionado campo `fast_model_id` (nullable) em `_normalize_item()`, `create_chat_model()` e `update_chat_model()`.
+2. **chat.py** — Adicionada constante `_FAST_MODEL_GATE` (instrução para o modelo rápido). Função `_stream_normal_chat()` agora aceita `fast_model` opcional: chama o modelo rápido via `call_openrouter()` (non-streaming); se resposta começa com `ESCALATE`, emite evento SSE `thinking_upgrade` e redireciona para o modelo especialista em streaming; caso contrário, devolve a resposta do modelo rápido diretamente como chunk. Endpoint lê `fast_model` do body e repassa.
+3. **api-client.ts** — Adicionado parâmetro `fastModel?: string` em `chat()`, enviado como `fast_model` no request body.
+4. **ArccoChat.tsx** — Novo estado `chatThinkingDeep`; reseta em `setChatThinkingDeep(false)` no envio e no finally. Handler para evento `thinking_upgrade` seta texto "Elaborando a resposta..." e ativa `chatThinkingDeep`. Animação de thinking atualizada: dot único pulsante `bg-indigo-400/60` em fase 1; três dots bouncing `bg-violet-400/70` em fase 2 (escalado). Passa `fast_model_id` do selectedChatConfig no call de `agentApi.chat()`.
+5. **AdminPage.tsx** — Interface `ChatConfigRow` com `fast_model_id?: string`. `ChatConfigCard` com novo estado `fastModelId`, `selectedFastModel`, dirty check, save payload e novo `ModelDropdown` para Modelo Rápido (label "Modelo OpenRouter" → "Modelo Especialista").
+
+### Por quê:
+Feature de dual-model no chat normal: modelo rápido (pequeno/barato) responde perguntas simples diretamente; modelo especialista é acionado automaticamente para pedidos complexos. Animação sutil distingue as duas fases sem revelar a arquitetura ao usuário. Configura no painel admin por slot de chat.
+
+### Migração Supabase necessária:
+```sql
+ALTER TABLE chat_model_configs ADD COLUMN IF NOT EXISTS fast_model_id TEXT;
+```
+
+---
+
+## 2026-03-30 12:00 — Claude Code (claude-sonnet-4-6)
+
+### Arquivos modificados:
+- `backend/core/supabase_client.py`
+- `backend/core/config.py`
+- `backend/main.py`
+- `backend/api/chat.py`
+- `backend/agents/executor.py`
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **supabase_client.py** — Substituiu todos os `with httpx.Client(...)` por um `self._http` singleton com connection pooling (`max_keepalive_connections=10`). Elimina DNS lookup + TLS handshake em cada query ao Supabase.
+2. **config.py** — Removeu chamada de `_load_keys_from_supabase()` do `__post_init__` (que bloqueava na importação do módulo).
+3. **main.py** — Adicionado `import asyncio`; startup agora chama `await asyncio.to_thread(config._load_keys_from_supabase)` e `await asyncio.to_thread(registry.initialize)` para não bloquear o event loop durante inicialização.
+4. **chat.py** — Substituiu `cleanup_expired_sessions()` síncrono (scan de disco em todo request) por `_maybe_run_gc()` throttled (máx. 1x a cada 5 min) executado em background via `asyncio.ensure_future`.
+5. **executor.py** — Adicionado cache TTL de 5 minutos para a chave E2B do Supabase; elimina 2 queries sequenciais por execução Python.
+6. **ArccoChat.tsx** — (a) Adicionado `cancelled` flag no useEffect de histórico para evitar race condition ao trocar de conversa; (b) `.catch` agora mostra `showToast` de erro em vez de falhar silenciosamente; (c) Removido `attachments` das dependências do useEffect de polling (substituído por `attachmentsRef`) para eliminar criação de intervalos sobrepostos.
+
+### Por quê:
+Correção de bugs que causavam lentidão no startup dos agentes (blocking calls síncronas no event loop), falha silenciosa ao carregar histórico de conversas, e lentidão geral por disk I/O em todo request de chat e novas conexões TCP em cada query Supabase.
+
 ## 2026-03-30 (11) — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:

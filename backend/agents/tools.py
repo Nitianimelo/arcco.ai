@@ -539,20 +539,40 @@ SUPERVISOR_TOOLS = [
         "type": "function",
         "function": {
             "name": "ask_browser",
-            "description": "Abre um navegador headless para acessar, interagir e extrair conteÃºdo de um site. "
-                           "Suporta aÃ§Ãµes como clicar em botÃµes, rolar a pÃ¡gina, digitar texto, e executar JavaScript. "
-                           "Use quando precisar ler artigos completos, interagir com sites dinÃ¢micos (SPAs), passar por carrossÃ©is, "
-                           "aceitar cookies, ou extrair dados de URLs que exigem renderizaÃ§Ã£o JavaScript.\n\n"
-                           "TIPOS DE ACTIONS SUPORTADAS (no campo 'actions'):\n"
-                           "- {\"type\": \"click\", \"selector\": \"CSS_SELECTOR\"} â€” Clica num elemento\n"
-                           "- {\"type\": \"scroll\", \"direction\": \"down\", \"amount\": 500} â€” Rola a pÃ¡gina\n"
-                           "- {\"type\": \"wait\", \"milliseconds\": 2000} â€” Espera X ms\n"
-                           "- {\"type\": \"write\", \"text\": \"...\", \"selector\": \"CSS_SELECTOR\"} â€” Digita texto\n"
-                           "- {\"type\": \"press\", \"key\": \"Enter\"} â€” Pressiona tecla\n"
-                           "- {\"type\": \"screenshot\"} â€” Tira print da pÃ¡gina\n"
-                           "- {\"type\": \"execute_javascript\", \"script\": \"...\"} â€” Executa JS customizado\n"
-                           "- {\"type\": \"scrape\"} â€” Extrai o conteÃºdo apÃ³s as aÃ§Ãµes\n\n"
-                           "EXEMPLO de carrossel: actions=[{\"type\":\"click\",\"selector\":\".next-slide\"},{\"type\":\"wait\",\"milliseconds\":1000},{\"type\":\"scrape\"}]",
+            "description": (
+                "Abre um navegador headless para acessar, interagir e extrair conteúdo de sites dinâmicos. "
+                "Use quando o site exige JavaScript para renderizar (SPAs), login, cliques, scroll, "
+                "aceitar cookies, preencher campos ou extrair dados que ask_web_search não consegue.\n\n"
+                "REGRA DE AUTONOMIA: agrupe TODAS as ações necessárias no array 'actions' de UMA ÚNICA chamada. "
+                "Nunca crie chamadas separadas para ações sequenciais do mesmo site.\n\n"
+                "SELETORES: quando não souber o CSS exato, prefira text=\"texto visível\" — "
+                "localiza pelo texto do botão e é mais robusto que IDs gerados dinamicamente.\n\n"
+                "AÇÃO SCRAPE: sempre inclua {\"type\": \"scrape\"} como última action se quiser extrair conteúdo.\n\n"
+                "TIPOS DE ACTIONS SUPORTADAS:\n"
+                "- {\"type\": \"click\", \"selector\": \"text=Aceitar\"} — clica num elemento\n"
+                "- {\"type\": \"scroll\", \"direction\": \"down\", \"amount\": 500} — rola a página\n"
+                "- {\"type\": \"wait\", \"milliseconds\": 2000} — espera X ms\n"
+                "- {\"type\": \"write\", \"text\": \"...\", \"selector\": \"#email\"} — digita texto\n"
+                "- {\"type\": \"press\", \"key\": \"Enter\"} — pressiona tecla\n"
+                "- {\"type\": \"screenshot\"} — tira print da página\n"
+                "- {\"type\": \"execute_javascript\", \"script\": \"...\"} — executa JS customizado\n"
+                "- {\"type\": \"scrape\"} — extrai o conteúdo após as ações\n\n"
+                "ANTI-EXEMPLOS — O QUE NÃO FAZER:\n\n"
+                "ERRADO: usar ask_browser para pesquisas no Google:\n"
+                "  ask_browser(url='https://www.google.com/search?q=preço iphone')\n"
+                "CORRETO: ask_web_search(query='preço iPhone 2026 Brasil')\n\n"
+                "ERRADO: dividir a navegação de um site em múltiplas chamadas separadas:\n"
+                "  chamada 1: actions=[{click: 'Aceitar cookies'}]\n"
+                "  chamada 2: actions=[{scroll: down}]\n"
+                "  chamada 3: actions=[{scrape}]\n"
+                "CORRETO: uma chamada com actions=[{click:'Aceitar'}, {scroll: down, 1000}, {scrape}]\n\n"
+                "ERRADO: inventar seletores CSS desconhecidos:\n"
+                "  {\"type\": \"click\", \"selector\": \"#btn-submit-8f3a2\"}\n"
+                "CORRETO: {\"type\": \"click\", \"selector\": \"text=Enviar\"}\n\n"
+                "ERRADO: esquecer scrape quando quer extrair conteúdo:\n"
+                "  actions=[{click}, {scroll}]  — sem scrape, não retorna texto\n"
+                "CORRETO: actions=[{click}, {scroll}, {\"type\": \"scrape\"}]"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -660,16 +680,35 @@ SUPERVISOR_TOOLS = [
         "function": {
             "name": "execute_python",
             "description": (
-                "Executa código Python para cálculos matemáticos, processamento de dados, "
-                "formatação complexa, conversões ou qualquer lógica computacional. "
-                "Use print() para exibir resultados. Timeout: 10 segundos."
+                "Executa código Python em sandbox seguro (E2B) para cálculos, processamento de dados, "
+                "conversões, geração de arquivos (Excel, CSV, gráficos PNG) e lógica computacional.\n\n"
+                "REGRAS OBRIGATÓRIAS:\n"
+                "- Use print() para exibir resultados — sem print(), o output NÃO aparece\n"
+                "- Salve arquivos em /tmp/nome_arquivo.ext — o sistema os publica automaticamente\n"
+                "- Timeout: 30 segundos por execução\n\n"
+                "ANTI-EXEMPLOS — O QUE NÃO FAZER:\n\n"
+                "ERRADO: omitir print() e esperar que o resultado apareça:\n"
+                "  resultado = 2 + 2  — sem print(resultado), nada é exibido\n"
+                "CORRETO: resultado = 2 + 2; print(resultado)\n\n"
+                "ERRADO: usar caminhos de arquivo do sistema operacional local:\n"
+                "  open('/Users/usuario/arquivo.csv', 'w')  — não existe no sandbox\n"
+                "CORRETO: open('/tmp/arquivo.csv', 'w')\n\n"
+                "ERRADO: tentar acessar a internet diretamente no código Python:\n"
+                "  import requests; r = requests.get('https://api.exemplo.com/dados')\n"
+                "CORRETO: use ask_web_search para buscar dados externos antes de execute_python\n\n"
+                "ERRADO: usar execute_python para geração de texto narrativo ou documento:\n"
+                "  execute_python(code=\"print('Relatório Anual:\\nA empresa cresceu 20%...')\")\n"
+                "CORRETO: use ask_text_generator para documentos de texto\n\n"
+                "ERRADO: gerar arquivo sem salvar em /tmp/:\n"
+                "  import openpyxl; wb.save('planilha.xlsx')  — arquivo perdido fora do /tmp/\n"
+                "CORRETO: wb.save('/tmp/planilha.xlsx')"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "Código Python a executar. Use print() para output."
+                        "description": "Código Python a executar. Use print() para output. Salve arquivos em /tmp/."
                     }
                 },
                 "required": ["code"]

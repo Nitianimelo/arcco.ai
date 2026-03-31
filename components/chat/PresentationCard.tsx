@@ -192,20 +192,11 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
           </div>
         </div>
       </div>
-      <div className="mt-2 flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-xs text-neutral-200 truncate">{title}</p>
-          <p className="text-[10px] text-neutral-500">
-            {isPresentation ? `Apresentacao com ${slideCount} slides` : 'Clique para abrir e editar'}
-          </p>
-        </div>
-        <button
-          onClick={() => onOpenPreview?.()}
-          className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-xs font-medium transition-colors"
-        >
-          <Eye size={14} />
-          Abrir
-        </button>
+      <div className="mt-2 min-w-0">
+        <p className="text-xs text-neutral-200 truncate">{title}</p>
+        <p className="text-[10px] text-neutral-500">
+          {isPresentation ? `Apresentação com ${slideCount} slides` : 'Clique para abrir e editar'}
+        </p>
       </div>
     </div>
   );

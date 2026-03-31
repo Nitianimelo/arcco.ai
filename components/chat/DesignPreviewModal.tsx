@@ -371,7 +371,7 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
   const presIframeRef = useRef<HTMLIFrameElement>(null);
 
   // Export options state (presentation mode only)
-  const [exportOptionsFor, setExportOptionsFor] = useState<ExportFormat | null>(null);
+  const [selectedFmt, setSelectedFmt] = useState<ExportFormat>('png');
   const [slideSelection, setSlideSelection] = useState<SlideSelection>('all');
   const [pageSize, setPageSize] = useState<PageSizeOption>('widescreen');
   const [resolution, setResolution] = useState<ResolutionOption>('hd-720');
@@ -552,7 +552,6 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
     const handler = (e: MouseEvent) => {
       if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
         setShowExportMenu(false);
-        setExportOptionsFor(null);
       }
     };
     document.addEventListener('mousedown', handler);
@@ -638,7 +637,6 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
     setLoadingFmt(fmt);
     setError(null);
     setShowExportMenu(false);
-    setExportOptionsFor(null);
     try {
       if (isPresentationMode) {
         // Presentation mode: build export options from state
@@ -715,53 +713,13 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
                 <ChevronDown size={11} className={`text-neutral-500 transition-transform ${showExportMenu ? 'rotate-180' : ''}`} />
               </button>
               {showExportMenu && (
-                <div className="absolute right-0 top-full mt-1.5 w-64 bg-[#151519] border border-[#2a2a2e] rounded-xl shadow-2xl overflow-hidden z-50">
-
-                  {/* ── Se NÃO é apresentação OU exportOptionsFor é null: lista de formatos ── */}
-                  {(!isPresentationMode || !exportOptionsFor) ? (
-                    <>
-                      <div className="px-3.5 py-2 border-b border-[#1e1e22]">
-                        <p className="text-[10px] text-neutral-500 uppercase tracking-wide">
-                          {isPresentationMode ? 'Escolha o formato' : 'Baixa exatamente o que voce ve'}
-                        </p>
-                      </div>
-                      {EXPORT_BUTTONS.map(({ fmt, label, icon }) => (
-                        <button
-                          key={fmt}
-                          onClick={() => {
-                            if (isPresentationMode) {
-                              setExportOptionsFor(fmt);
-                            } else {
-                              handleExport(fmt);
-                            }
-                          }}
-                          disabled={!!loadingFmt}
-                          className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-neutral-300 hover:text-white hover:bg-white/[0.05] transition-colors text-left disabled:opacity-40"
-                        >
-                          {loadingFmt === fmt ? <Loader2 size={14} className="animate-spin" /> : icon}
-                          Baixar como {label}
-                        </button>
-                      ))}
-                    </>
-                  ) : (
-                    /* ── Painel de opções (só apresentações) ── */
+                <div className="absolute right-0 top-full mt-1.5 w-68 bg-[#151519] border border-[#2a2a2e] rounded-xl shadow-2xl z-50">
+                  {isPresentationMode ? (
+                    /* ── Apresentações: painel flat ── */
                     <div className="p-3.5 space-y-3">
-                      {/* Header com voltar */}
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => setExportOptionsFor(null)}
-                          className="p-1 rounded hover:bg-white/[0.06] transition-colors"
-                        >
-                          <ChevronLeft size={14} className="text-neutral-400" />
-                        </button>
-                        <span className="text-xs font-medium text-neutral-200">
-                          Exportar {exportOptionsFor.toUpperCase()}
-                        </span>
-                      </div>
-
                       {/* Slides */}
                       <div className="space-y-1.5">
-                        <label className="text-[10px] text-neutral-500 uppercase tracking-wide font-medium">Slides</label>
+                        <p className="text-[10px] text-neutral-500 uppercase tracking-wide font-medium">Slides</p>
                         <div className="flex gap-1.5">
                           {([
                             { value: 'all' as SlideSelection, label: 'Todos' },
@@ -782,10 +740,31 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
                         </div>
                       </div>
 
-                      {/* Tamanho da pagina (PDF/PPTX) */}
-                      {(exportOptionsFor === 'pdf' || exportOptionsFor === 'pptx') && (
+                      {/* Formato */}
+                      <div className="space-y-1.5">
+                        <p className="text-[10px] text-neutral-500 uppercase tracking-wide font-medium">Formato</p>
+                        <div className="grid grid-cols-4 gap-1.5">
+                          {EXPORT_BUTTONS.map(({ fmt, label, icon }) => (
+                            <button
+                              key={fmt}
+                              onClick={() => setSelectedFmt(fmt)}
+                              className={`flex flex-col items-center gap-1 py-2 rounded-lg text-[10px] font-medium transition-all ${
+                                selectedFmt === fmt
+                                  ? 'bg-orange-500/15 text-orange-300 border border-orange-500/30'
+                                  : 'text-neutral-500 hover:text-neutral-300 bg-white/[0.03] border border-[#2a2a2e]'
+                              }`}
+                            >
+                              {icon}
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Opções contextuais */}
+                      {(selectedFmt === 'pdf' || selectedFmt === 'pptx') && (
                         <div className="space-y-1.5">
-                          <label className="text-[10px] text-neutral-500 uppercase tracking-wide font-medium">Tamanho</label>
+                          <p className="text-[10px] text-neutral-500 uppercase tracking-wide font-medium">Tamanho</p>
                           <select
                             value={pageSize}
                             onChange={(e) => setPageSize(e.target.value as PageSizeOption)}
@@ -797,11 +776,9 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
                           </select>
                         </div>
                       )}
-
-                      {/* Resolucao (PNG/JPEG) */}
-                      {(exportOptionsFor === 'png' || exportOptionsFor === 'jpeg') && (
+                      {(selectedFmt === 'png' || selectedFmt === 'jpeg') && (
                         <div className="space-y-1.5">
-                          <label className="text-[10px] text-neutral-500 uppercase tracking-wide font-medium">Resolucao</label>
+                          <p className="text-[10px] text-neutral-500 uppercase tracking-wide font-medium">Resolução</p>
                           <select
                             value={resolution}
                             onChange={(e) => setResolution(e.target.value as ResolutionOption)}
@@ -814,16 +791,34 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
                         </div>
                       )}
 
-                      {/* Botao exportar */}
+                      {/* Botão baixar */}
                       <button
-                        onClick={() => handleExport(exportOptionsFor)}
+                        onClick={() => handleExport(selectedFmt)}
                         disabled={!!loadingFmt}
                         className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-xs font-medium transition-colors disabled:opacity-50"
                       >
                         {loadingFmt ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
-                        Exportar
+                        Baixar {selectedFmt.toUpperCase()}
                       </button>
                     </div>
+                  ) : (
+                    /* ── Design único: lista simples de formatos ── */
+                    <>
+                      <div className="px-3.5 py-2 border-b border-[#1e1e22]">
+                        <p className="text-[10px] text-neutral-500 uppercase tracking-wide">Baixa exatamente o que voce ve</p>
+                      </div>
+                      {EXPORT_BUTTONS.map(({ fmt, label, icon }) => (
+                        <button
+                          key={fmt}
+                          onClick={() => handleExport(fmt)}
+                          disabled={!!loadingFmt}
+                          className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-neutral-300 hover:text-white hover:bg-white/[0.05] transition-colors text-left disabled:opacity-40"
+                        >
+                          {loadingFmt === fmt ? <Loader2 size={14} className="animate-spin" /> : icon}
+                          Baixar como {label}
+                        </button>
+                      ))}
+                    </>
                   )}
                 </div>
               )}
