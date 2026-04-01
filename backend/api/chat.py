@@ -227,6 +227,10 @@ async def _save_conversation_and_update_memory(
                     "role": "user",
                     "content": user_message,
                     "created_at": now,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "estimated_cost_usd": 0.0,
                 }
             )
         if assistant_response:
