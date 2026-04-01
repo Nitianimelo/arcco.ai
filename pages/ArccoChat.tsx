@@ -22,6 +22,7 @@ import { useToast } from '../components/Toast';
 // AgentTerminal removido — steps agora são inline
 import { ChatSession, Message } from '../lib/chatStorage';
 import { conversationApi } from '../lib/conversationApi';
+import { withBackendUrl } from '../lib/backendUrl';
 
 interface FilePreviewCardProps {
   url: string;
@@ -396,7 +397,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     const fetchLocation = async () => {
       try {
         // Proxied via backend — usa X-Forwarded-For para IP real do usuario
-        const res = await fetch('/api/agent/location');
+        const res = await fetch(withBackendUrl('/api/agent/location'));
         if (!res.ok) throw new Error('backend failed');
         const data = await res.json();
         if (!data.city) throw new Error('no city');
@@ -712,7 +713,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   useEffect(() => {
     const loadChatModeConfigs = async () => {
       try {
-        const res = await fetch('/api/agent/chat-models');
+        const res = await fetch(withBackendUrl('/api/agent/chat-models'));
         if (!res.ok) return;
         const data = await res.json();
         const configs = ((data.models || []) as ChatModeConfig[]).map(config => ({

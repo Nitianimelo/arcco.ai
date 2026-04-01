@@ -56,6 +56,7 @@ import {
 import { supabase } from '../lib/supabase';
 import { AdminUsersTab } from '../components/admin/AdminUsersTab';
 import { AdminApiKeysTab } from '../components/admin/AdminApiKeysTab';
+import { ADMIN_API_BASE } from '../lib/backendUrl';
 
 // â”€â”€ Tipos de dados â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -882,8 +883,7 @@ export const AdminPage: React.FC = () => {
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
 
-  // '' = usa Vite proxy (/api/admin/* → localhost:8001). Não hardcodar localhost aqui.
-  const backendUrl = '';
+  const backendUrl = ADMIN_API_BASE;
 
   /** Fetch autenticado — injeta Bearer token e auto-logout em 401 */
   const adminFetch = (input: string, init?: RequestInit) =>
@@ -907,7 +907,7 @@ export const AdminPage: React.FC = () => {
     setLoginLoading(true);
     setLoginError('');
     try {
-      const res = await fetch(`${backendUrl}/api/admin/login`, {
+      const res = await fetch(`${backendUrl}/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: loginUsername, password: loginPassword }),
@@ -959,7 +959,7 @@ export const AdminPage: React.FC = () => {
   const fetchModels = async () => {
     setModelsLoading(true);
     try {
-      const res = await adminFetch(`${backendUrl}/api/admin/models`);
+      const res = await adminFetch(`${backendUrl}/models`);
       if (!res.ok) return;
       const data = await res.json();
       setOrModels(data.models || []);
@@ -971,7 +971,7 @@ export const AdminPage: React.FC = () => {
     setAgentsLoading(true);
     setAgentsError(null);
     try {
-      const res = await adminFetch(`${backendUrl}/api/admin/agents`);
+      const res = await adminFetch(`${backendUrl}/agents`);
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
       const data = await res.json();
       const rows = (data.agents || []) as AgentConfig[];
@@ -991,7 +991,7 @@ export const AdminPage: React.FC = () => {
     setReloadingAgentModels(true);
     setAgentsError(null);
     try {
-      const res = await adminFetch(`${backendUrl}/api/admin/agents/reload-models`, {
+      const res = await adminFetch(`${backendUrl}/agents/reload-models`, {
         method: 'POST',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
@@ -1013,7 +1013,7 @@ export const AdminPage: React.FC = () => {
     setChatConfigsLoading(true);
     setChatConfigsError(null);
     try {
-      const res = await adminFetch(`${backendUrl}/api/admin/chat-models`);
+      const res = await adminFetch(`${backendUrl}/chat-models`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       const rows = (data.models || []) as ChatConfigRow[];
@@ -1029,7 +1029,7 @@ export const AdminPage: React.FC = () => {
     if (!options?.silent) setExecutionsLoading(true);
     if (!options?.silent) setExecutionsError(null);
     try {
-      const res = await adminFetch(`${backendUrl}/api/admin/executions?limit=100`);
+      const res = await adminFetch(`${backendUrl}/executions?limit=100`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       const rows = data.executions || [];
@@ -1050,7 +1050,7 @@ export const AdminPage: React.FC = () => {
   const fetchExecutionDetail = async (executionId: string, options?: { silent?: boolean }) => {
     if (!options?.silent) setExecutionDetailLoading(true);
     try {
-      const res = await adminFetch(`${backendUrl}/api/admin/executions/${executionId}`);
+      const res = await adminFetch(`${backendUrl}/executions/${executionId}`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       setExecutionDetail(data);
@@ -1067,8 +1067,8 @@ export const AdminPage: React.FC = () => {
     setTokenExecsLoading(true);
     try {
       const [summaryRes, execsRes] = await Promise.all([
-        adminFetch(`${backendUrl}/api/admin/token-usage/summary?days=${tokenPeriod}&mode=${tokenMode}`),
-        adminFetch(`${backendUrl}/api/admin/token-usage/executions?days=${tokenPeriod}&mode=${tokenMode}&limit=200`),
+        adminFetch(`${backendUrl}/token-usage/summary?days=${tokenPeriod}&mode=${tokenMode}`),
+        adminFetch(`${backendUrl}/token-usage/executions?days=${tokenPeriod}&mode=${tokenMode}&limit=200`),
       ]);
       if (summaryRes.ok) {
         const data = await summaryRes.json();
@@ -1243,7 +1243,7 @@ export const AdminPage: React.FC = () => {
 
   /** Envia alteraÃ§Ãµes de um agente para o backend (PUT /api/admin/agents/{id}) */
   const saveAgent = async (id: string, data: Partial<AgentConfig>) => {
-    const res = await adminFetch(`${backendUrl}/api/admin/agents/${id}`, {
+    const res = await adminFetch(`${backendUrl}/agents/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
@@ -1256,7 +1256,7 @@ export const AdminPage: React.FC = () => {
 
   /** Reseta um agente para os valores padrÃ£o (POST /api/admin/agents/reset/{id}) */
   const resetAgent = async (id: string) => {
-    const res = await adminFetch(`${backendUrl}/api/admin/agents/reset/${id}`, { method: 'POST' });
+    const res = await adminFetch(`${backendUrl}/agents/reset/${id}`, { method: 'POST' });
     if (!res.ok) throw new Error(`Erro ao resetar: ${await res.text()}`);
     const updated = await res.json();
     setAgents(prev => prev.map(a => a.id === id ? updated.agent : a));
@@ -1264,8 +1264,8 @@ export const AdminPage: React.FC = () => {
 
   const saveChatConfig = async (config: ChatConfigRow) => {
     const url = config.id
-      ? `${backendUrl}/api/admin/chat-models/${config.id}`
-      : `${backendUrl}/api/admin/chat-models`;
+      ? `${backendUrl}/chat-models/${config.id}`
+      : `${backendUrl}/chat-models`;
     const method = config.id ? 'PUT' : 'POST';
     const res = await adminFetch(url, {
       method,
@@ -1287,7 +1287,7 @@ export const AdminPage: React.FC = () => {
       return;
     }
 
-    const res = await adminFetch(`${backendUrl}/api/admin/chat-models/${config.id}`, {
+    const res = await adminFetch(`${backendUrl}/chat-models/${config.id}`, {
       method: 'DELETE',
     });
     if (!res.ok) throw new Error(await res.text());
@@ -1862,7 +1862,7 @@ export const AdminPage: React.FC = () => {
                 <div>
                   <p className="font-medium">Erro ao conectar com o backend</p>
                   <p className="text-xs text-red-400/70 mt-1">{agentsError}</p>
-                  <p className="text-xs text-neutral-600 mt-2">Certifique-se que o backend Python estÃ¡ rodando em <code className="text-neutral-500">localhost:8001</code></p>
+                  <p className="text-xs text-neutral-600 mt-2">Verifique se o backend está acessível pelo mesmo domínio do site ou pela URL configurada em <code className="text-neutral-500">VITE_BACKEND_URL</code>.</p>
                 </div>
               </div>
             )}

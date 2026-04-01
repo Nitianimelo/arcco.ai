@@ -3,7 +3,9 @@
  * Backend: /api/agent/conversations
  */
 
-const API_BASE = '/api/agent';
+import { AGENT_API_BASE } from './backendUrl';
+
+const API_BASE = AGENT_API_BASE;
 
 export interface ConversationRecord {
   id: string;

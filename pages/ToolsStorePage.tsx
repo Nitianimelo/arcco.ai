@@ -24,6 +24,7 @@ import {
   MessageSquare,
   Loader2,
 } from 'lucide-react';
+import { withBackendUrl } from '../lib/backendUrl';
 
 // ────────────────────────────────────────────────────────────
 // Mapeamento de icon_name (string do backend) → componente Lucide
@@ -125,7 +126,7 @@ const ToolsStorePage: React.FC = () => {
 
   // Busca catálogo do backend (fonte da verdade)
   useEffect(() => {
-    fetch('/api/agent/tools')
+    fetch(withBackendUrl('/api/agent/tools'))
       .then(r => r.json())
       .then((data: ToolFromAPI[]) => {
         const resolved: ToolDefinition[] = data.map(t => ({

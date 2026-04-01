@@ -3,7 +3,9 @@
  * Backend: GET/PUT /api/agent/preferences/{user_id}
  */
 
-const API_BASE = '/api/agent';
+import { AGENT_API_BASE } from './backendUrl';
+
+const API_BASE = AGENT_API_BASE;
 
 export interface UserPreferences {
   user_id?: string;
