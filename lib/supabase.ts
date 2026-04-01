@@ -1,9 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = 'https://gfkycxdbbzczrwikhcpr.supabase.co';
-const supabaseServiceKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdma3ljeGRiYnpjenJ3aWtoY3ByIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2OTc4MjU5MywiZXhwIjoyMDg1MzU4NTkzfQ.zAB2HFhpyrtLD4aOvxDqS63Rvh_NwxgtS8ZhCj8xSnw';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const supabaseKey = (
+  (import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY as string | undefined) ||
+  (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)
+);
 
-export const supabase = createClient(supabaseUrl, supabaseServiceKey);
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error(
+    'Supabase não configurado. Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY ' +
+    '(ou VITE_SUPABASE_SERVICE_ROLE_KEY para o ambiente local do admin).'
+  );
+}
+
+export const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Types for the User table
 export interface UserData {
@@ -160,4 +170,3 @@ export const userService = {
     }
   }
 };
-

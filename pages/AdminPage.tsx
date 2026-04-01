@@ -839,6 +839,13 @@ export const AdminPage: React.FC = () => {
   const [newKeyValue, setNewKeyValue] = useState('');
   const [addingKey, setAddingKey] = useState(false);
   const [addKeyError, setAddKeyError] = useState('');
+  const [editingKeyId, setEditingKeyId] = useState<number | null>(null);
+  const [editingProvider, setEditingProvider] = useState('');
+  const [editingValue, setEditingValue] = useState('');
+  const [editingActive, setEditingActive] = useState(true);
+  const [editingError, setEditingError] = useState('');
+  const [savingEditKey, setSavingEditKey] = useState(false);
+  const [apiKeyActionId, setApiKeyActionId] = useState<number | null>(null);
 
   // Dados da aba OrquestraÃ§Ã£o (carregados sÃ³ quando a aba Ã© aberta)
   const [agents, setAgents] = useState<AgentConfig[]>([]);
@@ -1382,6 +1389,126 @@ export const AdminPage: React.FC = () => {
     });
   };
 
+  const startEditKey = (row: ApiKeyRow) => {
+    setEditingKeyId(row.id);
+    setEditingProvider(row.provider);
+    setEditingValue(row.api_key);
+    setEditingActive(row.is_active);
+    setEditingError('');
+  };
+
+  const cancelEditKey = () => {
+    setEditingKeyId(null);
+    setEditingProvider('');
+    setEditingValue('');
+    setEditingActive(true);
+    setEditingError('');
+  };
+
+  const upsertApiKey = async (provider: string, apiKey: string, isActive: boolean) => {
+    const normalizedProvider = provider.trim();
+    const normalizedKey = apiKey.trim();
+    if (!normalizedProvider) throw new Error('Informe o provider');
+    if (!normalizedKey) throw new Error('Insira a chave');
+
+    const existing = apiKeys.filter(k => k.provider === normalizedProvider);
+    if (existing.length > 1) {
+      throw new Error(`Há ${existing.length} registros com provider='${normalizedProvider}'. Limpe as duplicatas antes.`);
+    }
+
+    if (existing.length === 1) {
+      const { error } = await supabase
+        .from('ApiKeys')
+        .update({
+          api_key: normalizedKey,
+          is_active: isActive,
+          provider: normalizedProvider,
+        })
+        .eq('id', existing[0].id);
+      if (error) throw error;
+      return;
+    }
+
+    const { error } = await supabase.from('ApiKeys').insert({
+      provider: normalizedProvider,
+      api_key: normalizedKey,
+      is_active: isActive,
+    });
+    if (error) throw error;
+  };
+
+  const saveEditedKey = async () => {
+    if (editingKeyId === null) return;
+    setSavingEditKey(true);
+    setEditingError('');
+    try {
+      const normalizedProvider = editingProvider.trim();
+      const normalizedKey = editingValue.trim();
+      if (!normalizedProvider) throw new Error('Informe o provider');
+      if (!normalizedKey) throw new Error('Insira a chave');
+
+      const duplicate = apiKeys.find(
+        key => key.provider === normalizedProvider && key.id !== editingKeyId
+      );
+      if (duplicate) {
+        throw new Error(`Já existe outra chave com provider='${normalizedProvider}'.`);
+      }
+
+      const { error } = await supabase
+        .from('ApiKeys')
+        .update({
+          provider: normalizedProvider,
+          api_key: normalizedKey,
+          is_active: editingActive,
+        })
+        .eq('id', editingKeyId);
+      if (error) throw error;
+
+      cancelEditKey();
+      await fetchData();
+    } catch (err: any) {
+      setEditingError(err.message || 'Erro ao salvar');
+    } finally {
+      setSavingEditKey(false);
+    }
+  };
+
+  const toggleKeyActive = async (row: ApiKeyRow) => {
+    setApiKeyActionId(row.id);
+    try {
+      const { error } = await supabase
+        .from('ApiKeys')
+        .update({ is_active: !row.is_active })
+        .eq('id', row.id);
+      if (error) throw error;
+      await fetchData();
+    } catch (err: any) {
+      window.alert(err.message || 'Erro ao atualizar status da chave.');
+    } finally {
+      setApiKeyActionId(null);
+    }
+  };
+
+  const deleteApiKey = async (row: ApiKeyRow) => {
+    const confirmed = window.confirm(`Excluir a chave '${row.provider}'?`);
+    if (!confirmed) return;
+
+    setApiKeyActionId(row.id);
+    try {
+      const { error } = await supabase
+        .from('ApiKeys')
+        .delete()
+        .eq('id', row.id);
+      if (error) throw error;
+      if (editingKeyId === row.id) cancelEditKey();
+      await fetchData();
+    } catch (err: any) {
+      window.alert(err.message || 'Erro ao excluir chave.');
+    } finally {
+      setApiKeyActionId(null);
+    }
+  };
+
   const deleteUser = async (user: UserRow) => {
     const confirmed = window.confirm(`Excluir o usuário "${user.nome || user.email}"? Esta ação não pode ser desfeita.`);
     if (!confirmed) return;
@@ -1590,27 +1717,36 @@ export const AdminPage: React.FC = () => {
             newKeyValue={newKeyValue}
             addingKey={addingKey}
             addKeyError={addKeyError}
+            editingKeyId={editingKeyId}
+            editingProvider={editingProvider}
+            editingValue={editingValue}
+            editingActive={editingActive}
+            editingError={editingError}
+            savingEdit={savingEditKey}
+            actionKeyId={apiKeyActionId}
             providerIcons={PROVIDER_ICONS}
             maskKey={maskKey}
             formatDate={formatDate}
             onToggleShowAddKey={() => setShowAddKey(v => !v)}
             onNewKeyProviderChange={setNewKeyProvider}
             onNewKeyValueChange={(value) => { setNewKeyValue(value); setAddKeyError(''); }}
+            onStartEditKey={startEditKey}
+            onCancelEditKey={cancelEditKey}
+            onEditingProviderChange={setEditingProvider}
+            onEditingValueChange={(value) => { setEditingValue(value); setEditingError(''); }}
+            onEditingActiveChange={setEditingActive}
+            onSaveEditKey={saveEditedKey}
+            onToggleKeyActive={toggleKeyActive}
+            onDeleteKey={deleteApiKey}
             onSaveKey={async () => {
-              if (!newKeyProvider.trim()) { setAddKeyError('Informe o provider'); return; }
-              if (!newKeyValue.trim()) { setAddKeyError('Insira a chave'); return; }
               setAddingKey(true);
               setAddKeyError('');
               try {
-                const { error } = await supabase.from('ApiKeys').insert({
-                  provider: newKeyProvider.trim(),
-                  api_key: newKeyValue.trim(),
-                  is_active: true,
-                });
-                if (error) throw error;
+                await upsertApiKey(newKeyProvider, newKeyValue, true);
                 setNewKeyValue('');
+                setNewKeyProvider('e2b');
                 setShowAddKey(false);
-                fetchData();
+                await fetchData();
               } catch (err: any) {
                 setAddKeyError(err.message || 'Erro ao salvar');
               } finally {
