@@ -87,7 +87,7 @@ async def get_session_files(session_id: str):
         cleanup_expired_sessions()
         validated_session_id = validate_session_id(session_id)
         if not session_exists(validated_session_id):
-            raise SessionNotFoundError(f"Sessão {validated_session_id} não encontrada.")
+            return SessionFileListResponse(session_id=validated_session_id, files=[])
         touch_session(validated_session_id)
         return SessionFileListResponse(
             session_id=validated_session_id,

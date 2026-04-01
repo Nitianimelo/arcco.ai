@@ -9,6 +9,7 @@ import io
 import logging
 import mimetypes
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -16,6 +17,10 @@ from pathlib import Path
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Cache em memória para a chave E2B — evita query Supabase em cada execução Python
+_e2b_key_cache: dict = {"key": None, "expires": 0.0}
+_E2B_KEY_CACHE_TTL = 300.0  # 5 minutos
 
 _E2B_ARTIFACT_ROOT = "/home/user"
 _E2B_ARTIFACT_SCAN_DEPTH = 8
@@ -29,9 +34,15 @@ _E2B_ARTIFACT_EXCLUDED_DIRS = {
     ".venv",
     "node_modules",
 }
+_E2B_REPORTED_FILE_PATTERN = re.compile(r"(/(?:tmp|home/user)[^\s'\"`]+)")
 
 
-async def execute_tool(func_name: str, func_args: dict, user_id: str | None = None) -> str:
+async def execute_tool(
+    func_name: str,
+    func_args: dict,
+    user_id: str | None = None,
+    event_callback=None,
+) -> str:
     """Despachante principal: executa a ferramenta e retorna resultado como string."""
     if func_name == "web_search":
         return await _web_search(func_args.get("query", ""))
@@ -68,7 +79,7 @@ async def execute_tool(func_name: str, func_args: dict, user_id: str | None = No
         return await _modify_pdf(func_args)
 
     elif func_name == "ask_browser":
-        return await _ask_browser(func_args)
+        return await _ask_browser(func_args, event_callback=event_callback)
 
     elif func_name == "generate_pdf_template":
         return await _generate_pdf_template(func_args)
@@ -121,12 +132,12 @@ async def _web_fetch(url: str) -> str:
         return f"Erro ao ler URL ({url}): {e}"
 
 
-async def _ask_browser(args: dict) -> str:
+async def _ask_browser(args: dict, event_callback=None) -> str:
     """
     Navega remotamente via Browserbase + Playwright (CDP).
     Delega toda a lógica para browser_service.execute_browserbase_task.
     """
-    from backend.services.browser_service import execute_browserbase_task
+    from backend.services.browser_service import BrowserHandoffRequired, execute_browserbase_task
 
     url = args.get("url", "")
     if not url:
@@ -136,12 +147,17 @@ async def _ask_browser(args: dict) -> str:
     try:
         return await execute_browserbase_task(
             url=url,
+            goal=args.get("goal") or args.get("instructions"),
             actions=args.get("actions", []),
             wait_for=int(args.get("wait_for") or 0),
             mobile=bool(args.get("mobile", False)),
             include_tags=args.get("include_tags"),
             exclude_tags=args.get("exclude_tags"),
+            resume_token=args.get("resume_token"),
+            progress_callback=event_callback,
         )
+    except BrowserHandoffRequired:
+        raise
     except Exception as exc:
         logger.exception("[BROWSER] Falha ao executar Browser Agent em %s", url)
         return f"Erro ao executar Browser Agent: {exc}"
@@ -271,19 +287,28 @@ async def _execute_python(code: str) -> str:
 
     config = get_config()
 
-    # Sempre busca a chave E2B fresca do Supabase (ignora o singleton cacheado no startup).
-    # Isso garante que trocar a chave no Supabase Admin tem efeito imediato, sem restart.
+    # Busca a chave E2B do Supabase com cache TTL de 5 minutos.
+    # Isso garante que trocar a chave no Supabase Admin tem efeito em até 5 min, sem restart.
     def _fetch_e2b_key_from_supabase() -> str | None:
+        now = time.monotonic()
+        if _e2b_key_cache["key"] and now < _e2b_key_cache["expires"]:
+            return _e2b_key_cache["key"]
         try:
             from backend.core.supabase_client import get_supabase_client
             db = get_supabase_client()
+            found_key: str | None = None
             for provider in ("e2b", "e2b_api_key"):
                 rows = db.query("ApiKeys", "api_key", {"provider": provider})
                 if rows and rows[0].get("api_key"):
-                    return rows[0]["api_key"]
+                    found_key = rows[0]["api_key"]
+                    break
+            if found_key:
+                _e2b_key_cache["key"] = found_key
+                _e2b_key_cache["expires"] = now + _E2B_KEY_CACHE_TTL
+            return found_key
         except Exception as exc:
             logger.warning("[E2B] Falha ao buscar chave do Supabase: %s", exc)
-        return None
+        return _e2b_key_cache.get("key")  # retorna valor cacheado expirado como fallback
 
     e2b_api_key = await asyncio.to_thread(_fetch_e2b_key_from_supabase)
     if not e2b_api_key:
@@ -305,6 +330,12 @@ async def _execute_python(code: str) -> str:
 
     try:
         from backend.core.supabase_client import upload_to_supabase
+
+        def create_sandbox():
+            create = getattr(Sandbox, "create", None)
+            if callable(create):
+                return create(api_key=e2b_api_key, timeout=300)
+            return Sandbox(api_key=e2b_api_key)
 
         def snapshot_artifacts(sandbox) -> dict[str, object]:
             entries = sandbox.files.list(_E2B_ARTIFACT_ROOT, depth=_E2B_ARTIFACT_SCAN_DEPTH)
@@ -368,6 +399,48 @@ async def _execute_python(code: str) -> str:
 
             return uploaded
 
+        def upload_reported_artifacts(sandbox, text: str, uploaded: list[tuple[str, str]]) -> list[tuple[str, str]]:
+            seen_urls = {url for _, url in uploaded}
+            seen_paths: set[str] = set()
+
+            for raw_path in _E2B_REPORTED_FILE_PATTERN.findall(text):
+                path = raw_path.rstrip(".,:;)]}\"'")
+                if path in seen_paths:
+                    continue
+                seen_paths.add(path)
+
+                filename = Path(path).name
+                if not filename or "." not in filename:
+                    continue
+
+                try:
+                    file_bytes = bytes(sandbox.files.read(path, format="bytes"))
+                except Exception:
+                    continue
+
+                if not file_bytes or len(file_bytes) > _E2B_ARTIFACT_MAX_BYTES:
+                    continue
+
+                content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+                safe_name = path.lstrip("/").replace("/", "_")
+                storage_name = f"python-artifacts/{safe_name}"
+
+                try:
+                    public_url = upload_to_supabase(
+                        config.supabase_storage_bucket,
+                        storage_name,
+                        file_bytes,
+                        content_type,
+                    )
+                    if public_url not in seen_urls:
+                        uploaded.append((filename, public_url))
+                        seen_urls.add(public_url)
+                        logger.info("[E2B] Artefato referenciado enviado ao Supabase: %s -> %s", path, public_url)
+                except Exception as exc:
+                    logger.exception("[E2B] Falha ao enviar artefato referenciado '%s': %s", path, exc)
+
+            return uploaded
+
         def _run_code_and_collect(sandbox, current_code: str, before_snapshot) -> tuple[str, str | None]:
             """Executa codigo no sandbox e retorna (resultado, erro_ou_none)."""
             execution_result = sandbox.run_code(current_code)
@@ -401,17 +474,30 @@ async def _execute_python(code: str) -> str:
                     if hasattr(media, 'text') and media.text:
                         parts.append(f"RESULT: {media.text}")
 
+            result_str = "\n".join(parts).strip()
             uploaded_artifacts = upload_generated_artifacts(sandbox, before_snapshot)
+            uploaded_artifacts = upload_reported_artifacts(sandbox, result_str, uploaded_artifacts)
+
+            if uploaded_artifacts:
+                parts = [
+                    part for part in parts
+                    if "/tmp/" not in part and "/home/user/" not in part
+                ]
+            elif _E2B_REPORTED_FILE_PATTERN.search(result_str) and not error_msg:
+                error_msg = "Arquivo gerado localmente, mas não foi possível publicar um link de download."
+                parts.append(f"ERRO: {error_msg}")
+
             if uploaded_artifacts:
                 parts.append("Arquivos gerados:")
                 parts.extend(f"[{filename}]({url})" for filename, url in uploaded_artifacts)
+                parts.append("INSTRUÇÃO OBRIGATÓRIA: Use exatamente os links de download acima na resposta final.")
 
             result_str = "\n".join(parts).strip()
             return result_str, error_msg
 
         def sync_e2b_exec():
             logger.info("[E2B] Iniciando execução de código Python (%s chars).", len(code))
-            sandbox = Sandbox(api_key=e2b_api_key)
+            sandbox = create_sandbox()
             try:
                 before_snapshot = snapshot_artifacts(sandbox)
                 result_str, error_msg = _run_code_and_collect(sandbox, code, before_snapshot)
@@ -478,7 +564,7 @@ async def _execute_python(code: str) -> str:
 
             # Re-executa o codigo corrigido
             def sync_retry(retry_code=current_code):
-                sandbox = Sandbox(api_key=e2b_api_key)
+                sandbox = create_sandbox()
                 try:
                     before = snapshot_artifacts(sandbox)
                     return _run_code_and_collect(sandbox, retry_code, before)

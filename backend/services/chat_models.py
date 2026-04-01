@@ -30,6 +30,8 @@ def _normalize_item(item: dict[str, Any]) -> dict[str, Any]:
         "slot_number": int(item.get("slot_number") or 0),
         "model_name": item.get("model_name") or "",
         "openrouter_model_id": item.get("openrouter_model_id") or "",
+        "fast_model_id": item.get("fast_model_id") or "",
+        "fast_system_prompt": item.get("fast_system_prompt") or "",
         "system_prompt": item.get("system_prompt") or "",
         "is_active": bool(item.get("is_active", True)),
         "created_at": item.get("created_at"),
@@ -85,6 +87,8 @@ def create_chat_model(data: dict[str, Any]) -> dict[str, Any]:
         "slot_number": int(data.get("slot_number") or next_slot),
         "model_name": data.get("model_name") or f"Novo modelo {next_slot}",
         "openrouter_model_id": data.get("openrouter_model_id", ""),
+        "fast_model_id": data.get("fast_model_id", "") or "",
+        "fast_system_prompt": data.get("fast_system_prompt", "") or "",
         "system_prompt": data.get("system_prompt", ""),
         "is_active": bool(data.get("is_active", True)),
     }
@@ -104,6 +108,8 @@ def update_chat_model(model_id: str, data: dict[str, Any]) -> dict[str, Any] | N
     payload = {
         "model_name": data.get("model_name", current_item.get("model_name", "")),
         "openrouter_model_id": data.get("openrouter_model_id", current_item.get("openrouter_model_id", "")),
+        "fast_model_id": data.get("fast_model_id", current_item.get("fast_model_id", "")) or "",
+        "fast_system_prompt": data.get("fast_system_prompt", current_item.get("fast_system_prompt", "")) or "",
         "system_prompt": data.get("system_prompt", current_item.get("system_prompt", "")),
         "is_active": bool(data.get("is_active", current_item.get("is_active", True))),
         "slot_number": int(data.get("slot_number", current_item.get("slot_number", 0))),

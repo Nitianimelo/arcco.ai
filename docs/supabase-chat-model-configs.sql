@@ -5,6 +5,8 @@ create table if not exists public.chat_model_configs (
   slot_number integer not null,
   model_name text not null,
   openrouter_model_id text not null,
+  fast_model_id text not null default '',
+  fast_system_prompt text not null default '',
   system_prompt text not null default '',
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
@@ -46,4 +48,6 @@ comment on table public.chat_model_configs is 'Slots configuráveis do Chat Norm
 comment on column public.chat_model_configs.slot_number is 'Posição visual do slot no dropdown do Chat Normal.';
 comment on column public.chat_model_configs.model_name is 'Nome exibido ao usuário.';
 comment on column public.chat_model_configs.openrouter_model_id is 'ID real do modelo no OpenRouter.';
+comment on column public.chat_model_configs.fast_model_id is 'Modelo leve opcional usado para responder pedidos simples e destilar briefs para o modelo principal.';
+comment on column public.chat_model_configs.fast_system_prompt is 'Prompt opcional do modelo leve; se vazio, o sistema reutiliza o prompt do modelo principal.';
 comment on column public.chat_model_configs.system_prompt is 'Prompt default aplicado ao usar este slot no Chat Normal.';

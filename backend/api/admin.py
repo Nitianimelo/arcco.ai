@@ -47,6 +47,8 @@ def _admin_token() -> str:
     """Gera token determinístico a partir das credenciais. Nunca exposto ao frontend."""
     from backend.core.config import get_config
     cfg = get_config()
+    if not cfg.admin_username or not cfg.admin_password:
+        raise HTTPException(status_code=503, detail="Painel admin não configurado no ambiente")
     return hashlib.sha256(f"{cfg.admin_username}:{cfg.admin_password}:arcco_admin".encode()).hexdigest()
 
 
@@ -69,6 +71,8 @@ async def admin_login(req: LoginRequest):
     """Rota pública — valida usuário/senha e retorna o token de sessão."""
     from backend.core.config import get_config
     cfg = get_config()
+    if not cfg.admin_username or not cfg.admin_password:
+        raise HTTPException(status_code=503, detail="Painel admin não configurado no ambiente")
     valid_user = secrets.compare_digest(req.username, cfg.admin_username)
     valid_pass = secrets.compare_digest(req.password, cfg.admin_password)
     if not (valid_user and valid_pass):
@@ -461,6 +465,8 @@ class AgentUpdateRequest(BaseModel):
 class ChatModelRequest(BaseModel):
     model_name: str = ""
     openrouter_model_id: str = ""
+    fast_model_id: str = ""
+    fast_system_prompt: str = ""
     system_prompt: str = ""
     is_active: bool = True
     slot_number: Optional[int] = None

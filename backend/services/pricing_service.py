@@ -1,15 +1,6 @@
-"""
-Serviço de preços de modelos LLM.
-
-Busca preços do OpenRouter /api/v1/models e calcula custo estimado em USD
-com base no número de tokens prompt + completion.
-
-Cache de 1 hora para evitar chamadas repetidas à API do OpenRouter.
-"""
-
+import asyncio
 import logging
 import time
-from typing import Optional
 
 import httpx
 
@@ -19,19 +10,30 @@ logger = logging.getLogger(__name__)
 _price_cache: dict[str, tuple[float, float]] = {}
 _price_cache_ts: float = 0.0
 _PRICE_CACHE_TTL = 3600.0  # 1 hora
+_FAILED_CACHE_TTL = 300.0  # 5 minutos de espera antes de retentar falhas
 
-# Fallback para modelos desconhecidos (preço médio de mercado)
+# Evita thundering herd quando vários chats fecham ao mesmo tempo.
+_price_lock = asyncio.Lock()
+
+# Fallback para modelos desconhecidos ou indisponibilidade da API
 _FALLBACK_INPUT_1M = 1.0
 _FALLBACK_OUTPUT_1M = 3.0
 
 
+def _mark_refresh_failure() -> None:
+    global _price_cache_ts
+    # Reaproveita a mesma lógica de expiração: o cache "parece" ter sido
+    # atualizado há PRICE_CACHE_TTL - FAILED_CACHE_TTL segundos.
+    _price_cache_ts = time.time() - _PRICE_CACHE_TTL + _FAILED_CACHE_TTL
+
+
 async def _refresh_price_cache() -> None:
-    """Busca preços do OpenRouter e popula cache interno."""
+    """Busca preços do OpenRouter e popula cache interno com proteção contra falhas."""
     global _price_cache, _price_cache_ts
 
     from backend.core.config import get_config
-    config = get_config()
 
+    config = get_config()
     headers: dict[str, str] = {
         "HTTP-Referer": "https://arcco.ai",
         "X-Title": "Arcco Pricing",
@@ -40,52 +42,67 @@ async def _refresh_price_cache() -> None:
         headers["Authorization"] = f"Bearer {config.openrouter_api_key}"
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.get("https://openrouter.ai/api/v1/models", headers=headers)
             if resp.status_code != 200:
-                logger.warning("[PRICING] OpenRouter retornou %s ao buscar preços", resp.status_code)
+                logger.warning(
+                    "[PRICING] OpenRouter retornou %s. Aplicando negative cache.",
+                    resp.status_code,
+                )
+                _mark_refresh_failure()
                 return
             data = resp.json()
     except Exception as exc:
-        logger.warning("[PRICING] Falha ao buscar preços do OpenRouter: %s", exc)
+        logger.warning(
+            "[PRICING] Falha de rede ao buscar preços: %s. Aplicando negative cache.",
+            exc,
+        )
+        _mark_refresh_failure()
+        return
+
+    if not isinstance(data, dict):
+        logger.warning("[PRICING] Payload inválido da OpenRouter. Aplicando negative cache.")
+        _mark_refresh_failure()
         return
 
     new_cache: dict[str, tuple[float, float]] = {}
-    for m in data.get("data", []):
-        model_id = m.get("id", "")
+    for model_data in data.get("data", []):
+        model_id = model_data.get("id", "")
         if not model_id:
             continue
-        pricing = m.get("pricing", {})
+
+        pricing = model_data.get("pricing", {})
         try:
-            # OpenRouter retorna preço por token; convertemos para por 1M tokens
-            input_1m  = float(pricing.get("prompt", 0) or 0) * 1_000_000
+            input_1m = float(pricing.get("prompt", 0) or 0) * 1_000_000
             output_1m = float(pricing.get("completion", 0) or 0) * 1_000_000
         except (ValueError, TypeError):
             input_1m = output_1m = 0.0
+
         new_cache[model_id] = (input_1m, output_1m)
 
     if new_cache:
         _price_cache = new_cache
         _price_cache_ts = time.time()
-        logger.info("[PRICING] Cache de preços atualizado: %d modelos", len(new_cache))
+        logger.info("[PRICING] Cache de preços atualizada: %d modelos carregados", len(new_cache))
+        return
+
+    logger.warning("[PRICING] OpenRouter não retornou modelos válidos. Aplicando negative cache.")
+    _mark_refresh_failure()
 
 
 async def get_model_prices(model_id: str) -> tuple[float, float]:
-    """
-    Retorna (input_price_per_1m, output_price_per_1m) em USD para o modelo.
-    Atualiza cache se expirado. Retorna fallback se modelo não encontrado.
-    """
-    global _price_cache_ts
-
+    """Retorna preços em USD e lida com concorrência assíncrona dos chats."""
     now = time.time()
-    if not _price_cache or (now - _price_cache_ts) >= _PRICE_CACHE_TTL:
-        await _refresh_price_cache()
 
-    # Busca exata
+    if not _price_cache or (now - _price_cache_ts) >= _PRICE_CACHE_TTL:
+        async with _price_lock:
+            now = time.time()
+            if not _price_cache or (now - _price_cache_ts) >= _PRICE_CACHE_TTL:
+                await _refresh_price_cache()
+
     if model_id in _price_cache:
         return _price_cache[model_id]
 
-    # Busca parcial (ex: "claude-3.5-sonnet" encontra "anthropic/claude-3.5-sonnet")
     for cached_id, prices in _price_cache.items():
         if model_id in cached_id or cached_id in model_id:
             return prices
@@ -95,15 +112,6 @@ async def get_model_prices(model_id: str) -> tuple[float, float]:
 
 
 async def estimate_cost(model_id: str, prompt_tokens: int, completion_tokens: int) -> float:
-    """
-    Calcula custo estimado em USD.
-
-    Fórmula:
-        custo = (prompt_tokens * input_per_1m / 1_000_000)
-              + (completion_tokens * output_per_1m / 1_000_000)
-
-    Retorna 0.0 se tokens forem zero.
-    """
     if not prompt_tokens and not completion_tokens:
         return 0.0
 
@@ -113,11 +121,8 @@ async def estimate_cost(model_id: str, prompt_tokens: int, completion_tokens: in
 
 
 def format_cost_usd(cost: float) -> str:
-    """Formata custo em USD para exibição legível. Ex: $0.0135"""
     if cost == 0:
         return "$0.00"
     if cost < 0.0001:
         return f"${cost:.6f}"
-    if cost < 0.01:
-        return f"${cost:.4f}"
     return f"${cost:.4f}"

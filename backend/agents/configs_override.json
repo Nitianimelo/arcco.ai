@@ -126,7 +126,7 @@
         "type": "function",
         "function": {
           "name": "ask_browser",
-          "description": "Abre um navegador headless para acessar, interagir e extrair conteÃºdo de um site. Suporta aÃ§Ãµes como clicar em botÃµes, rolar a pÃ¡gina, digitar texto, e executar JavaScript. Use quando precisar ler artigos completos, interagir com sites dinÃ¢micos (SPAs), passar por carrossÃ©is, aceitar cookies, ou extrair dados de URLs que exigem renderizaÃ§Ã£o JavaScript.\n\nTIPOS DE ACTIONS SUPORTADAS (no campo 'actions'):\n- {\"type\": \"click\", \"selector\": \"CSS_SELECTOR\"} â€” Clica num elemento\n- {\"type\": \"scroll\", \"direction\": \"down\", \"amount\": 500} â€” Rola a pÃ¡gina\n- {\"type\": \"wait\", \"milliseconds\": 2000} â€” Espera X ms\n- {\"type\": \"write\", \"text\": \"...\", \"selector\": \"CSS_SELECTOR\"} â€” Digita texto\n- {\"type\": \"press\", \"key\": \"Enter\"} â€” Pressiona tecla\n- {\"type\": \"screenshot\"} â€” Tira print da pÃ¡gina\n- {\"type\": \"execute_javascript\", \"script\": \"...\"} â€” Executa JS customizado\n- {\"type\": \"scrape\"} â€” Extrai o conteÃºdo apÃ³s as aÃ§Ãµes\n\nEXEMPLO de carrossel: actions=[{\"type\":\"click\",\"selector\":\".next-slide\"},{\"type\":\"wait\",\"milliseconds\":1000},{\"type\":\"scrape\"}]",
+          "description": "Abre um navegador remoto no Browserbase para acessar, interagir e extrair conteúdo de sites dinâmicos. O fluxo é iterativo: o backend observa a página atual, decide uma micro-ação, executa e observa novamente até concluir a tarefa. Use quando o site exige JavaScript, SPA, cliques, scroll, formulários ou leitura de conteúdo que ask_web_search não consegue.\n\nPasse o objetivo principal no campo 'goal'. O campo 'actions' é opcional e serve só como pista inicial, não como roteiro cego. Pop-ups e cookies comuns são tratados automaticamente. Se houver captcha ou verificação humana, a sessão será pausada para o usuário resolver e depois retomada.\n\nMICRO-AÇÕES SUPORTADAS:\n- {\"type\": \"click\", \"selector\": \"text=Aceitar\"}\n- {\"type\": \"scroll\", \"direction\": \"down\", \"amount\": 500}\n- {\"type\": \"wait\", \"milliseconds\": 2000}\n- {\"type\": \"write\", \"text\": \"...\", \"selector\": \"#email\"}\n- {\"type\": \"press\", \"key\": \"Enter\"}\n- {\"type\": \"screenshot\"}\n- {\"type\": \"execute_javascript\", \"script\": \"...\"}\n- {\"type\": \"scrape\"}",
           "parameters": {
             "type": "object",
             "properties": {
@@ -134,9 +134,13 @@
                 "type": "string",
                 "description": "URL completa do site a ser acessado (ex: https://example.com/artigo)"
               },
+              "goal": {
+                "type": "string",
+                "description": "Objetivo principal da navegação. Descreva o que deve ser concluído ou extraído."
+              },
               "actions": {
                 "type": "array",
-                "description": "Lista de aÃ§Ãµes a executar no browser ANTES de extrair o conteÃºdo. Cada aÃ§Ã£o Ã© um objeto com 'type' obrigatÃ³rio. Tipos: click, scroll, wait, write, press, screenshot, execute_javascript, scrape.",
+                "description": "Lista opcional de pistas iniciais. O sistema não executa mais estas ações cegamente como um bloco fechado.",
                 "items": {
                   "type": "object",
                   "properties": {
@@ -213,6 +217,10 @@
                   "type": "string"
                 },
                 "description": "Tags HTML para excluir da extraÃ§Ã£o (ex: ['nav', 'footer', 'aside']). Remove ruÃ­do."
+              },
+              "resume_token": {
+                "type": "string",
+                "description": "Token interno de retomada de uma sessão pausada do navegador."
               }
             },
             "required": [

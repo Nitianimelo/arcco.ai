@@ -3,6 +3,7 @@ Planner module to break down complex tasks into a deterministic JSON structure.
 Uses Pydantic and OpenRouter Structured Outputs.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -13,6 +14,9 @@ from backend.core.llm import call_openrouter
 from backend.agents import registry
 
 logger = logging.getLogger(__name__)
+
+_PLANNER_TIMEOUT_SECONDS = 35.0
+_PLANNER_FALLBACK_MODEL = "openai/gpt-4o-mini"
 
 # Structured Output Schema for the Planner
 class PlanStep(BaseModel):
@@ -45,6 +49,54 @@ class PlannerOutput(BaseModel):
         description="Clarification questions for the user. Max 3. Only when needs_clarification is true."
     )
 
+
+def _fallback_direct_answer(user_intent: str) -> PlannerOutput:
+    return PlannerOutput(
+        is_complex=False,
+        acknowledgment="Ok, vou responder diretamente.",
+        steps=[PlanStep(step=1, action="direct_answer", detail=user_intent, is_terminal=True)],
+    )
+
+
+async def _request_plan(messages: list[dict], model: str) -> PlannerOutput:
+    data = await asyncio.wait_for(
+        call_openrouter(
+            messages=messages,
+            model=model,
+            max_tokens=1500,
+            temperature=0.1,
+        ),
+        timeout=_PLANNER_TIMEOUT_SECONDS,
+    )
+
+    raw_content = data["choices"][0]["message"]["content"].strip()
+    match = re.search(r"\{.*\}", raw_content, re.DOTALL)
+    if match:
+        raw_content = match.group(0)
+
+    parsed_json = json.loads(raw_content)
+    plan = PlannerOutput.model_validate(parsed_json)
+
+    if not plan.steps:
+        if plan.is_complex:
+            raise ValueError("Planner retornou plano complexo sem steps.")
+        return _fallback_direct_answer(messages[-1]["content"])
+
+    plan.steps = [
+        step.model_copy(
+            update={
+                "step": index,
+                "is_terminal": step.is_terminal or (
+                    index == len(plan.steps)
+                    and len(plan.steps) == 1
+                    and step.action == "direct_answer"
+                ),
+            }
+        )
+        for index, step in enumerate(plan.steps, start=1)
+    ]
+    return plan
+
 async def generate_plan(user_intent: str, model: str) -> PlannerOutput:
     """
     Calls the LLM with structured outputs to generate a deterministic JSON plan.
@@ -75,29 +127,28 @@ async def generate_plan(user_intent: str, model: str) -> PlannerOutput:
                 f"{_skills_desc}"
             )
 
-        # Let's use call_openrouter which calls OpenRouter API
-        data = await call_openrouter(
-            messages=messages,
-            model=model,
-            max_tokens=1500,
-            temperature=0.1,  # Low temp for deterministic outputs
-        )
-        
-        raw_content = data["choices"][0]["message"]["content"].strip()
+        candidate_models = [model]
+        if model != _PLANNER_FALLBACK_MODEL:
+            candidate_models.append(_PLANNER_FALLBACK_MODEL)
 
-        # Extrai de forma robusta o primeiro bloco JSON encontrado,
-        # ignorando qualquer texto introdutório ou markdown que o LLM adicione antes/depois
-        match = re.search(r'\{.*\}', raw_content, re.DOTALL)
-        if match:
-            raw_content = match.group(0)
+        last_error: Exception | None = None
+        for candidate_model in candidate_models:
+            try:
+                return await _request_plan(messages, candidate_model)
+            except asyncio.TimeoutError as exc:
+                last_error = exc
+                logger.warning(
+                    "[PLANNER] Timeout de %ss no modelo '%s'.",
+                    int(_PLANNER_TIMEOUT_SECONDS),
+                    candidate_model,
+                )
+            except Exception as exc:
+                last_error = exc
+                logger.warning("[PLANNER] Falha ao gerar plano com '%s': %s", candidate_model, exc)
 
-        parsed_json = json.loads(raw_content)
-        return PlannerOutput.model_validate(parsed_json)
-        
+        logger.error("[PLANNER] Fallback para resposta direta após falhas: %s", last_error)
+        return _fallback_direct_answer(user_intent)
+
     except Exception as e:
-        logger.error(f"[PLANNER] Falha ao gerar plano: {e}")
-        # Fallback to single direct answer step on failure
-        return PlannerOutput(
-            is_complex=False,
-            steps=[PlanStep(step=1, action="direct_answer", detail=user_intent)]
-        )
+        logger.error(f"[PLANNER] Falha ao preparar prompt do planner: {e}")
+        return _fallback_direct_answer(user_intent)

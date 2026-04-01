@@ -361,7 +361,9 @@ async def stream_openrouter(
     if tools:
         payload["tools"] = tools
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    stream_timeout = httpx.Timeout(connect=20.0, read=300.0, write=60.0, pool=60.0)
+
+    async with httpx.AsyncClient(timeout=stream_timeout) as client:
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",

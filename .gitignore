@@ -43,3 +43,11 @@ __pycache__/
 venv/
 .venv/
 .pytest_cache/
+.playwright-cli/
+admin-after-login.yml
+admin-login-filled.yml
+chat-home.yaml
+user-after-login.yaml
+user-chat-after-send.yaml
+user-login.yaml
+userflow2-after-login.yaml

@@ -136,6 +136,8 @@ interface ChatConfigRow {
   slot_number: number;
   model_name: string;
   openrouter_model_id: string;
+  fast_model_id?: string;
+  fast_system_prompt?: string;
   system_prompt?: string;
   is_active: boolean;
   created_at?: string;
@@ -567,6 +569,8 @@ interface ChatConfigCardProps {
 const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loadingModels, onSave, onDelete }) => {
   const [modelName, setModelName] = useState(config.model_name);
   const [modelId, setModelId] = useState(config.openrouter_model_id);
+  const [fastModelId, setFastModelId] = useState(config.fast_model_id || '');
+  const [fastSystemPrompt, setFastSystemPrompt] = useState(config.fast_system_prompt || '');
   const [systemPrompt, setSystemPrompt] = useState(config.system_prompt || '');
   const [isActive, setIsActive] = useState(config.is_active);
   const [saving, setSaving] = useState(false);
@@ -574,10 +578,13 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
   const [saved, setSaved] = useState(false);
   const [actionError, setActionError] = useState('');
   const selectedModel = models.find(m => m.id === modelId);
+  const selectedFastModel = models.find(m => m.id === fastModelId);
 
   useEffect(() => {
     setModelName(config.model_name);
     setModelId(config.openrouter_model_id);
+    setFastModelId(config.fast_model_id || '');
+    setFastSystemPrompt(config.fast_system_prompt || '');
     setSystemPrompt(config.system_prompt || '');
     setIsActive(config.is_active);
     setActionError('');
@@ -592,6 +599,8 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
   const isDirty =
     modelName !== config.model_name ||
     modelId !== config.openrouter_model_id ||
+    fastModelId !== (config.fast_model_id || '') ||
+    fastSystemPrompt !== (config.fast_system_prompt || '') ||
     systemPrompt !== (config.system_prompt || '') ||
     isActive !== config.is_active;
 
@@ -603,6 +612,8 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
         ...config,
         model_name: modelName || selectedModel?.name || modelId || `Chat Slot ${config.slot_number}`,
         openrouter_model_id: modelId,
+        fast_model_id: fastModelId || '',
+        fast_system_prompt: fastSystemPrompt,
         system_prompt: systemPrompt,
         is_active: isActive,
       });
@@ -658,7 +669,7 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
         </div>
         <div>
           <label className="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">
-            Modelo OpenRouter
+            Modelo 2 · Especialista
             {selectedModel && (
               <span className="ml-2 font-normal normal-case text-neutral-600">
                 ctx: {(selectedModel.context_length / 1000).toFixed(0)}k tokens
@@ -672,11 +683,44 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
             onChange={setModelId}
           />
         </div>
+        <div className="col-span-2">
+          <label className="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">
+            Modelo 1 · Roteador Leve
+            <span className="ml-2 font-normal normal-case text-neutral-600">opcional — recebe memória e preferências, responde o simples e encaminha briefs curtos para o Modelo 2 quando a tarefa for complexa</span>
+          </label>
+          <ModelDropdown
+            value={fastModelId}
+            models={[{ id: '', name: '— Desativado (usar só o Especialista) —', context_length: 0, pricing: { prompt_1m: 0, completion_1m: 0 } }, ...models]}
+            loadingModels={loadingModels}
+            onChange={setFastModelId}
+          />
+          {selectedFastModel && (
+            <p className="mt-1 text-[11px] text-neutral-600">
+              In: {fmtPrice(selectedFastModel.pricing.prompt_1m)}/1M · Out: {fmtPrice(selectedFastModel.pricing.completion_1m)}/1M · ctx: {selectedFastModel.context_length.toLocaleString('pt-BR')} tokens
+            </p>
+          )}
+        </div>
       </div>
 
-      <div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">
+            Prompt · Modelo 1
+            <span className="ml-2 normal-case font-normal text-neutral-700">{fastSystemPrompt.length} chars</span>
+          </label>
+          <textarea
+            value={fastSystemPrompt}
+            onChange={e => setFastSystemPrompt(e.target.value)}
+            rows={10}
+            className="w-full bg-[#1a1a1a] border border-neutral-800 text-neutral-200 text-xs font-mono rounded-lg px-4 py-3 outline-none focus:border-indigo-500/50 transition-colors resize-y leading-relaxed"
+            spellCheck={false}
+            placeholder="Prompt do roteador leve. Se vazio, reutiliza o prompt do Modelo 2."
+          />
+        </div>
+
+        <div>
         <label className="block text-xs font-medium text-neutral-500 uppercase tracking-wider mb-1.5">
-          System Prompt
+          Prompt · Modelo 2
           <span className="ml-2 normal-case font-normal text-neutral-700">{systemPrompt.length} chars</span>
         </label>
         <textarea
@@ -686,6 +730,7 @@ const ChatConfigCard: React.FC<ChatConfigCardProps> = ({ config, models, loading
           className="w-full bg-[#1a1a1a] border border-neutral-800 text-neutral-200 text-xs font-mono rounded-lg px-4 py-3 outline-none focus:border-indigo-500/50 transition-colors resize-y leading-relaxed"
           spellCheck={false}
         />
+        </div>
       </div>
 
       {selectedModel && (
@@ -1524,7 +1569,7 @@ export const AdminPage: React.FC = () => {
         {!loading && activeTab === 'usuarios' && (
           <AdminUsersTab
             users={users}
-            plans={PLANS}
+            plans={[...PLANS]}
             planColors={PLAN_COLORS}
             savingPlan={savingPlan}
             savedPlan={savedPlan}
@@ -1581,7 +1626,7 @@ export const AdminPage: React.FC = () => {
             <div className="flex items-center justify-between mb-2">
               <div>
                 <h2 className="text-sm font-semibold text-white">Slots do Chat Normal</h2>
-                <p className="text-xs text-neutral-500 mt-0.5">Crie modelos do chat normal e selecione qualquer modelo do OpenRouter com preco e contexto.</p>
+                <p className="text-xs text-neutral-500 mt-0.5">Cada slot pode usar um roteador leve opcional e um especialista pesado. O nome exibido ao usuário continua sendo o nome do slot.</p>
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -1745,7 +1790,9 @@ export const AdminPage: React.FC = () => {
                 <p className="text-xs text-neutral-500 mt-0.5">Atualização automática a cada 5 segundos. Clique em uma execução para ver todos os agentes e eventos.</p>
               </div>
               <button
-                onClick={fetchExecutions}
+                onClick={() => {
+                  void fetchExecutions();
+                }}
                 disabled={executionsLoading}
                 className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-neutral-900 hover:bg-neutral-800 text-neutral-400 text-xs transition-colors border border-neutral-800 disabled:opacity-50"
               >

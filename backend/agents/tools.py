@@ -540,15 +540,14 @@ SUPERVISOR_TOOLS = [
         "function": {
             "name": "ask_browser",
             "description": (
-                "Abre um navegador headless para acessar, interagir e extrair conteúdo de sites dinâmicos. "
-                "Use quando o site exige JavaScript para renderizar (SPAs), login, cliques, scroll, "
-                "aceitar cookies, preencher campos ou extrair dados que ask_web_search não consegue.\n\n"
-                "REGRA DE AUTONOMIA: agrupe TODAS as ações necessárias no array 'actions' de UMA ÚNICA chamada. "
-                "Nunca crie chamadas separadas para ações sequenciais do mesmo site.\n\n"
-                "SELETORES: quando não souber o CSS exato, prefira text=\"texto visível\" — "
-                "localiza pelo texto do botão e é mais robusto que IDs gerados dinamicamente.\n\n"
-                "AÇÃO SCRAPE: sempre inclua {\"type\": \"scrape\"} como última action se quiser extrair conteúdo.\n\n"
-                "TIPOS DE ACTIONS SUPORTADAS:\n"
+                "Abre um navegador remoto no Browserbase para acessar, interagir e extrair conteúdo de sites dinâmicos. "
+                "Use quando o site exige JavaScript, SPA, login, cliques, scroll, formulários ou leitura de conteúdo que ask_web_search não consegue.\n\n"
+                "O comportamento agora é ITERATIVO: o backend observa o estado atual da página, decide UMA micro-ação, executa, observa de novo e repete até concluir o objetivo. "
+                "Não trate o campo 'actions' como roteiro cego obrigatório.\n\n"
+                "CAMPO PRINCIPAL: passe o objetivo real no campo 'goal'. O sistema usa esse objetivo para dirigir a navegação.\n\n"
+                "AUTO-HEALING: pop-ups simples, banners de cookies e overlays comuns são tratados automaticamente.\n\n"
+                "HANDOFF HUMANO: se houver captcha, verificação humana ou bloqueio visual, a sessão será pausada para o usuário resolver e depois retomada da mesma página.\n\n"
+                "MICRO-AÇÕES SUPORTADAS:\n"
                 "- {\"type\": \"click\", \"selector\": \"text=Aceitar\"} — clica num elemento\n"
                 "- {\"type\": \"scroll\", \"direction\": \"down\", \"amount\": 500} — rola a página\n"
                 "- {\"type\": \"wait\", \"milliseconds\": 2000} — espera X ms\n"
@@ -556,22 +555,18 @@ SUPERVISOR_TOOLS = [
                 "- {\"type\": \"press\", \"key\": \"Enter\"} — pressiona tecla\n"
                 "- {\"type\": \"screenshot\"} — tira print da página\n"
                 "- {\"type\": \"execute_javascript\", \"script\": \"...\"} — executa JS customizado\n"
-                "- {\"type\": \"scrape\"} — extrai o conteúdo após as ações\n\n"
+                "- {\"type\": \"scrape\"} — força extração textual se fizer sentido naquele momento\n\n"
                 "ANTI-EXEMPLOS — O QUE NÃO FAZER:\n\n"
                 "ERRADO: usar ask_browser para pesquisas no Google:\n"
                 "  ask_browser(url='https://www.google.com/search?q=preço iphone')\n"
                 "CORRETO: ask_web_search(query='preço iPhone 2026 Brasil')\n\n"
-                "ERRADO: dividir a navegação de um site em múltiplas chamadas separadas:\n"
-                "  chamada 1: actions=[{click: 'Aceitar cookies'}]\n"
-                "  chamada 2: actions=[{scroll: down}]\n"
-                "  chamada 3: actions=[{scrape}]\n"
-                "CORRETO: uma chamada com actions=[{click:'Aceitar'}, {scroll: down, 1000}, {scrape}]\n\n"
+                "ERRADO: mandar 10 ações obrigatórias como se a web fosse determinística.\n"
+                "CORRETO: goal='faça login e me diga o saldo exibido', com poucas ações opcionais só como pista.\n\n"
                 "ERRADO: inventar seletores CSS desconhecidos:\n"
                 "  {\"type\": \"click\", \"selector\": \"#btn-submit-8f3a2\"}\n"
                 "CORRETO: {\"type\": \"click\", \"selector\": \"text=Enviar\"}\n\n"
-                "ERRADO: esquecer scrape quando quer extrair conteúdo:\n"
-                "  actions=[{click}, {scroll}]  — sem scrape, não retorna texto\n"
-                "CORRETO: actions=[{click}, {scroll}, {\"type\": \"scrape\"}]"
+                "ERRADO: usar ask_browser sem explicar o objetivo final.\n"
+                "CORRETO: goal='abra o site, feche o modal e extraia o título exato da oferta principal'."
             ),
             "parameters": {
                 "type": "object",
@@ -580,9 +575,13 @@ SUPERVISOR_TOOLS = [
                         "type": "string",
                         "description": "URL completa do site a ser acessado (ex: https://example.com/artigo)"
                     },
+                    "goal": {
+                        "type": "string",
+                        "description": "Objetivo claro da navegação. Descreva o que deve ser encontrado, extraído ou concluído. Este é o principal guia do modo iterativo."
+                    },
                     "actions": {
                         "type": "array",
-                        "description": "Lista de aÃ§Ãµes a executar no browser ANTES de extrair o conteÃºdo. Cada aÃ§Ã£o Ã© um objeto com 'type' obrigatÃ³rio. Tipos: click, scroll, wait, write, press, screenshot, execute_javascript, scrape.",
+                        "description": "Lista OPCIONAL de pistas iniciais de interação. O sistema não executa mais esse array cegamente como um roteiro fechado.",
                         "items": {
                             "type": "object",
                             "properties": {
@@ -641,6 +640,10 @@ SUPERVISOR_TOOLS = [
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Tags HTML para excluir da extraÃ§Ã£o (ex: ['nav', 'footer', 'aside']). Remove ruÃ­do."
+                    },
+                    "resume_token": {
+                        "type": "string",
+                        "description": "Token interno usado para retomar uma sessão pausada do navegador após handoff humano."
                     }
                 },
                 "required": [

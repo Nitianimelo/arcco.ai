@@ -9,6 +9,7 @@ Uso:
     uvicorn backend.main:app --host 0.0.0.0 --port 8001 --reload
 """
 
+import asyncio
 import os
 import logging
 from datetime import datetime
@@ -100,20 +101,27 @@ async def health():
 
 @app.on_event("startup")
 async def startup():
-    print("[ARCCO] ========== BUILD_VERSION=2.1.0-debug ==========")
-    print(f"[ARCCO] openrouter_api_key loaded: {bool(config.openrouter_api_key)}")
-    print(f"[ARCCO] e2b_api_key loaded: {bool(config.e2b_api_key)}")
-    print(f"[ARCCO] supabase_url: {config.supabase_url[:40] if config.supabase_url else 'EMPTY'}")
     logger.info("Arcco AI Backend starting...")
+
+    config.workspace_path.mkdir(parents=True, exist_ok=True)
+
+    # Carrega API keys do Supabase sem bloquear o event loop
+    await asyncio.to_thread(config._load_keys_from_supabase)
+
+    logger.info(
+        "Startup config loaded: openrouter=%s e2b=%s supabase=%s admin=%s",
+        bool(config.openrouter_api_key),
+        bool(config.e2b_api_key),
+        bool(config.supabase_url and config.supabase_key),
+        bool(config.admin_username and config.admin_password),
+    )
 
     is_valid, msg = config.validate()
     if not is_valid:
         logger.warning(f"Config warning: {msg}")
 
-    config.workspace_path.mkdir(parents=True, exist_ok=True)
-
-    # Inicializa registry de agentes (carrega defaults + overrides persistidos)
-    registry.initialize()
+    # Inicializa registry de agentes sem bloquear o event loop (inclui query Supabase)
+    await asyncio.to_thread(registry.initialize)
     logger.info("Backend ready")
 
 

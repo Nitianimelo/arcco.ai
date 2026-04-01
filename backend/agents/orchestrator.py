@@ -20,12 +20,13 @@ import asyncio
 import json
 import logging
 import re
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 from backend.core.llm import call_openrouter, stream_openrouter
 from backend.agents import registry
 from backend.agents.executor import execute_tool
 from backend.agents.tools import SUPERVISOR_TOOLS, COMPUTER_TOOLS, SPY_PAGES_TOOLS
+from backend.services.browser_service import BrowserHandoffRequired, get_paused_browser_session
 from backend.skills import loader as skills_loader
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,10 @@ logger = logging.getLogger(__name__)
 _BROWSER_TIMEOUT = 60.0   # segundos
 _SEARCH_TIMEOUT = 30.0    # segundos
 _HEARTBEAT_INTERVAL = 5.0 # segundos
+_SUPERVISOR_TIMEOUT = 35.0
+_SPECIALIST_TIMEOUT = 90.0
+_TERMINAL_TIMEOUT = 90.0
+_QA_TIMEOUT = 20.0
 
 
 async def _exec_with_heartbeat(coro, heartbeat_fn, timeout: float, interval: float = _HEARTBEAT_INTERVAL):
@@ -71,6 +76,13 @@ async def _exec_with_heartbeat(coro, heartbeat_fn, timeout: float, interval: flo
         yield {"_result": task.result()}
     except Exception as exc:
         yield {"_result": None, "_error": str(exc)}
+
+
+async def _call_openrouter_with_timeout(*, timeout: float, label: str, **kwargs) -> dict:
+    try:
+        return await asyncio.wait_for(call_openrouter(**kwargs), timeout=timeout)
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(f"{label} excedeu {int(timeout)}s.") from exc
 
 
 # ── Pre-action Acknowledgement (fallback quando o modelo não gera content) ───
@@ -142,6 +154,92 @@ def sse(event_type: str, content: str) -> str:
     return f'data: {{"type": "{event_type}", "content": {json.dumps(content)}}}\n\n'
 
 
+def _browser_handoff_payload(exc: BrowserHandoffRequired, url: str) -> dict:
+    live_url = exc.debugger_fullscreen_url or exc.debugger_url or ""
+    return {
+        "kind": "browser_handoff",
+        "message": exc.message,
+        "resume_token": exc.resume_token,
+        "action_url": live_url,
+        "action_label": "Abrir Sessão ao Vivo",
+        "questions": [
+            {
+                "type": "choice",
+                "text": (
+                    "Há um obstáculo visual no site. Abra a sessão ao vivo, resolva o desafio "
+                    "e depois clique em continuar para a automação retomar do ponto em que parou."
+                ),
+                "options": ["Já resolvi, pode continuar"],
+            }
+        ],
+        "browser_action": {
+            "status": "awaiting_user",
+            "url": url,
+            "title": exc.message[:120] if exc.message else "Aguardando ação humana",
+            "live_url": live_url,
+        },
+    }
+
+
+async def _exec_browser_with_progress(
+    func_args: dict,
+    *,
+    user_id: str | None,
+    timeout: float,
+) -> AsyncGenerator[Any, None]:
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def _on_browser_event(event: dict[str, Any]) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, event)
+
+    task = asyncio.create_task(
+        execute_tool("ask_browser", func_args, user_id=user_id, event_callback=_on_browser_event)
+    )
+    started_at = loop.time()
+    next_heartbeat_at = started_at + _HEARTBEAT_INTERVAL
+
+    while True:
+        if task.done() and queue.empty():
+            break
+
+        now = loop.time()
+        elapsed = now - started_at
+        if elapsed >= timeout:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+            yield {"_result": None, "_timeout": True, "_elapsed": elapsed}
+            return
+
+        wait_timeout = max(0.1, min(1.0, next_heartbeat_at - now))
+        try:
+            event = await asyncio.wait_for(queue.get(), timeout=wait_timeout)
+            event_type = str(event.get("type") or "")
+            if event_type == "thought":
+                content = str(event.get("content") or "").strip()
+                if content:
+                    yield sse("thought", content)
+            elif event_type == "browser_action":
+                payload = event.get("payload") or {}
+                yield sse("browser_action", json.dumps(payload))
+        except asyncio.TimeoutError:
+            now = loop.time()
+            if now >= next_heartbeat_at:
+                elapsed = now - started_at
+                yield sse("steps", f"<step>Navegador ativo — {int(elapsed)}s...</step>")
+                next_heartbeat_at = now + _HEARTBEAT_INTERVAL
+
+    try:
+        yield {"_result": await task}
+    except BrowserHandoffRequired as exc:
+        yield {"_handoff": exc}
+    except Exception as exc:
+        yield {"_result": None, "_error": str(exc)}
+
+
 def _extract_markdown_links(content: str) -> list[tuple[str, str]]:
     return _MARKDOWN_LINK_PATTERN.findall(content or "")
 
@@ -187,6 +285,145 @@ async def _stream_assistant_text(messages: list, model: str) -> AsyncGenerator[s
 
     if not accumulated:
         yield sse("chunk", "Desculpe, não consegui gerar uma resposta. Tente novamente.")
+
+
+async def _resume_browser_handoff(
+    *,
+    messages: list,
+    browser_resume_token: str,
+    user_id: str | None,
+    supervisor_prompt: str,
+    supervisor_model: str,
+    execution_id: str | None,
+    execution_logger,
+) -> AsyncGenerator[str, None]:
+    paused = get_paused_browser_session(browser_resume_token)
+    if not paused:
+        yield sse("error", "A sessão pausada do navegador expirou ou não foi encontrada.")
+        return
+
+    resume_url = str(paused.get("url") or "")
+    func_args = {
+        "url": resume_url,
+        "goal": paused.get("goal") or "",
+        "mobile": bool(paused.get("mobile", False)),
+        "include_tags": paused.get("include_tags"),
+        "exclude_tags": paused.get("exclude_tags"),
+        "resume_token": browser_resume_token,
+    }
+
+    yield sse("steps", "<step>Retomando sessão do navegador...</step>")
+    yield sse("browser_action", json.dumps({
+        "status": "navigating",
+        "url": resume_url,
+        "title": "Retomando a sessão ao vivo...",
+        "actions": [],
+    }))
+
+    browser_agent_id = None
+    if execution_logger:
+        browser_agent_id = await execution_logger.start_agent(
+            execution_id,
+            agent_key="browser",
+            agent_name="browser",
+            model=registry.get_model("planner") or supervisor_model,
+            role="tool",
+            route="browser_resume",
+            input_payload={"func_args": func_args, "resume": True},
+        )
+
+    specialist_result = None
+    handoff_exc = None
+    async for event in _exec_browser_with_progress(func_args, user_id=user_id, timeout=_BROWSER_TIMEOUT):
+        if isinstance(event, dict) and "_result" in event:
+            if event.get("_timeout"):
+                specialist_result = f"Erro: Timeout de {int(_BROWSER_TIMEOUT)}s ao retomar {resume_url}. O site pode estar lento ou inacessível."
+            elif event.get("_error"):
+                specialist_result = f"Erro ao retomar Browser Agent: {event['_error']}"
+            else:
+                specialist_result = event["_result"]
+        elif isinstance(event, dict) and "_handoff" in event:
+            handoff_exc = event["_handoff"]
+        else:
+            yield event
+
+    if handoff_exc is not None:
+        payload = _browser_handoff_payload(handoff_exc, resume_url)
+        yield sse("browser_action", json.dumps(payload["browser_action"]))
+        yield sse("needs_clarification", json.dumps(payload))
+        if execution_logger:
+            await execution_logger.log_event(
+                execution_id,
+                execution_agent_id=browser_agent_id,
+                level="warning",
+                event_type="browser_handoff_requested",
+                message=handoff_exc.message,
+                tool_name="ask_browser",
+                tool_args=func_args,
+                raw_payload=payload,
+            )
+            await execution_logger.finish_agent(
+                browser_agent_id,
+                status="awaiting_clarification",
+                output_payload={"preview": handoff_exc.message},
+                metadata={"resume_token": handoff_exc.resume_token},
+            )
+        return
+
+    if specialist_result is None:
+        specialist_result = f"Erro: browser não retornou resultado para {resume_url}."
+
+    if execution_logger:
+        await execution_logger.log_event(
+            execution_id,
+            execution_agent_id=browser_agent_id,
+            event_type="tool_result",
+            message=f"Browser retomado para {resume_url[:120]}",
+            tool_name="ask_browser",
+            tool_args=func_args,
+            tool_result=str(specialist_result)[:2000],
+        )
+        await execution_logger.finish_agent(
+            browser_agent_id,
+            status="completed" if not str(specialist_result).startswith("Erro") else "failed",
+            output_payload={"preview": str(specialist_result)[:2000]},
+            error_text=str(specialist_result) if str(specialist_result).startswith("Erro") else None,
+        )
+
+    if str(specialist_result).startswith("Erro"):
+        yield sse("browser_action", json.dumps({
+            "status": "error",
+            "url": resume_url,
+            "title": str(specialist_result)[:100],
+        }))
+        yield sse("error", str(specialist_result))
+        return
+
+    yield sse("browser_action", json.dumps({
+        "status": "done",
+        "url": resume_url,
+        "title": "Sessão retomada com sucesso",
+    }))
+    yield sse("steps", "<step>Navegação retomada — redigindo a resposta final...</step>")
+
+    response_messages = [
+        {"role": "system", "content": supervisor_prompt},
+        *messages,
+        {
+            "role": "system",
+            "content": (
+                "O navegador retomou uma sessão pausada e concluiu a coleta. "
+                "Responda ao usuário final com base nesse resultado. "
+                "Não mencione arquitetura interna nem peça para repetir a ação humana."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"Resultado do navegador retomado:\n\n{specialist_result}",
+        },
+    ]
+    async for event in _stream_assistant_text(response_messages, supervisor_model):
+        yield event
 
 
 async def _call_supervisor_for_step(
@@ -244,7 +481,9 @@ async def _call_supervisor_for_step(
         ) and "tool_choice" not in str(err)
 
     try:
-        data = await call_openrouter(
+        data = await _call_openrouter_with_timeout(
+            timeout=_SUPERVISOR_TIMEOUT,
+            label=f"Supervisor ({supervisor_model})",
             messages=_build_forced_instruction_messages(step_messages) if effective_tool_choice == "auto" else step_messages,
             model=supervisor_model,
             max_tokens=4096,
@@ -259,7 +498,9 @@ async def _call_supervisor_for_step(
                 "[ORCHESTRATOR] '%s' não suporta tool_choice forçado → fallback 'auto'.",
                 supervisor_model,
             )
-            data = await call_openrouter(
+            data = await _call_openrouter_with_timeout(
+                timeout=_SUPERVISOR_TIMEOUT,
+                label=f"Supervisor ({supervisor_model})",
                 messages=_build_forced_instruction_messages(step_messages),
                 model=supervisor_model,
                 max_tokens=4096,
@@ -288,7 +529,9 @@ async def _call_supervisor_for_step(
         retry_messages = _build_forced_instruction_messages(step_messages)
         retry_tool_choice = "auto" if not supports_forced_tool_choice(supervisor_model) else tool_choice
         try:
-            retry = await call_openrouter(
+            retry = await _call_openrouter_with_timeout(
+                timeout=_SUPERVISOR_TIMEOUT,
+                label=f"Supervisor ({supervisor_model})",
                 messages=retry_messages,
                 model=supervisor_model,
                 max_tokens=4096,
@@ -298,7 +541,9 @@ async def _call_supervisor_for_step(
         except Exception as e:
             if _is_tool_choice_error(e):
                 mark_no_forced_tool_choice(supervisor_model)
-                retry = await call_openrouter(
+                retry = await _call_openrouter_with_timeout(
+                    timeout=_SUPERVISOR_TIMEOUT,
+                    label=f"Supervisor ({supervisor_model})",
                     messages=retry_messages,
                     model=supervisor_model,
                     max_tokens=4096,
@@ -350,7 +595,9 @@ async def _qa_review(
             f"Tipo esperado: {route}\n\n"
             f"Resposta do especialista:\n{specialist_response[:3000]}"
         )
-        data = await call_openrouter(
+        data = await _call_openrouter_with_timeout(
+            timeout=_QA_TIMEOUT,
+            label=f"QA ({route})",
             messages=[
                 {"role": "system", "content": registry.get_prompt("qa")},
                 {"role": "user", "content": review_prompt},
@@ -424,6 +671,7 @@ async def _run_specialist_with_tools(
     model: str,
     system_prompt: str,
     tools: list,
+    user_id: str | None = None,
     max_iterations: int = 5,
     thought_log: list | None = None,
 ) -> str:
@@ -434,7 +682,9 @@ async def _run_specialist_with_tools(
     current = [{"role": "system", "content": system_prompt}, *messages]
 
     for _ in range(max_iterations):
-        data = await call_openrouter(
+        data = await _call_openrouter_with_timeout(
+            timeout=_SPECIALIST_TIMEOUT,
+            label=f"Especialista ({model})",
             messages=current,
             model=model,
             max_tokens=4096,
@@ -475,6 +725,7 @@ async def _run_terminal_one_shot(
     model: str,
     system_prompt: str,
     tools: list,
+    user_id: str | None = None,
 ) -> str:
     """
     Agente terminal com suporte a UMA chamada de ferramenta.
@@ -482,7 +733,9 @@ async def _run_terminal_one_shot(
     """
     current = [{"role": "system", "content": system_prompt}, *messages]
 
-    data = await call_openrouter(
+    data = await _call_openrouter_with_timeout(
+        timeout=_TERMINAL_TIMEOUT,
+        label=f"Terminal ({model})",
         messages=current,
         model=model,
         max_tokens=6000,
@@ -507,7 +760,12 @@ async def _run_terminal_one_shot(
 
 
 async def _run_specialist_with_qa(
-    route: str, user_intent: str, temp_messages: list, model: str, custom_step_msg: str
+    route: str,
+    user_intent: str,
+    temp_messages: list,
+    model: str,
+    custom_step_msg: str,
+    user_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Executa o Especialista + QA + Validação Anti-Alucinação.
@@ -530,6 +788,7 @@ async def _run_specialist_with_qa(
                 registry.get_model(route) or model,
                 registry.get_prompt(route),
                 registry.get_tools(route),
+                user_id=user_id,
                 thought_log=thought_log,
             )
         except Exception as e:
@@ -570,6 +829,7 @@ async def orchestrate_and_stream(
     model: str,
     session_id: str | None = None,
     user_id: str | None = None,
+    browser_resume_token: str | None = None,
     computer_enabled: bool = False,
     spy_pages_enabled: bool = False,
     execution_id: str | None = None,
@@ -633,6 +893,19 @@ async def orchestrate_and_stream(
         )
 
     planner_model = registry.get_model("planner") or supervisor_model
+
+    if browser_resume_token:
+        async for event in _resume_browser_handoff(
+            messages=messages,
+            browser_resume_token=browser_resume_token,
+            user_id=user_id,
+            supervisor_prompt=supervisor_prompt,
+            supervisor_model=supervisor_model,
+            execution_id=execution_id,
+            execution_logger=execution_logger,
+        ):
+            yield event
+        return
 
     # ── Step inicial contextual — responde imediatamente ao usuário ──
     _short_intent = user_intent[:80].rstrip("., !?")
@@ -941,33 +1214,34 @@ async def orchestrate_and_stream(
                                     tool_args=func_args,
                                     tool_result=str(specialist_result)[:2000],
                                 )
+                            if specialist_result.startswith("Erro"):
+                                if execution_logger:
+                                    await execution_logger.finish_agent(
+                                        tool_agent_id,
+                                        status="failed",
+                                        output_payload={"preview": specialist_result[:2000]},
+                                        error_text=specialist_result,
+                                    )
+                                yield sse("error", specialist_result)
+                                return
                             accumulated_context += f"\n[Passo {step.step} - python]: {specialist_result}"
                             yield sse("thought", f"Resultado do código Python: {specialist_result[:120]}...")
 
                         elif route == "browser":
                             url = func_args.get("url", "")
-                            raw_actions = func_args.get("actions", [])
-
-                            action_types = [a.get("type", "?") for a in raw_actions if isinstance(a, dict)]
                             yield sse("browser_action", json.dumps({
                                 "status": "navigating",
                                 "url": url,
                                 "title": f"Acessando {url[:60]}...",
-                                "actions": action_types
+                                "actions": [a.get("type", "?") for a in func_args.get("actions", []) if isinstance(a, dict)]
                             }))
 
                             yield sse("thought", f"Iniciando motor de navegação headless em {url}...")
-                            if action_types:
-                                yield sse("thought", f"Aplicando ações de interação na página: {', '.join(action_types)}")
-                            else:
-                                yield sse("thought", "Lendo a estrutura do DOM e extraindo o conteúdo principal...")
+                            yield sse("thought", "Inspecionando a página e decidindo uma ação por vez...")
 
                             specialist_result = None
-                            async for event in _exec_with_heartbeat(
-                                execute_tool("ask_browser", func_args, user_id=user_id),
-                                lambda elapsed: sse("steps", f"<step>Navegador ativo — {int(elapsed)}s...</step>"),
-                                timeout=_BROWSER_TIMEOUT,
-                            ):
+                            handoff_exc = None
+                            async for event in _exec_browser_with_progress(func_args, user_id=user_id, timeout=_BROWSER_TIMEOUT):
                                 if isinstance(event, dict) and "_result" in event:
                                     if event.get("_timeout"):
                                         specialist_result = f"Erro: Timeout de {int(_BROWSER_TIMEOUT)}s ao acessar {url}. O site pode estar lento ou inacessível."
@@ -977,8 +1251,33 @@ async def orchestrate_and_stream(
                                         logger.error(f"[ORCHESTRATOR] Browser error (planner): {event['_error']}")
                                     else:
                                         specialist_result = event["_result"]
+                                elif isinstance(event, dict) and "_handoff" in event:
+                                    handoff_exc = event["_handoff"]
                                 else:
-                                    yield event  # heartbeat SSE em tempo real
+                                    yield event
+                            if handoff_exc is not None:
+                                payload = _browser_handoff_payload(handoff_exc, url)
+                                yield sse("browser_action", json.dumps(payload["browser_action"]))
+                                yield sse("needs_clarification", json.dumps(payload))
+                                if execution_logger:
+                                    await execution_logger.log_event(
+                                        execution_id,
+                                        execution_agent_id=tool_agent_id,
+                                        level="warning",
+                                        event_type="browser_handoff_requested",
+                                        message=handoff_exc.message,
+                                        tool_name="ask_browser",
+                                        tool_args=func_args,
+                                        raw_payload=payload,
+                                    )
+                                    await execution_logger.finish_agent(
+                                        tool_agent_id,
+                                        status="awaiting_clarification",
+                                        output_payload={"preview": handoff_exc.message},
+                                        metadata={"resume_token": handoff_exc.resume_token},
+                                    )
+                                    await execution_logger.finish_execution(execution_id, status="awaiting_clarification")
+                                return
                             if specialist_result is None:
                                 specialist_result = f"Erro: browser não retornou resultado para {url}."
                             if execution_logger:
@@ -1068,7 +1367,13 @@ async def orchestrate_and_stream(
                             route_model = registry.get_model(route) or supervisor_model
                             route_tools = registry.get_tools(route)
 
-                            final_result = await _run_terminal_one_shot(temp_msgs, route_model, route_prompt, route_tools)
+                            final_result = await _run_terminal_one_shot(
+                                temp_msgs,
+                                route_model,
+                                route_prompt,
+                                route_tools,
+                                user_id=user_id,
+                            )
                             if execution_logger:
                                 await execution_logger.log_event(
                                     execution_id,
@@ -1159,7 +1464,14 @@ async def orchestrate_and_stream(
                             )
                             temp_msgs = recent_context + [{"role": "user", "content": content}]
                             specialist_result = ""
-                            async for event in _run_specialist_with_qa(route, user_intent, temp_msgs, supervisor_model, f"Modificando arquivo (Passo {step.step})..."):
+                            async for event in _run_specialist_with_qa(
+                                route,
+                                user_intent,
+                                temp_msgs,
+                                supervisor_model,
+                                f"Modificando arquivo (Passo {step.step})...",
+                                user_id=user_id,
+                            ):
                                 if event.startswith("RESULT:"):
                                     specialist_result = event[7:]
                                 else:
@@ -1409,6 +1721,16 @@ async def orchestrate_and_stream(
                         "content": specialist_result,
                     })
                     yield sse("steps", "<step>Leitura do anexo concluída — integrando contexto...</step>")
+                    if execution_logger:
+                        await execution_logger.finish_agent(
+                            react_agent_id,
+                            status="failed" if specialist_result.startswith("Erro") else "completed",
+                            output_payload={"preview": specialist_result[:2000]},
+                            error_text=specialist_result if specialist_result.startswith("Erro") else None,
+                        )
+                    if specialist_result.startswith("Erro"):
+                        yield sse("error", specialist_result)
+                        return
 
                 elif route == "web_search":
                     query = func_args.get("query", "")
@@ -1504,6 +1826,16 @@ async def orchestrate_and_stream(
                             tool_args=func_args,
                             tool_result=str(specialist_result)[:2000],
                         )
+                    if specialist_result.startswith("Erro"):
+                        if execution_logger:
+                            await execution_logger.finish_agent(
+                                react_agent_id,
+                                status="failed",
+                                output_payload={"preview": specialist_result[:2000]},
+                                error_text=specialist_result,
+                            )
+                        yield sse("error", specialist_result)
+                        return
                     current_messages.append({
                         "role": "tool",
                         "tool_call_id": tool["id"],
@@ -1521,28 +1853,17 @@ async def orchestrate_and_stream(
                 # ── ROTA: Browser (direto, sem sub-agente, sem QA) ──
                 elif route == "browser":
                     url = func_args.get("url", "")
-                    raw_actions = func_args.get("actions", [])
-
-                    step_message = f"Abrindo navegador e extraindo dados de {url[:40]}..."
-                    if raw_actions:
-                        action_types = [a.get("type", "?") for a in raw_actions if isinstance(a, dict)]
-                        action_label = ", ".join(action_types)
-                        step_message = f"Navegando em {url[:40]}... (ações: {action_label})"
-
-                    yield sse("steps", f"<step>{step_message}</step>")
+                    yield sse("steps", f"<step>Navegando em {url[:40]}... (modo iterativo)</step>")
                     yield sse("browser_action", json.dumps({
                         "status": "navigating",
                         "url": url,
                         "title": f"Acessando {url[:60]}...",
-                        "actions": [a.get("type", "?") for a in raw_actions] if raw_actions else []
+                        "actions": [a.get("type", "?") for a in func_args.get("actions", []) if isinstance(a, dict)]
                     }))
 
                     specialist_result = None
-                    async for event in _exec_with_heartbeat(
-                        execute_tool("ask_browser", func_args, user_id=user_id),
-                        lambda elapsed: sse("steps", f"<step>Navegador ativo — {int(elapsed)}s...</step>"),
-                        timeout=_BROWSER_TIMEOUT,
-                    ):
+                    handoff_exc = None
+                    async for event in _exec_browser_with_progress(func_args, user_id=user_id, timeout=_BROWSER_TIMEOUT):
                         if isinstance(event, dict) and "_result" in event:
                             if event.get("_timeout"):
                                 specialist_result = f"Erro: Timeout de {int(_BROWSER_TIMEOUT)}s ao acessar {url}. O site pode estar lento ou inacessível."
@@ -1552,8 +1873,33 @@ async def orchestrate_and_stream(
                                 logger.error(f"[ORCHESTRATOR] Browser error (react): {event['_error']}")
                             else:
                                 specialist_result = event["_result"]
+                        elif isinstance(event, dict) and "_handoff" in event:
+                            handoff_exc = event["_handoff"]
                         else:
-                            yield event  # heartbeat SSE em tempo real
+                            yield event
+                    if handoff_exc is not None:
+                        payload = _browser_handoff_payload(handoff_exc, url)
+                        yield sse("browser_action", json.dumps(payload["browser_action"]))
+                        yield sse("needs_clarification", json.dumps(payload))
+                        if execution_logger:
+                            await execution_logger.log_event(
+                                execution_id,
+                                execution_agent_id=react_agent_id,
+                                level="warning",
+                                event_type="browser_handoff_requested",
+                                message=handoff_exc.message,
+                                tool_name="ask_browser",
+                                tool_args=func_args,
+                                raw_payload=payload,
+                            )
+                            await execution_logger.finish_agent(
+                                react_agent_id,
+                                status="awaiting_clarification",
+                                output_payload={"preview": handoff_exc.message},
+                                metadata={"resume_token": handoff_exc.resume_token},
+                            )
+                            await execution_logger.finish_execution(execution_id, status="awaiting_clarification")
+                        return
                     if specialist_result is None:
                         specialist_result = f"Erro: browser não retornou resultado para {url}."
                     if execution_logger:
@@ -1736,7 +2082,11 @@ async def orchestrate_and_stream(
                     route_tools = registry.get_tools(route)
 
                     final_result = await _run_terminal_one_shot(
-                        temp_msgs, route_model, route_prompt, route_tools
+                        temp_msgs,
+                        route_model,
+                        route_prompt,
+                        route_tools,
+                        user_id=user_id,
                     )
                     if execution_logger:
                         await execution_logger.log_event(
@@ -1791,7 +2141,14 @@ async def orchestrate_and_stream(
                     temp_msgs = recent_context + [{"role": "user", "content": content}]
 
                     specialist_result = ""
-                    async for event in _run_specialist_with_qa(route, user_intent, temp_msgs, model, step_message):
+                    async for event in _run_specialist_with_qa(
+                        route,
+                        user_intent,
+                        temp_msgs,
+                        model,
+                        step_message,
+                        user_id=user_id,
+                    ):
                         if event.startswith("RESULT:"):
                             specialist_result = event[7:]
                         else:

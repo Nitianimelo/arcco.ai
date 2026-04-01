@@ -2,9 +2,10 @@ import React, { useEffect, useState, useRef } from 'react';
 import { Globe, Loader2, Lock, ArrowLeft, ArrowRight, RotateCw } from 'lucide-react';
 
 interface BrowserAction {
-    status: 'navigating' | 'reading' | 'done' | 'error';
+    status: 'navigating' | 'reading' | 'acting' | 'awaiting_user' | 'done' | 'error';
     url: string;
     title: string;
+    live_url?: string;
 }
 
 interface BrowserAgentCardProps {
@@ -31,9 +32,10 @@ export const BrowserAgentCard: React.FC<BrowserAgentCardProps> = ({ action }) =>
     const [scrollY, setScrollY] = useState(0);
     const animRef = useRef<number>(0);
 
-    const isLoading = action.status === 'navigating' || action.status === 'reading';
+    const isLoading = action.status === 'navigating' || action.status === 'reading' || action.status === 'acting';
     const isDone = action.status === 'done';
     const isError = action.status === 'error';
+    const isAwaitingUser = action.status === 'awaiting_user';
 
     // Extrai domínio
     let domain = '';
@@ -80,6 +82,7 @@ export const BrowserAgentCard: React.FC<BrowserAgentCardProps> = ({ action }) =>
         rounded-xl border overflow-hidden transition-all duration-500
         ${isLoading ? 'border-indigo-500/30 shadow-xl shadow-indigo-500/8' : ''}
         ${isDone ? 'border-green-500/25 shadow-lg shadow-green-500/5' : ''}
+        ${isAwaitingUser ? 'border-amber-500/25 shadow-lg shadow-amber-500/5' : ''}
         ${isError ? 'border-red-500/25' : ''}
         bg-[#0a0a0a]
       `}>
@@ -90,6 +93,8 @@ export const BrowserAgentCard: React.FC<BrowserAgentCardProps> = ({ action }) =>
                     <div className="flex items-center gap-1.5 bg-[#0a0a0a] rounded-t-lg px-3 py-1.5 max-w-[200px] border border-neutral-800 border-b-0 relative -mb-px">
                         {isLoading ? (
                             <Loader2 size={11} className="text-indigo-400 animate-spin shrink-0" />
+                        ) : isAwaitingUser ? (
+                            <Lock size={11} className="text-amber-400 shrink-0" />
                         ) : (
                             <Globe size={11} className={isDone ? 'text-green-400' : 'text-red-400'} />
                         )}
@@ -111,7 +116,7 @@ export const BrowserAgentCard: React.FC<BrowserAgentCardProps> = ({ action }) =>
                         <RotateCw size={12} className={isLoading ? 'animate-spin text-neutral-500' : ''} />
                     </div>
                     <div className="flex-1 flex items-center gap-1.5 bg-[#0a0a0a] rounded-md px-2.5 py-1 border border-neutral-800/50">
-                        <Lock size={10} className={isDone ? 'text-green-500' : 'text-neutral-600'} />
+                        <Lock size={10} className={isDone ? 'text-green-500' : isAwaitingUser ? 'text-amber-500' : 'text-neutral-600'} />
                         <span className="text-[11px] text-neutral-500 truncate font-mono select-all">
                             {action.url}
                         </span>
@@ -197,16 +202,33 @@ export const BrowserAgentCard: React.FC<BrowserAgentCardProps> = ({ action }) =>
                     {/* Overlay gradiente no fundo */}
                     <div className="absolute bottom-0 inset-x-0 h-16 bg-gradient-to-t from-[#0d0d0d] to-transparent pointer-events-none" />
 
+                    {isAwaitingUser && (
+                        <div className="absolute inset-x-4 top-4 z-20 rounded-xl border border-amber-500/30 bg-[#18120a]/95 px-4 py-3 backdrop-blur-sm">
+                            <p className="text-xs font-medium text-amber-200">{action.title}</p>
+                            {action.live_url && (
+                                <a
+                                    href={action.live_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex mt-2 text-[11px] font-medium text-amber-300 hover:text-amber-200"
+                                >
+                                    Abrir sessão ao vivo
+                                </a>
+                            )}
+                        </div>
+                    )}
+
                     {/* Status badge */}
                     <div className="absolute bottom-3 left-4 z-10">
                         <div className={`
               flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium backdrop-blur-sm
               ${isLoading ? 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/20' : ''}
               ${isDone ? 'bg-green-500/15 text-green-300 border border-green-500/20' : ''}
+              ${isAwaitingUser ? 'bg-amber-500/15 text-amber-300 border border-amber-500/20' : ''}
               ${isError ? 'bg-red-500/15 text-red-300 border border-red-500/20' : ''}
             `}>
                             {isLoading && <Loader2 size={10} className="animate-spin" />}
-                            {isLoading ? 'Lendo página...' : isDone ? '✓ Página lida' : '✕ Erro'}
+                            {isLoading ? 'Lendo página...' : isDone ? '✓ Página lida' : isAwaitingUser ? 'Aguardando você...' : '✕ Erro'}
                         </div>
                     </div>
                 </div>

@@ -3,6 +3,24 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-03-31 16:40 — Codex (gpt-5)
+
+### Arquivos modificados:
+- `backend/api/chat.py`
+- `backend/api/admin.py`
+- `pages/AdminPage.tsx`
+- `docs/supabase-chat-model-configs.sql`
+- `migrations/007_add_fast_model_id_to_chat_model_configs.sql`
+
+### O que foi feito:
+1. **chat.py** — O fluxo de Chat Normal com `fast_model` deixou de ser apenas um gate `ESCALATE` bruto. Agora o modelo leve recebe sozinho memória/preferências/projeto/RAG, decide em JSON se responde direto ou se escala, e quando escala envia um `brief` curto e autossuficiente para o modelo pesado. O modelo pesado não recebe mais o contexto persistente bruto.
+2. **chat_models.py` / `admin.py` / `lib/api-client.ts` / `ArccoChat.tsx`** — O slot do Chat Normal passou a suportar `fast_model_id` e `fast_system_prompt` de ponta a ponta, permitindo configurar no admin tanto o modelo leve quanto o prompt do estágio 1.
+3. **AdminPage.tsx** — O painel de Chat Normal passou a refletir a arquitetura em dois estágios: `Modelo 1 · Roteador Leve`, `Modelo 2 · Especialista`, com um prompt separado para cada etapa.
+4. **docs/migrations** — O schema documentado de `chat_model_configs` passou a incluir `fast_model_id` e `fast_system_prompt`, e a migration dedicada cobre os ambientes que ainda não têm essas colunas.
+
+### Por quê:
+O objetivo foi aproximar o comportamento do Chat Normal do padrão “router + specialist”: um modelo barato trata o trivial rapidamente e só aciona o modelo pesado em tarefas complexas, sem duplicar memória/preferências no estágio caro. Isso reduz custo, latência e contaminação de contexto no modelo principal, além de permitir calibrar separadamente o prompt do roteador e o prompt do especialista.
+
 ## 2026-03-31 00:00 — Claude Code (claude-sonnet-4-6)
 
 ### Arquivos modificados:

@@ -22,6 +22,11 @@ class SupabaseClient:
             "apikey": key,
             "Authorization": f"Bearer {key}",
         }
+        # Singleton HTTP client — reutiliza conexão TCP/TLS em vez de criar uma nova a cada query
+        self._http = httpx.Client(
+            timeout=30.0,
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+        )
 
     # ── Storage ───────────────────────────────────────
 
@@ -35,20 +40,20 @@ class SupabaseClient:
         """Upload arquivo e retorna URL pública."""
         upload_url = f"{self.url}/storage/v1/object/{bucket}/{path}"
 
-        with httpx.Client(timeout=60.0) as client:
-            response = client.post(
-                upload_url,
-                headers={
-                    **self.headers,
-                    "Content-Type": content_type,
-                    "x-upsert": "true",
-                },
-                content=file_content,
-            )
+        response = self._http.post(
+            upload_url,
+            headers={
+                **self.headers,
+                "Content-Type": content_type,
+                "x-upsert": "true",
+            },
+            content=file_content,
+            timeout=60.0,
+        )
 
-            if response.status_code not in (200, 201):
-                logger.error(f"Upload failed ({response.status_code}): {response.text}")
-                raise Exception(f"Supabase upload failed: {response.text}")
+        if response.status_code not in (200, 201):
+            logger.error(f"Upload failed ({response.status_code}): {response.text}")
+            raise Exception(f"Supabase upload failed: {response.text}")
 
         public_url = f"{self.url}/storage/v1/object/public/{bucket}/{path}"
         return public_url
@@ -77,26 +82,24 @@ class SupabaseClient:
         if limit:
             url += f"&limit={limit}"
 
-        with httpx.Client(timeout=30.0) as client:
-            response = client.get(url, headers=self.headers)
-            if response.status_code != 200:
-                logger.error(f"Query failed: {response.text}")
-                return []
-            return response.json()
+        response = self._http.get(url, headers=self.headers)
+        if response.status_code != 200:
+            logger.error(f"Query failed: {response.text}")
+            return []
+        return response.json()
 
     def insert(self, table: str, data: dict) -> dict:
         """Insert de uma row via PostgREST. Retorna a row criada."""
         url = f"{self.url}/rest/v1/{table}"
-        with httpx.Client(timeout=30.0) as client:
-            response = client.post(
-                url,
-                headers={
-                    **self.headers,
-                    "Content-Type": "application/json",
-                    "Prefer": "return=representation",
-                },
-                json=data,
-            )
+        response = self._http.post(
+            url,
+            headers={
+                **self.headers,
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            json=data,
+        )
         if response.status_code not in (200, 201):
             raise Exception(f"Supabase insert failed ({response.status_code}): {response.text}")
         result = response.json()
@@ -107,16 +110,16 @@ class SupabaseClient:
         if not rows:
             return []
         url = f"{self.url}/rest/v1/{table}"
-        with httpx.Client(timeout=60.0) as client:
-            response = client.post(
-                url,
-                headers={
-                    **self.headers,
-                    "Content-Type": "application/json",
-                    "Prefer": "return=representation",
-                },
-                json=rows,
-            )
+        response = self._http.post(
+            url,
+            headers={
+                **self.headers,
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            json=rows,
+            timeout=60.0,
+        )
         if response.status_code not in (200, 201):
             raise Exception(f"Supabase insert_many failed ({response.status_code}): {response.text}")
         return response.json()
@@ -127,16 +130,15 @@ class SupabaseClient:
         if filters:
             params = "&".join(f"{k}=eq.{v}" for k, v in filters.items())
             url = f"{url}?{params}"
-        with httpx.Client(timeout=30.0) as client:
-            response = client.patch(
-                url,
-                headers={
-                    **self.headers,
-                    "Content-Type": "application/json",
-                    "Prefer": "return=representation",
-                },
-                json=data,
-            )
+        response = self._http.patch(
+            url,
+            headers={
+                **self.headers,
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            json=data,
+        )
         if response.status_code not in (200, 204):
             raise Exception(f"Supabase update failed ({response.status_code}): {response.text}")
         return response.json() if response.status_code == 200 else []
@@ -146,16 +148,15 @@ class SupabaseClient:
         url = f"{self.url}/rest/v1/{table}"
         if on_conflict:
             url = f"{url}?on_conflict={on_conflict}"
-        with httpx.Client(timeout=30.0) as client:
-            response = client.post(
-                url,
-                headers={
-                    **self.headers,
-                    "Content-Type": "application/json",
-                    "Prefer": "resolution=merge-duplicates,return=representation",
-                },
-                json=data,
-            )
+        response = self._http.post(
+            url,
+            headers={
+                **self.headers,
+                "Content-Type": "application/json",
+                "Prefer": "resolution=merge-duplicates,return=representation",
+            },
+            json=data,
+        )
         if response.status_code not in (200, 201):
             raise Exception(f"Supabase upsert failed ({response.status_code}): {response.text}")
         result = response.json()
@@ -167,20 +168,18 @@ class SupabaseClient:
         if filters:
             params = "&".join(f"{k}=eq.{v}" for k, v in filters.items())
             url = f"{url}?{params}"
-        with httpx.Client(timeout=30.0) as client:
-            response = client.delete(url, headers=self.headers)
+        response = self._http.delete(url, headers=self.headers)
         if response.status_code not in (200, 204):
             raise Exception(f"Supabase delete failed ({response.status_code}): {response.text}")
 
     def rpc(self, function_name: str, params: dict) -> list:
         """Chama uma função RPC (stored procedure) do Supabase."""
         url = f"{self.url}/rest/v1/rpc/{function_name}"
-        with httpx.Client(timeout=30.0) as client:
-            response = client.post(
-                url,
-                headers={**self.headers, "Content-Type": "application/json"},
-                json=params,
-            )
+        response = self._http.post(
+            url,
+            headers={**self.headers, "Content-Type": "application/json"},
+            json=params,
+        )
         if response.status_code != 200:
             raise Exception(f"Supabase RPC failed ({response.status_code}): {response.text}")
         return response.json()

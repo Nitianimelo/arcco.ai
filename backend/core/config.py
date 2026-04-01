@@ -2,6 +2,7 @@
 Configuração centralizada do backend Arcco AI.
 """
 
+import logging
 import os
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -10,6 +11,8 @@ from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -72,9 +75,9 @@ class AgentConfig:
     # CORS
     cors_origins: str = "*"
 
-    # Admin panel credentials (override via env vars ADMIN_USERNAME / ADMIN_PASSWORD)
-    admin_username: str = "nitiani"
-    admin_password: str = "96947188"
+    # Admin panel credentials (must be supplied via env vars in production)
+    admin_username: str = ""
+    admin_password: str = ""
 
     def __post_init__(self):
         self.api_key = os.getenv("ANTHROPIC_API_KEY", self.api_key)
@@ -86,13 +89,11 @@ class AgentConfig:
         self.supabase_url = (
             os.getenv("SUPABASE_URL", "")
             or os.getenv("VITE_SUPABASE_URL", "")
-            or "https://gfkycxdbbzczrwikhcpr.supabase.co"
         )
         self.supabase_key = (
             os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
             or os.getenv("SUPABASE_KEY", "")
             or os.getenv("VITE_SUPABASE_ANON_KEY", "")
-            or "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdma3ljeGRiYnpjenJ3aWtoY3ByIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2OTc4MjU5MywiZXhwIjoyMDg1MzU4NTkzfQ.zAB2HFhpyrtLD4aOvxDqS63Rvh_NwxgtS8ZhCj8xSnw"
         )
         self.supabase_storage_bucket = os.getenv("SUPABASE_STORAGE_BUCKET", self.supabase_storage_bucket)
         self.browserbase_api_key = os.getenv("BROWSERBASE_API_KEY", "")
@@ -114,16 +115,14 @@ class AgentConfig:
         self.workspace_path = Path(os.getenv("AGENT_WORKSPACE", "/tmp/agent_workspace"))
         self.log_level = os.getenv("LOG_LEVEL", self.log_level)
 
-        # Auto-load missing API keys from Supabase ApiKeys table
-        self._load_keys_from_supabase()
+        # Nota: _load_keys_from_supabase() é chamado explicitamente no startup
+        # do FastAPI (main.py) via asyncio.to_thread(), para não bloquear o event loop.
 
     def _load_keys_from_supabase(self):
         """Busca API keys da tabela ApiKeys no Supabase para preencher chaves faltantes."""
-        import logging
-        logger = logging.getLogger(__name__)
-
         # Only try if we have Supabase credentials and are missing keys
         if not self.supabase_url or not self.supabase_key:
+            logger.warning("[CONFIG] SUPABASE_URL/SUPABASE_KEY ausentes; fallback de chaves via Supabase desabilitado.")
             return
 
         needs_openrouter = not self.openrouter_api_key
@@ -136,7 +135,7 @@ class AgentConfig:
         if not (needs_openrouter or needs_anthropic
                 or needs_browserbase or needs_browserbase_project
                 or needs_e2b or needs_apify):
-            print("[CONFIG] All API keys loaded from environment variables")
+            logger.info("[CONFIG] All API keys loaded from environment variables.")
             return
 
         try:
@@ -151,72 +150,69 @@ class AgentConfig:
                 with httpx.Client(timeout=10.0) as client:
                     response = client.get(url, headers=headers)
                     if response.status_code != 200:
-                        print(f"[CONFIG] Supabase ApiKeys query failed: status={response.status_code}")
+                        logger.warning("[CONFIG] Supabase ApiKeys query failed: status=%s", response.status_code)
                         rows = []
                     else:
                         rows = response.json()
             except Exception as e:
-                print(f"[CONFIG] Supabase ApiKeys query error: {e}")
+                logger.warning("[CONFIG] Supabase ApiKeys query error: %s", e)
                 rows = []
 
             if rows:
                 # Map provider -> api_key
                 key_map = {row["provider"]: row["api_key"] for row in rows if row.get("api_key")}
-                print(f"[CONFIG] Providers encontrados no Supabase: {list(key_map.keys())}")
+                logger.info("[CONFIG] Loaded API providers from Supabase: %s", sorted(key_map.keys()))
 
                 if needs_openrouter and key_map.get("openrouter"):
                     self.openrouter_api_key = key_map["openrouter"]
-                    print(f"[CONFIG] OpenRouter API key loaded from Supabase: {self.openrouter_api_key[:15]}...")
+                    logger.info("[CONFIG] OpenRouter API key loaded from Supabase.")
 
                 if needs_anthropic and key_map.get("anthropic"):
                     self.api_key = key_map["anthropic"]
-                    print("[CONFIG] Anthropic API key loaded from Supabase")
+                    logger.info("[CONFIG] Anthropic API key loaded from Supabase.")
 
                 if needs_browserbase and key_map.get("browserbase"):
                     self.browserbase_api_key = key_map["browserbase"]
-                    print("[CONFIG] Browserbase API key loaded from Supabase")
+                    logger.info("[CONFIG] Browserbase API key loaded from Supabase.")
 
                 if needs_browserbase_project and key_map.get("browserbase_project_id"):
                     self.browserbase_project_id = key_map["browserbase_project_id"]
-                    print("[CONFIG] Browserbase Project ID loaded from Supabase")
+                    logger.info("[CONFIG] Browserbase Project ID loaded from Supabase.")
 
                 e2b_key = key_map.get("e2b") or key_map.get("e2b_api_key")
                 if needs_e2b and e2b_key:
                     self.e2b_api_key = e2b_key
-                    print("[CONFIG] E2B API key loaded from Supabase")
+                    logger.info("[CONFIG] E2B API key loaded from Supabase.")
 
                 if needs_apify and key_map.get("apify"):
                     self.apify_api_key = key_map["apify"]
-                    print("[CONFIG] Apify API key loaded from Supabase")
+                    logger.info("[CONFIG] Apify API key loaded from Supabase.")
 
             if not self.openrouter_api_key and not self.api_key:
-                print("[CONFIG] WARNING: No LLM API key found (env or Supabase). Agent will fail.")
+                logger.warning("[CONFIG] No LLM API key found (env or Supabase). Agent will fail.")
             else:
-                print("[CONFIG] API keys ready (env + Supabase fallback)")
+                logger.info("[CONFIG] API keys ready (env + Supabase fallback).")
 
             # Verificação explícita do Browserbase
             if not self.browserbase_api_key:
-                print("[CONFIG] WARNING: BROWSERBASE_API_KEY não configurada. "
-                      "Browser Agent ficará indisponível. "
-                      "Adicione provider='browserbase' na tabela ApiKeys do Supabase "
-                      "ou defina BROWSERBASE_API_KEY como variável de ambiente.")
+                logger.warning(
+                    "[CONFIG] BROWSERBASE_API_KEY não configurada. Browser Agent ficará indisponível."
+                )
             if not self.browserbase_project_id:
-                print("[CONFIG] WARNING: BROWSERBASE_PROJECT_ID não configurado. "
-                      "Browser Agent ficará indisponível. "
-                      "Adicione provider='browserbase_project_id' na tabela ApiKeys do Supabase "
-                      "ou defina BROWSERBASE_PROJECT_ID como variável de ambiente.")
+                logger.warning(
+                    "[CONFIG] BROWSERBASE_PROJECT_ID não configurado. Browser Agent ficará indisponível."
+                )
             if self.browserbase_api_key and self.browserbase_project_id:
-                print(f"[CONFIG] Browserbase OK — key: {self.browserbase_api_key[:15]}... project: {self.browserbase_project_id[:15]}...")
+                logger.info("[CONFIG] Browserbase credentials loaded.")
             if not self.e2b_api_key:
-                print("[CONFIG] WARNING: E2B_API_KEY não configurada. "
-                      "Execução Python via E2B ficará indisponível. "
-                      "Adicione provider='e2b' ou provider='e2b_api_key' na tabela ApiKeys do Supabase "
-                      "ou defina E2B_API_KEY como variável de ambiente.")
+                logger.warning(
+                    "[CONFIG] E2B_API_KEY não configurada. Execução Python via E2B ficará indisponível."
+                )
             else:
-                print(f"[CONFIG] E2B OK — key: {self.e2b_api_key[:15]}...")
+                logger.info("[CONFIG] E2B credentials loaded.")
 
         except Exception as e:
-            print(f"[CONFIG] WARNING: Could not load API keys from Supabase: {e}")
+            logger.warning("[CONFIG] Could not load API keys from Supabase: %s", e)
 
     def validate(self) -> tuple[bool, str]:
         if not self.api_key and not self.openrouter_api_key:

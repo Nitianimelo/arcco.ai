@@ -11,7 +11,9 @@ export type ChatStreamEventType =
     | 'file_artifact'
     | 'clarification'
     | 'spy_pages_result'
-    | 'pre_action';
+    | 'pre_action'
+    | 'thinking_upgrade'
+    | 'needs_clarification';
 
 export interface ChatStreamEvent {
     type: ChatStreamEventType;
@@ -123,6 +125,9 @@ export const agentApi = {
         webSearch?: boolean,
         computerEnabled?: boolean,
         spyPagesEnabled?: boolean,
+        fastModel?: string,
+        fastSystemPrompt?: string,
+        browserResumeToken?: string,
     ): Promise<string> {
         const res = await fetch(`${API_BASE}/chat`, {
             method: 'POST',
@@ -139,6 +144,9 @@ export const agentApi = {
                 ...(webSearch ? { web_search: true } : {}),
                 ...(computerEnabled ? { computer_enabled: true } : {}),
                 ...(spyPagesEnabled ? { spy_pages_enabled: true } : {}),
+                ...(fastModel ? { fast_model: fastModel } : {}),
+                ...(fastSystemPrompt ? { fast_system_prompt: fastSystemPrompt } : {}),
+                ...(browserResumeToken ? { browser_resume_token: browserResumeToken } : {}),
             }),
             signal,
         });
@@ -153,6 +161,44 @@ export const agentApi = {
         let fullContent = '';
         let buffer = '';
 
+        const processSseLine = (line: string) => {
+            if (!line.startsWith('data: ')) return;
+
+            let raw: any;
+            try {
+                raw = JSON.parse(line.slice(6));
+            } catch (e: any) {
+                if (e.name === 'AbortError') throw e;
+                console.error('ERRO DE PARSE SSE. Linha que causou erro:', line, e);
+                return;
+            }
+
+            const eventType = raw.type as ChatStreamEventType;
+
+            // spy_pages_result usa campo "data" em vez de "content"
+            if (eventType === 'spy_pages_result') {
+                if (onEvent) {
+                    const payload = typeof raw.data === 'string' ? raw.data : JSON.stringify(raw.data ?? []);
+                    onEvent('spy_pages_result', payload);
+                }
+                return;
+            }
+
+            const event = raw as ChatStreamEvent;
+            const content = event.content ?? '';
+
+            if (onEvent) onEvent(event.type, content);
+
+            if (event.type === 'chunk') {
+                fullContent += content;
+                return;
+            }
+
+            if (event.type === 'error') {
+                throw new Error(content || 'Erro desconhecido no stream do chat.');
+            }
+        };
+
         try {
             while (true) {
                 const { done, value } = await reader.read();
@@ -163,37 +209,16 @@ export const agentApi = {
                 buffer = lines.pop() || '';
 
                 for (const line of lines) {
-                    if (!line.startsWith('data: ')) continue;
-                    try {
-                        const raw = JSON.parse(line.slice(6)) as any;
-                        const eventType: ChatStreamEventType = raw.type;
-
-                        // spy_pages_result usa campo "data" em vez de "content"
-                        if (eventType === 'spy_pages_result') {
-                            if (onEvent) {
-                                const payload = typeof raw.data === 'string' ? raw.data : JSON.stringify(raw.data ?? []);
-                                onEvent('spy_pages_result', payload);
-                            }
-                            continue;
-                        }
-
-                        const event = raw as ChatStreamEvent;
-                        if (onEvent) onEvent(event.type, event.content);
-
-                        if (event.type === 'chunk') {
-                            fullContent += event.content;
-                        } else if (event.type === 'error') {
-                            throw new Error(event.content);
-                        }
-                    } catch (e: any) {
-                        if (e.name === 'AbortError') throw e;
-                        console.error('ERRO DE PARSE SSE. Linha que causou erro:', line, e);
-                    }
+                    processSseLine(line);
                 }
+            }
+
+            if (buffer.trim()) {
+                processSseLine(buffer.trim());
             }
         } catch (e: any) {
             if (e.name === 'AbortError') {
-                reader.cancel();
+                await reader.cancel();
                 return fullContent;
             }
             throw e;

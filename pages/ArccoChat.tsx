@@ -20,7 +20,7 @@ import { ProjectEditModal } from '../components/chat/ProjectEditModal';
 import DotGridBackground from '../components/ui/DotGridBackground';
 import { useToast } from '../components/Toast';
 // AgentTerminal removido — steps agora são inline
-import { Message } from '../lib/chatStorage';
+import { ChatSession, Message } from '../lib/chatStorage';
 import { conversationApi } from '../lib/conversationApi';
 
 interface FilePreviewCardProps {
@@ -136,6 +136,8 @@ interface ChatModeConfig {
   slot_number: number;
   model_name: string;
   openrouter_model_id: string;
+  fast_model_id?: string;
+  fast_system_prompt?: string;
   system_prompt?: string;
   is_active: boolean;
 }
@@ -146,6 +148,14 @@ interface SessionAttachment {
   sizeBytes: number;
   status: SessionFileStatus;
   error?: string | null;
+}
+
+interface BrowserClarificationPayload {
+  questions: Array<{ type: 'choice' | 'open'; text: string; options: string[] }>;
+  helperText?: string;
+  actionUrl?: string;
+  actionLabel?: string;
+  resumeToken?: string;
 }
 
 const allSuggestions = [
@@ -238,7 +248,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
   const [agentThoughts, setAgentThoughts] = useState<ThoughtStep[]>([]);
   const [isThoughtsExpanded, setIsThoughtsExpanded] = useState(true);
-  const [browserAction, setBrowserAction] = useState<{ status: string; url: string; title: string } | null>(null);
+  const [browserAction, setBrowserAction] = useState<{ status: string; url: string; title: string; live_url?: string } | null>(null);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [showChatModelDropdown, setShowChatModelDropdown] = useState(false);
   const [chatModeConfigs, setChatModeConfigs] = useState<ChatModeConfig[]>([]);
@@ -247,9 +257,10 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const thoughtsStartTimeRef = useRef<number>(0);
   const [generatedFiles, setGeneratedFiles] = useState<Array<{ filename: string; url: string; type: 'pdf' | 'excel' | 'other' }>>([]);
   const [textDocArtifact, setTextDocArtifact] = useState<{ title: string; content: string } | null>(null);
-  const [clarificationQuestions, setClarificationQuestions] = useState<Array<{ type: 'choice' | 'open'; text: string; options: string[] }> | null>(null);
+  const [clarificationQuestions, setClarificationQuestions] = useState<BrowserClarificationPayload | null>(null);
   const [chatThinkingMessage, setChatThinkingMessage] = useState('');
   const [chatThinkingVisible, setChatThinkingVisible] = useState(false);
+  const [chatThinkingDeep, setChatThinkingDeep] = useState(false);
   const chatThinkingStartRef = useRef<number>(0);
   const chatThinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [modalPreview, setModalPreview] = useState<{ type: 'text_doc' | 'pdf' | 'excel' | 'other'; title: string; content?: string; url?: string } | null>(null);
@@ -366,6 +377,9 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   useEffect(() => {
     const CACHE_KEY = 'arcco_location_v3';
     const CACHE_TTL = 30 * 60 * 1000; // 30 min
+    const isLocalhost =
+      typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 
     // Check valid cache
     try {
@@ -398,6 +412,9 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
         setUserLocation(location);
         localStorage.setItem(CACHE_KEY, JSON.stringify({ data: location, timestamp: Date.now() }));
       } catch {
+        if (isLocalhost) {
+          return;
+        }
         // Fallback: API direta no browser (pode ser bloqueada por ad-blockers)
         try {
           const geo = await fetch('https://ipwho.is/');
@@ -727,15 +744,26 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     const savedMode = getConvMode(chatSessionId);
     if (savedMode !== null) setIsAgentMode(savedMode);
     if (!userId) return;
+
+    let cancelled = false;
+
     conversationApi.getMessages(chatSessionId, userId).then(msgs => {
+      if (cancelled) return;
       setMessages(msgs.map(m => ({
         id: m.id,
         role: m.role as 'user' | 'assistant',
         content: m.content,
         timestamp: m.created_at,
       })));
-    }).catch(() => setMessages([]));
-  }, [chatSessionId]);
+    }).catch((err) => {
+      if (cancelled) return;
+      console.error('[ArccoChat] Falha ao carregar histórico:', err);
+      showToast('Não foi possível carregar o histórico desta conversa.', 'error');
+      setMessages([]);
+    });
+
+    return () => { cancelled = true; };
+  }, [chatSessionId, userId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -761,13 +789,19 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     };
   }, [effectiveSessionId]);
 
-  useEffect(() => {
-    if (!attachments.some(att => att.status === 'processing' || att.status === 'uploaded')) {
-      return;
-    }
+  // Ref para rastrear se há anexos em processamento sem criar dep no useEffect
+  const attachmentsRef = useRef(attachments);
+  useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
 
+  useEffect(() => {
     let cancelled = false;
+
     const interval = setInterval(async () => {
+      const hasPending = attachmentsRef.current.some(
+        att => att.status === 'processing' || att.status === 'uploaded'
+      );
+      if (!hasPending) return;
+
       try {
         const files = await agentApi.listSessionFiles(effectiveSessionId);
         if (!cancelled) {
@@ -784,7 +818,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [attachments, effectiveSessionId]);
+  }, [effectiveSessionId]);
 
   useEffect(() => {
     attachments.forEach(att => {
@@ -836,7 +870,10 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
   const selectedChatConfig = chatModeConfigs.find(cfg => cfg.slot_number === selectedChatSlot) || null;
 
-  const handleSendMessage = async (text: string = inputValue) => {
+  const handleSendMessage = async (
+    text: string = inputValue,
+    options?: { browserResumeToken?: string }
+  ) => {
     if (!text.trim() || isLoading || !isApiKeyReady) return;
 
     // Injeta dados do Spy Pages já coletados como contexto para o agente
@@ -875,6 +912,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
       setIsTerminalOpen(false);
       setTerminalContent('');
       setChatThinkingMessage(generateThinkingMessage(text.trim()));
+      setChatThinkingDeep(false);
       // Garante visibilidade mínima do thinking panel (cancela timer anterior se houver)
       if (chatThinkingTimerRef.current) clearTimeout(chatThinkingTimerRef.current);
       chatThinkingStartRef.current = Date.now();
@@ -969,9 +1007,32 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             try {
               const questions = JSON.parse(content);
               if (Array.isArray(questions) && questions.length > 0) {
-                setClarificationQuestions(questions);
+                setClarificationQuestions({ questions });
               }
             } catch { /* ignore parse errors */ }
+            return;
+          }
+
+          if (type === 'needs_clarification') {
+            try {
+              const payload = JSON.parse(content);
+              if (payload && Array.isArray(payload.questions) && payload.questions.length > 0) {
+                setClarificationQuestions({
+                  questions: payload.questions,
+                  helperText: payload.message,
+                  actionUrl: payload.action_url,
+                  actionLabel: payload.action_label,
+                  resumeToken: payload.resume_token,
+                });
+              }
+            } catch { /* ignore parse errors */ }
+            return;
+          }
+
+          // Escalada para modelo especialista — muda animação de thinking sutilmente
+          if (type === 'thinking_upgrade') {
+            setChatThinkingMessage('Elaborando a resposta...');
+            setChatThinkingDeep(true);
             return;
           }
 
@@ -1093,6 +1154,9 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
         !isAgentMode && isSearchEnabled,
         isAgentMode && computerEnabled,
         isAgentMode && spyPagesEnabled,
+        !isAgentMode ? (selectedChatConfig?.fast_model_id || undefined) : undefined,
+        !isAgentMode ? (selectedChatConfig?.fast_system_prompt || undefined) : undefined,
+        options?.browserResumeToken,
       );
 
       // Wait for queue to finish draining typing effect
@@ -1125,6 +1189,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
       // Garante limpeza do thinking panel em qualquer caso (erro, abort, fim normal)
       if (chatThinkingTimerRef.current) clearTimeout(chatThinkingTimerRef.current);
       setChatThinkingVisible(false);
+      setChatThinkingDeep(false);
     }
   };
 
@@ -1772,8 +1837,18 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                     return (
                       <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px] py-1 animate-in fade-in duration-300">
                         <div className="flex items-center gap-2.5">
-                          <div className="relative flex-shrink-0">
-                            <div className="w-1.5 h-1.5 rounded-full bg-indigo-400/60 animate-pulse" />
+                          <div className="relative flex-shrink-0 flex items-center gap-1">
+                            {chatThinkingDeep ? (
+                              // Três dots bouncing — modelo especialista está trabalhando
+                              <>
+                                <span className="w-1.5 h-1.5 rounded-full bg-violet-400/70 animate-bounce" style={{ animationDelay: '0ms' }} />
+                                <span className="w-1.5 h-1.5 rounded-full bg-violet-400/70 animate-bounce" style={{ animationDelay: '150ms' }} />
+                                <span className="w-1.5 h-1.5 rounded-full bg-violet-400/70 animate-bounce" style={{ animationDelay: '300ms' }} />
+                              </>
+                            ) : (
+                              // Dot único pulsante — modelo rápido avaliando
+                              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400/60 animate-pulse" />
+                            )}
                           </div>
                           <span className="text-sm text-neutral-500">{chatThinkingMessage || 'Processando...'}</span>
                         </div>
@@ -1921,13 +1996,17 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 {clarificationQuestions && !isLoading && (
                   <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%]">
                     <ClarificationCard
-                      questions={clarificationQuestions}
+                      questions={clarificationQuestions.questions}
+                      helperText={clarificationQuestions.helperText}
+                      actionUrl={clarificationQuestions.actionUrl}
+                      actionLabel={clarificationQuestions.actionLabel}
                       onSubmit={(answers) => {
-                        const responseText = clarificationQuestions.map((q, i) =>
+                        const responseText = clarificationQuestions.questions.map((q, i) =>
                           `${q.text} ${answers[i]}`
                         ).join('\n');
+                        const resumeToken = clarificationQuestions.resumeToken;
                         setClarificationQuestions(null);
-                        handleSendMessage(responseText);
+                        handleSendMessage(responseText, { browserResumeToken: resumeToken });
                       }}
                     />
                   </div>

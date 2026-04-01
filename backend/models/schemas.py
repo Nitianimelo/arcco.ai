@@ -26,6 +26,7 @@ class ChatRequest(BaseModel):
     user_id: Optional[str] = None           # ID do usuário para contexto persistente
     project_id: Optional[str] = None        # ID do projeto ativo (injeção de RAG + instruções)
     conversation_id: Optional[str] = None   # ID da conversa para continuar histórico
+    browser_resume_token: Optional[str] = None
 
 
 class ChatSSEEvent(BaseModel):

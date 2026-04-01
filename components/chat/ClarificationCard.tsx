@@ -11,9 +11,19 @@ interface ClarificationCardProps {
   questions: ClarificationQuestion[];
   onSubmit: (answers: string[]) => void;
   disabled?: boolean;
+  helperText?: string;
+  actionUrl?: string;
+  actionLabel?: string;
 }
 
-const ClarificationCard: React.FC<ClarificationCardProps> = ({ questions, onSubmit, disabled }) => {
+const ClarificationCard: React.FC<ClarificationCardProps> = ({
+  questions,
+  onSubmit,
+  disabled,
+  helperText,
+  actionUrl,
+  actionLabel,
+}) => {
   const [answers, setAnswers] = useState<string[]>(() => questions.map(() => ''));
 
   const updateAnswer = (index: number, value: string) => {
@@ -48,6 +58,22 @@ const ClarificationCard: React.FC<ClarificationCardProps> = ({ questions, onSubm
 
       {/* Questions */}
       <div className="px-4 py-3 space-y-4">
+        {helperText && (
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/8 px-3 py-2">
+            <p className="text-[11px] leading-relaxed text-amber-200">{helperText}</p>
+            {actionUrl && (
+              <a
+                href={actionUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex mt-2 text-[11px] font-medium text-amber-300 hover:text-amber-200"
+              >
+                {actionLabel || 'Abrir'}
+              </a>
+            )}
+          </div>
+        )}
+
         {questions.map((q, qi) => (
           <div key={qi}>
             <p className="text-xs font-medium text-neutral-200 mb-2">{q.text}</p>
