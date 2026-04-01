@@ -1273,12 +1273,7 @@ export const AdminPage: React.FC = () => {
       body: JSON.stringify(config),
     });
     if (!res.ok) throw new Error(await res.text());
-    const result = await res.json();
-    const saved = result.model as ChatConfigRow;
-    setChatConfigs(prev =>
-      [...prev.filter(item => item.slot_number !== config.slot_number), saved]
-        .sort((a, b) => a.slot_number - b.slot_number)
-    );
+    await fetchChatConfigs();
   };
 
   const deleteChatConfig = async (config: ChatConfigRow) => {
@@ -1291,13 +1286,6 @@ export const AdminPage: React.FC = () => {
       method: 'DELETE',
     });
     if (!res.ok) throw new Error(await res.text());
-
-    setChatConfigs(prev =>
-      prev
-        .filter(item => item.id !== config.id)
-        .map((item, index) => ({ ...item, slot_number: index + 1 }))
-        .sort((a, b) => a.slot_number - b.slot_number)
-    );
 
     await fetchChatConfigs();
   };
@@ -1804,7 +1792,7 @@ export const AdminPage: React.FC = () => {
               <div className="space-y-4">
                 {chatConfigs.map(config => (
                   <ChatConfigCard
-                    key={config.slot_number}
+                    key={config.id || `draft-${config.slot_number}`}
                     config={config}
                     models={orModels}
                     loadingModels={modelsLoading}

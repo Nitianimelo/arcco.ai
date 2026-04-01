@@ -279,6 +279,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const abortControllerRef = useRef<AbortController | null>(null);
   const notifiedFailedFilesRef = useRef<Set<string>>(new Set());
   const lastInitialMessageRef = useRef<string | null>(null);
+  const previousChatSessionIdRef = useRef<string | null>(null);
+  const messagesRef = useRef<Message[]>([]);
 
   const arccoEmblemUrl = "https://qscezcbpwvnkqoevulbw.supabase.co/storage/v1/object/public/Chipro%20calculadora/8.png";
 
@@ -293,6 +295,10 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const editFileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const openEditModal = () => {
     if (!project) return;
@@ -734,21 +740,42 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
   // Carrega mensagens do Supabase quando chatSessionId for um UUID
   useEffect(() => {
-    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(chatSessionId || '');
-    setGeneratedFiles([]);
-    setConversationId(null);
-    setMessages([]);
+    const currentSessionId = chatSessionId || '';
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(currentSessionId);
+    const previousSessionId = previousChatSessionIdRef.current;
+    previousChatSessionIdRef.current = currentSessionId || null;
 
-    if (!chatSessionId || !isUUID) return;
+    const previousWasEphemeral =
+      !!previousSessionId &&
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(previousSessionId);
+    const promotedEphemeralConversation =
+      !!currentSessionId &&
+      isUUID &&
+      previousWasEphemeral &&
+      messagesRef.current.length > 0;
 
-    setConversationId(chatSessionId);
-    const savedMode = getConvMode(chatSessionId);
+    if (!currentSessionId || !isUUID) {
+      setGeneratedFiles([]);
+      setConversationId(null);
+      setMessages([]);
+      return;
+    }
+
+    setConversationId(currentSessionId);
+    const savedMode = getConvMode(currentSessionId);
     if (savedMode !== null) setIsAgentMode(savedMode);
+
+    if (promotedEphemeralConversation) {
+      return;
+    }
+
+    setGeneratedFiles([]);
+    setMessages([]);
     if (!userId) return;
 
     let cancelled = false;
 
-    conversationApi.getMessages(chatSessionId, userId).then(msgs => {
+    conversationApi.getMessages(currentSessionId, userId).then(msgs => {
       if (cancelled) return;
       setMessages(msgs.map(m => ({
         id: m.id,

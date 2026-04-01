@@ -192,7 +192,6 @@ function App() {
       case 'ARCCO_CHAT':
         return (
           <ArccoChatPage
-            key={chatSessionId}
             chatSessionId={chatSessionId}
             userName={greetingName}
             userId={userId}

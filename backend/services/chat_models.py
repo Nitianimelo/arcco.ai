@@ -81,10 +81,13 @@ def create_chat_model(data: dict[str, Any]) -> dict[str, Any]:
     db = get_supabase_client()
     items = list_chat_models(force_refresh=True)
     next_slot = max((int(item.get("slot_number") or 0) for item in items), default=0) + 1
+    requested_slot = int(data.get("slot_number") or next_slot)
+    occupied_slots = {int(item.get("slot_number") or 0) for item in items}
+    slot_number = requested_slot if requested_slot not in occupied_slots else next_slot
 
     item = {
         "id": data.get("id") or str(uuid.uuid4()),
-        "slot_number": int(data.get("slot_number") or next_slot),
+        "slot_number": slot_number,
         "model_name": data.get("model_name") or f"Novo modelo {next_slot}",
         "openrouter_model_id": data.get("openrouter_model_id", ""),
         "fast_model_id": data.get("fast_model_id", "") or "",
@@ -105,6 +108,17 @@ def update_chat_model(model_id: str, data: dict[str, Any]) -> dict[str, Any] | N
         return None
 
     current_item = _normalize_item(current[0])
+    requested_slot = int(data.get("slot_number", current_item.get("slot_number", 0)))
+    if requested_slot != int(current_item.get("slot_number") or 0):
+        existing = db.query(_TABLE, filters={"slot_number": requested_slot}, limit=1)
+        if existing and str(existing[0].get("id") or "") != model_id:
+            logger.warning(
+                "[CHAT_MODELS] Ignoring conflicting slot_number=%s for model_id=%s",
+                requested_slot,
+                model_id,
+            )
+            requested_slot = int(current_item.get("slot_number") or 0)
+
     payload = {
         "model_name": data.get("model_name", current_item.get("model_name", "")),
         "openrouter_model_id": data.get("openrouter_model_id", current_item.get("openrouter_model_id", "")),
@@ -112,7 +126,7 @@ def update_chat_model(model_id: str, data: dict[str, Any]) -> dict[str, Any] | N
         "fast_system_prompt": data.get("fast_system_prompt", current_item.get("fast_system_prompt", "")) or "",
         "system_prompt": data.get("system_prompt", current_item.get("system_prompt", "")),
         "is_active": bool(data.get("is_active", current_item.get("is_active", True))),
-        "slot_number": int(data.get("slot_number", current_item.get("slot_number", 0))),
+        "slot_number": requested_slot,
     }
 
     updated_rows = db.update(_TABLE, payload, {"id": model_id})
