@@ -719,22 +719,21 @@ async def chat_endpoint(request: Request):
                 total_tokens=_total_t,
                 total_cost_usd=_cost_usd,
             )
-
-        # Dispara background task ao fim do stream
-        if conv_id and user_id and (user_message or collected_content):
-            full_response = "".join(collected_content)
-            asyncio.ensure_future(
-                _save_conversation_and_update_memory(
-                    conv_id=conv_id,
-                    user_id=user_id,
-                    user_message=user_message,
-                    assistant_response=full_response,
-                    prompt_tokens=_prompt_t,
-                    completion_tokens=_completion_t,
-                    total_tokens=_total_t,
-                    cost_usd=_cost_usd,
-                )
-            )
+            if conv_id and user_id and (user_message or collected_content):
+                full_response = "".join(collected_content)
+                try:
+                    await _save_conversation_and_update_memory(
+                        conv_id=conv_id,
+                        user_id=user_id,
+                        user_message=user_message,
+                        assistant_response=full_response,
+                        prompt_tokens=_prompt_t,
+                        completion_tokens=_completion_t,
+                        total_tokens=_total_t,
+                        cost_usd=_cost_usd,
+                    )
+                except Exception:
+                    logger.exception("[CHAT] Falha ao persistir histórico ao final do stream")
 
     return StreamingResponse(
         generate(),
