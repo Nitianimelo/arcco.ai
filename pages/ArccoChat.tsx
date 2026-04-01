@@ -939,12 +939,11 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     if (!isAgentMode) {
       setIsTerminalOpen(false);
       setTerminalContent('');
-      setChatThinkingMessage(generateThinkingMessage(text.trim()));
+      setChatThinkingMessage('');
       setChatThinkingDeep(false);
-      // Garante visibilidade mínima do thinking panel (cancela timer anterior se houver)
       if (chatThinkingTimerRef.current) clearTimeout(chatThinkingTimerRef.current);
-      chatThinkingStartRef.current = Date.now();
-      setChatThinkingVisible(true);
+      chatThinkingStartRef.current = 0;
+      setChatThinkingVisible(false);
     }
     setIsThoughtsExpanded(true);
     setElapsedSeconds(0);
@@ -1599,6 +1598,113 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     </div>
   );
 
+  const renderAgentActivityPanel = () => {
+    if (!isAgentMode) return null;
+
+    const hasSteps = agentThoughts.length > 0;
+    const allDone = hasSteps && agentThoughts.every(s => s.status === 'done');
+    const actionSteps = agentThoughts.filter(s => !s.isThought);
+    const stepsCollapsed = allDone && !isThoughtsExpanded;
+
+    if (!hasSteps && !isLoading) return null;
+
+    if (!hasSteps && isLoading) {
+      return (
+        <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px] py-1 animate-in fade-in duration-300">
+          <div className="flex items-center gap-2.5">
+            <img src={arccoEmblemUrl} alt="" className="w-3.5 h-3.5 object-contain animate-pulse-soft flex-shrink-0 opacity-40" />
+            <span className="text-sm text-neutral-600 animate-pulse-soft">Analisando...</span>
+          </div>
+        </div>
+      );
+    }
+
+    if (stepsCollapsed) {
+      return (
+        <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px]">
+          <button
+            onClick={() => setIsThoughtsExpanded(true)}
+            className="flex items-center gap-2 text-xs text-neutral-700 hover:text-neutral-500 transition-colors py-1.5 group"
+          >
+            <svg width="9" height="9" viewBox="0 0 9 9" fill="none" className="flex-shrink-0 text-neutral-700 group-hover:text-neutral-500 transition-colors">
+              <path d="M2.5 1.5L6.5 4.5L2.5 7.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <span>{actionSteps.length} etapa{actionSteps.length !== 1 ? 's' : ''}</span>
+            <span className="text-neutral-800">·</span>
+            <span className="tabular-nums">{elapsedSeconds}s</span>
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px]">
+        <div className="py-0.5 space-y-1.5">
+          {agentThoughts.map((step, i) => {
+            const isStepRunning = step.status === 'running';
+            const label = step.label.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\u200d\ufe0f]/gu, '').trim();
+
+            if (step.isThought) {
+              return (
+                <div key={i} className="pl-[22px] animate-step-enter" style={{ animationDelay: `${i * 35}ms` }}>
+                  <span className={`text-xs leading-relaxed italic ${isStepRunning ? 'text-neutral-600' : 'text-neutral-800'}`}>
+                    {label}
+                  </span>
+                </div>
+              );
+            }
+
+            return (
+              <div key={i} className="flex items-center gap-2.5 animate-step-enter" style={{ animationDelay: `${i * 35}ms` }}>
+                <span className="flex-shrink-0 w-[14px] flex justify-center">
+                  {step.status === 'done' ? (
+                    <span className="text-[11px] text-emerald-600/60 animate-check-pop leading-none">✓</span>
+                  ) : isStepRunning ? (
+                    <div className="w-[5px] h-[5px] rounded-full bg-indigo-400 animate-ring-pulse" />
+                  ) : (
+                    <span className="text-[10px] text-neutral-800 leading-none">·</span>
+                  )}
+                </span>
+                <span className={`text-sm leading-snug ${
+                  isStepRunning
+                    ? 'shimmer-text text-neutral-400'
+                    : step.status === 'done'
+                    ? 'text-neutral-700'
+                    : 'text-neutral-800'
+                }`}>
+                  {label}
+                </span>
+              </div>
+            );
+          })}
+
+          {chatThinkingVisible && chatThinkingMessage && !allDone && (
+            <div className="flex items-center gap-2.5 animate-in fade-in duration-300 pt-0.5">
+              <span className="flex-shrink-0 w-[14px] flex justify-center">
+                <div className="w-[11px] h-[11px] rounded-full border border-indigo-400/40 border-t-transparent animate-spin" />
+              </span>
+              <span className="text-sm text-neutral-500 leading-snug">{chatThinkingMessage}</span>
+            </div>
+          )}
+        </div>
+
+        {allDone && (
+          <button
+            onClick={() => setIsThoughtsExpanded(false)}
+            className="flex items-center gap-1.5 text-xs text-neutral-800 hover:text-neutral-600 transition-colors mt-2 group"
+          >
+            <svg width="9" height="9" viewBox="0 0 9 9" fill="none" className="flex-shrink-0 group-hover:text-neutral-600 transition-colors">
+              <path d="M1.5 6.5L4.5 2.5L7.5 6.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+            <span>Recolher</span>
+            <span className="text-neutral-900">·</span>
+            <span className="tabular-nums">{elapsedSeconds}s</span>
+          </button>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-row h-full w-full overflow-hidden" style={{ backgroundColor: 'var(--bg-base)' }}>
       <div className="flex flex-col h-full bg-transparent text-white relative w-full">
@@ -1827,176 +1933,70 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 {messages.map((msg, msgIndex) => {
                   const isLastAssistant = msg.role === 'assistant' && msgIndex === messages.length - 1;
                   const isStreaming = isLastAssistant && isLoading && msg.content.length > 0;
+                  const shouldRenderAgentPanel = isAgentMode && isLastAssistant;
 
-                  // Esconde balão vazio quando thinking está ativo (indicador movido pro painel abaixo)
-                  if (isLastAssistant && !msg.content && (chatThinkingVisible || isLoading)) return null;
+                  // Esconde balão vazio quando thinking está ativo, mas mantém o painel acima
+                  if (isLastAssistant && !msg.content && (chatThinkingVisible || isLoading)) {
+                    if (shouldRenderAgentPanel) {
+                      return (
+                        <React.Fragment key={msg.id}>
+                          {renderAgentActivityPanel()}
+                        </React.Fragment>
+                      );
+                    }
+                    return null;
+                  }
 
                   return (
-                    <div
-                      key={msg.id}
-                      className={`flex items-start gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
-                    >
-                      {msg.role === 'assistant' && (
-                        <div className="flex-shrink-0 pt-0.5">
-                          <img
-                            src={arccoEmblemUrl}
-                            alt="Arcco"
-                            className={`w-8 h-8 md:w-[50px] md:h-[50px] object-contain opacity-75 ${isStreaming ? 'animate-pulse' : ''}`}
-                          />
-                        </div>
-                      )}
-                      <div className={`max-w-[95%] sm:max-w-[85%] md:max-w-[80%] rounded-2xl px-5 py-4 relative group
-                                  ${msg.role === 'user'
-                          ? 'bg-[#222] text-white rounded-tr-sm shadow-md'
-                          : 'bg-transparent text-neutral-200'
-                        } ${msg.isError ? 'border border-red-500/30 bg-red-500/10' : ''} ${isStreaming ? 'animate-typing-border' : ''
-                        }`}
+                    <React.Fragment key={msg.id}>
+                      {shouldRenderAgentPanel && renderAgentActivityPanel()}
+                      <div
+                        className={`flex items-start gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}
                       >
-                        {renderContent(msg.content)}
+                        {msg.role === 'assistant' && (
+                          <div className="flex-shrink-0 pt-0.5">
+                            <img
+                              src={arccoEmblemUrl}
+                              alt="Arcco"
+                              className={`w-8 h-8 md:w-[50px] md:h-[50px] object-contain opacity-75 ${isStreaming ? 'animate-pulse' : ''}`}
+                            />
+                          </div>
+                        )}
+                        <div className={`max-w-[95%] sm:max-w-[85%] md:max-w-[80%] rounded-2xl px-5 py-4 relative group
+                                    ${msg.role === 'user'
+                            ? 'bg-[#222] text-white rounded-tr-sm shadow-md'
+                            : 'bg-transparent text-neutral-200'
+                          } ${msg.isError ? 'border border-red-500/30 bg-red-500/10' : ''} ${isStreaming ? 'animate-typing-border' : ''
+                          }`}
+                        >
+                          {renderContent(msg.content)}
+                        </div>
                       </div>
-                    </div>
+                    </React.Fragment>
                   );
                 })}
 
                 {/* ── Activity Panel — steps do agente flutuando no chat (sem card) ── */}
                 {(() => {
                   // Non-agent mode: indicador de thinking minimalista
-                  if (!isAgentMode && chatThinkingVisible && isLoading) {
+                  if (!isAgentMode && isLoading) {
                     return (
                       <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px] py-1 animate-in fade-in duration-300">
                         <div className="flex items-center gap-2.5">
-                          <div className="relative flex-shrink-0 flex items-center gap-1">
-                            {chatThinkingDeep ? (
-                              // Três dots bouncing — modelo especialista está trabalhando
-                              <>
-                                <span className="w-1.5 h-1.5 rounded-full bg-violet-400/70 animate-bounce" style={{ animationDelay: '0ms' }} />
-                                <span className="w-1.5 h-1.5 rounded-full bg-violet-400/70 animate-bounce" style={{ animationDelay: '150ms' }} />
-                                <span className="w-1.5 h-1.5 rounded-full bg-violet-400/70 animate-bounce" style={{ animationDelay: '300ms' }} />
-                              </>
-                            ) : (
-                              // Dot único pulsante — modelo rápido avaliando
-                              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400/60 animate-pulse" />
-                            )}
-                          </div>
-                          <span className="text-sm text-neutral-500">{chatThinkingMessage || 'Processando...'}</span>
+                          <img
+                            src={arccoEmblemUrl}
+                            alt=""
+                            className="w-4 h-4 object-contain flex-shrink-0 opacity-70 animate-pulse"
+                          />
+                          {chatThinkingVisible && chatThinkingMessage ? (
+                            <span className="text-sm text-neutral-500">{chatThinkingMessage}</span>
+                          ) : null}
                         </div>
                       </div>
                     );
                   }
 
-                  if (!isAgentMode) return null;
-
-                  const hasSteps = agentThoughts.length > 0;
-                  const allDone = hasSteps && agentThoughts.every(s => s.status === 'done');
-                  const actionSteps = agentThoughts.filter(s => !s.isThought);
-                  const stepsCollapsed = allDone && !isThoughtsExpanded;
-
-                  if (!hasSteps && !isLoading) return null;
-
-                  // Loading sem steps — pulso discreto
-                  if (!hasSteps && isLoading) {
-                    return (
-                      <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px] py-1 animate-in fade-in duration-300">
-                        <div className="flex items-center gap-2.5">
-                          <img src={arccoEmblemUrl} alt="" className="w-3.5 h-3.5 object-contain animate-pulse-soft flex-shrink-0 opacity-40" />
-                          <span className="text-sm text-neutral-600 animate-pulse-soft">Analisando...</span>
-                        </div>
-                      </div>
-                    );
-                  }
-
-                  // Collapsed — linha única e discreta
-                  if (stepsCollapsed) {
-                    return (
-                      <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px]">
-                        <button
-                          onClick={() => setIsThoughtsExpanded(true)}
-                          className="flex items-center gap-2 text-xs text-neutral-700 hover:text-neutral-500 transition-colors py-1.5 group"
-                        >
-                          <svg width="9" height="9" viewBox="0 0 9 9" fill="none" className="flex-shrink-0 text-neutral-700 group-hover:text-neutral-500 transition-colors">
-                            <path d="M2.5 1.5L6.5 4.5L2.5 7.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                          <span>{actionSteps.length} etapa{actionSteps.length !== 1 ? 's' : ''}</span>
-                          <span className="text-neutral-800">·</span>
-                          <span className="tabular-nums">{elapsedSeconds}s</span>
-                        </button>
-                      </div>
-                    );
-                  }
-
-                  // Expanded — lista flutuante, sem card
-                  return (
-                    <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px]">
-                      <div className="py-0.5 space-y-1.5">
-                        {agentThoughts.map((step, i) => {
-                          const isStepRunning = step.status === 'running';
-                          const label = step.label.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\u200d\ufe0f]/gu, '').trim();
-
-                          // Thought — texto de raciocínio interno, mais discreto
-                          if (step.isThought) {
-                            return (
-                              <div key={i} className="pl-[22px] animate-step-enter" style={{ animationDelay: `${i * 35}ms` }}>
-                                <span className={`text-xs leading-relaxed italic ${isStepRunning ? 'text-neutral-600' : 'text-neutral-800'}`}>
-                                  {label}
-                                </span>
-                              </div>
-                            );
-                          }
-
-                          // Action step
-                          return (
-                            <div key={i} className="flex items-center gap-2.5 animate-step-enter" style={{ animationDelay: `${i * 35}ms` }}>
-                              {/* Ícone de estado */}
-                              <span className="flex-shrink-0 w-[14px] flex justify-center">
-                                {step.status === 'done' ? (
-                                  <span className="text-[11px] text-emerald-600/60 animate-check-pop leading-none">✓</span>
-                                ) : isStepRunning ? (
-                                  <div className="w-[5px] h-[5px] rounded-full bg-indigo-400 animate-ring-pulse" />
-                                ) : (
-                                  <span className="text-[10px] text-neutral-800 leading-none">·</span>
-                                )}
-                              </span>
-                              {/* Label do step */}
-                              <span className={`text-sm leading-snug ${
-                                isStepRunning
-                                  ? 'shimmer-text text-neutral-400'
-                                  : step.status === 'done'
-                                  ? 'text-neutral-700'
-                                  : 'text-neutral-800'
-                              }`}>
-                                {label}
-                              </span>
-                            </div>
-                          );
-                        })}
-
-                        {/* Pre-action message — o que o agente está fazendo agora */}
-                        {chatThinkingVisible && chatThinkingMessage && !allDone && (
-                          <div className="flex items-center gap-2.5 animate-in fade-in duration-300 pt-0.5">
-                            <span className="flex-shrink-0 w-[14px] flex justify-center">
-                              <div className="w-[11px] h-[11px] rounded-full border border-indigo-400/40 border-t-transparent animate-spin" />
-                            </span>
-                            <span className="text-sm text-neutral-500 leading-snug">{chatThinkingMessage}</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Recolher — só quando concluído */}
-                      {allDone && (
-                        <button
-                          onClick={() => setIsThoughtsExpanded(false)}
-                          className="flex items-center gap-1.5 text-xs text-neutral-800 hover:text-neutral-600 transition-colors mt-2 group"
-                        >
-                          <svg width="9" height="9" viewBox="0 0 9 9" fill="none" className="flex-shrink-0 group-hover:text-neutral-600 transition-colors">
-                            <path d="M1.5 6.5L4.5 2.5L7.5 6.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                          <span>Recolher</span>
-                          <span className="text-neutral-900">·</span>
-                          <span className="tabular-nums">{elapsedSeconds}s</span>
-                        </button>
-                      )}
-                    </div>
-                  );
+                  return null;
                 })()}
 
                 {/* Browser Agent Card — mostra card estilo Manus quando o agente navega */}
