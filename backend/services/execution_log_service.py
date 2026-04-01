@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,6 +26,12 @@ def _safe_json(value: Any) -> Any:
         return {"repr": repr(value)}
 
 
+def _looks_like_uuid(value: str | None) -> bool:
+    if not value or not isinstance(value, str):
+        return False
+    return bool(re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}", value.strip()))
+
+
 class ExecutionLogService:
     def __init__(self):
         self._agent_sequence = 0
@@ -43,16 +50,24 @@ class ExecutionLogService:
         metadata: dict[str, Any] | None = None,
         model_used: str | None = None,
     ) -> str | None:
+        safe_metadata = dict(metadata or {})
+        normalized_user_id = user_id if _looks_like_uuid(user_id) else None
+        normalized_project_id = project_id if _looks_like_uuid(project_id) else None
+        if user_id is not None and normalized_user_id is None:
+            safe_metadata["original_user_id"] = str(user_id)
+        if project_id is not None and normalized_project_id is None:
+            safe_metadata["original_project_id"] = str(project_id)
+
         payload = {
             "conversation_id": conversation_id,
             "session_id": session_id,
-            "project_id": project_id,
-            "user_id": user_id,
+            "project_id": normalized_project_id,
+            "user_id": normalized_user_id,
             "request_text": request_text or "",
             "request_source": request_source,
             "supervisor_agent": supervisor_agent,
             "status": "running",
-            "metadata": _safe_json(metadata or {}),
+            "metadata": _safe_json(safe_metadata),
             "started_at": _now_iso(),
             "created_at": _now_iso(),
         }

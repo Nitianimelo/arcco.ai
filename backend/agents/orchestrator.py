@@ -147,6 +147,24 @@ TOOL_MAP = {
 # Rotas que DEVEM conter links de download
 ROUTES_REQUIRING_LINK = {"file_modifier"}
 _MARKDOWN_LINK_PATTERN = re.compile(r'\[([^\]]+)\]\((https?://[^\)]+)\)', re.IGNORECASE)
+_ATTACHMENT_READ_PATTERN = re.compile(
+    r"\b(leia|ler|resuma|resumir|analise|analisar|extraia|extrair|consulte|consulta|"
+    r"qual|quais|me diga|conte[uú]do|anexo|arquivo|pdf|planilha|documento)\b",
+    re.IGNORECASE,
+)
+_ATTACHMENT_MODIFY_PATTERN = re.compile(
+    r"\b(altere|alterar|modifique|modificar|edite|editar|atualize|atualizar|"
+    r"substitua|substituir|mude|mudar|adicione|adicionar|remova|remover|preencha|preencher)\b",
+    re.IGNORECASE,
+)
+_VISUAL_REQUEST_PATTERN = re.compile(
+    r"\b(banner|post|carrossel|slide|apresenta[cç][aã]o|flyer|panfleto|landing page|layout|pe[cç]a visual)\b",
+    re.IGNORECASE,
+)
+_TOOL_CALL_LEAK_PATTERN = re.compile(
+    r'^\s*(?:```(?:json)?\s*)?\{[\s\S]*"(?:tool|function|parameters)"\s*:',
+    re.IGNORECASE,
+)
 
 # ── Utilitários SSE ──────────────────────────────────────────────────────────
 
@@ -253,6 +271,119 @@ def _extract_storage_markdown_links(content: str) -> list[tuple[str, str]]:
     ]
 
 
+def _is_error_result(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    error_markers = (
+        lowered.startswith("erro"),
+        lowered.startswith("error"),
+        "client error" in lowered,
+        "server error" in lowered,
+        "payment required" in lowered,
+        "unauthorized" in lowered,
+        "excedeu 90s" in lowered,
+        "timeout" in lowered and ("erro" in lowered or "falh" in lowered),
+        "tool call obrigatório não emitido" in lowered,
+        "falhou:" in lowered,
+    )
+    return any(error_markers)
+
+
+def _sanitize_user_facing_response(content: str, *, had_failures: bool = False) -> str:
+    text = (content or "").strip()
+    if not text:
+        return "Desculpe, não consegui gerar uma resposta confiável."
+    if _TOOL_CALL_LEAK_PATTERN.search(text) or ('"tool"' in text and "ask_" in text):
+        if had_failures:
+            return (
+                "Não consegui concluir a tarefa com confiabilidade porque uma ou mais ferramentas "
+                "falharam durante a execução. Ajuste a configuração necessária e tente novamente."
+            )
+        return "Desculpe, a resposta final saiu em formato interno inválido. Tente novamente."
+    return text
+
+
+def _get_session_inventory_items(session_id: str | None) -> list[dict[str, Any]]:
+    if not session_id:
+        return []
+    try:
+        from backend.services.session_file_service import list_session_files, touch_session
+
+        touch_session(session_id)
+        return list_session_files(session_id)
+    except Exception as exc:
+        logger.error("Falha ao ler inventário da sessão %s: %s", session_id, exc)
+        return []
+
+
+def _select_referenced_session_file(user_intent: str, session_id: str | None) -> dict[str, Any] | None:
+    inventory = _get_session_inventory_items(session_id)
+    if not inventory:
+        return None
+
+    normalized_intent = (user_intent or "").lower()
+    for item in inventory:
+        file_name = str(item.get("original_name") or item.get("file_name") or "").strip()
+        if file_name and file_name.lower() in normalized_intent:
+            return item
+
+    if len(inventory) == 1 and _ATTACHMENT_READ_PATTERN.search(user_intent or ""):
+        return inventory[0]
+
+    return None
+
+
+def _normalize_plan_for_session_files(plan_output, *, user_intent: str, session_id: str | None):
+    ref = _select_referenced_session_file(user_intent, session_id)
+    if not ref:
+        return plan_output
+
+    if _ATTACHMENT_MODIFY_PATTERN.search(user_intent or ""):
+        return plan_output
+
+    file_name = str(ref.get("original_name") or ref.get("file_name") or "").strip()
+    if not file_name:
+        return plan_output
+
+    plan_output.is_complex = True
+    plan_output.steps = [
+        type(plan_output.steps[0])(
+            step=1,
+            action="session_file",
+            detail=f"Ler o anexo da sessão '{file_name}' e extrair apenas os dados necessários para responder ao pedido.",
+            is_terminal=False,
+        ),
+        type(plan_output.steps[0])(
+            step=2,
+            action="direct_answer",
+            detail="Responder ao usuário usando exclusivamente o conteúdo validado do anexo lido.",
+            is_terminal=True,
+        ),
+    ]
+    logger.info("[ORCHESTRATOR] Plano normalizado para leitura de anexo da sessão: %s", file_name)
+    return plan_output
+
+
+def _normalize_plan_for_visual_requests(plan_output, *, user_intent: str):
+    if not _VISUAL_REQUEST_PATTERN.search(user_intent or ""):
+        return plan_output
+
+    design_indexes = [idx for idx, step in enumerate(plan_output.steps) if step.action == "design_generator"]
+    if not design_indexes:
+        return plan_output
+
+    first_design_idx = design_indexes[0]
+    truncated = plan_output.steps[: first_design_idx + 1]
+    for idx, step in enumerate(truncated, start=1):
+        step.step = idx
+        step.is_terminal = idx == len(truncated)
+    plan_output.steps = truncated
+    logger.info("[ORCHESTRATOR] Plano visual truncado para encerrar em design_generator.")
+    return plan_output
+
+
 def _artifact_payload(label: str, url: str) -> str:
     return json.dumps({"filename": label, "url": url})
 
@@ -285,6 +416,60 @@ async def _stream_assistant_text(messages: list, model: str) -> AsyncGenerator[s
 
     if not accumulated:
         yield sse("chunk", "Desculpe, não consegui gerar uma resposta. Tente novamente.")
+
+
+async def _yield_text_chunks(content: str, chunk_size: int = 40) -> AsyncGenerator[str, None]:
+    text = content or "Desculpe, não consegui gerar uma resposta. Tente novamente."
+    for i in range(0, len(text), chunk_size):
+        yield sse("chunk", text[i:i + chunk_size])
+
+
+async def _generate_consolidated_response(
+    *,
+    supervisor_prompt: str,
+    supervisor_model: str,
+    session_inventory_message: str,
+    user_intent: str,
+    accumulated_context: str,
+    had_failures: bool,
+    failure_summaries: list[str],
+) -> str:
+    failure_block = ""
+    if had_failures and failure_summaries:
+        failure_block = "\n\nFalhas verificadas durante a execução:\n- " + "\n- ".join(failure_summaries)
+    final_prompt = [
+        {"role": "system", "content": supervisor_prompt},
+        *(
+            [{"role": "system", "content": session_inventory_message}]
+            if session_inventory_message
+            else []
+        ),
+        {
+            "role": "user",
+            "content": (
+                f"Pedido inicial: {user_intent}\n\n"
+                "Use apenas os resultados validados abaixo para redigir a resposta final ao utilizador. "
+                "Se houve falhas, admita a limitação com clareza e NÃO invente fatos, links, valores, conteúdos de arquivos, "
+                "resultados de pesquisa, nem chame ferramentas. NÃO devolva JSON, pseudo-tool-calls ou instruções internas.\n\n"
+                f"Resultados validados:\n{accumulated_context or 'Nenhum resultado validado disponível.'}"
+                f"{failure_block}"
+            ),
+        },
+    ]
+    data = await _call_openrouter_with_timeout(
+        timeout=_SUPERVISOR_TIMEOUT,
+        label="consolidação final",
+        messages=final_prompt,
+        model=supervisor_model,
+        max_tokens=4096,
+        temperature=0.2,
+    )
+    content = (
+        data.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+    return _sanitize_user_facing_response(content, had_failures=had_failures)
 
 
 async def _resume_browser_handoff(
@@ -933,6 +1118,15 @@ async def orchestrate_and_stream(
             input_payload={"user_intent": user_intent},
         )
     plan_output = await generate_plan(_planner_intent, planner_model)
+    plan_output = _normalize_plan_for_session_files(
+        plan_output,
+        user_intent=user_intent,
+        session_id=session_id,
+    )
+    plan_output = _normalize_plan_for_visual_requests(
+        plan_output,
+        user_intent=user_intent,
+    )
     if execution_logger:
         await execution_logger.log_event(
             execution_id,
@@ -997,9 +1191,14 @@ async def orchestrate_and_stream(
         # O contexto acumulado que será passado de um agente para outro
         accumulated_context = ""
         final_answer = ""
+        had_failures = False
+        failure_summaries: list[str] = []
+        abort_pipeline = False
 
         # ── 2. Iteração do Plano ──
         for step in plan_output.steps:
+            if abort_pipeline:
+                break
             yield sse("steps", f"<step>Passo {step.step}/{len(plan_output.steps)}: {step.detail[:50]}...</step>")
             yield sse("thought", f"Iniciando ação '{step.action}': {step.detail}")
             if execution_logger:
@@ -1030,6 +1229,7 @@ async def orchestrate_and_stream(
             # Isso garante que o Supervisor chame a ferramenta certa para cada passo,
             # evitando que o LLM substitua ask_browser por ask_web_search, por exemplo.
             _PLANNER_ACTION_TO_TOOL = {
+                "session_file":   "read_session_file",
                 "browser":        "ask_browser",
                 "web_search":     "ask_web_search",
                 "python":         "execute_python",
@@ -1047,6 +1247,34 @@ async def orchestrate_and_stream(
                 if _forced_tool_name
                 else "auto"
             )
+
+            if step.action == "direct_answer":
+                try:
+                    final_result = await _generate_consolidated_response(
+                        supervisor_prompt=supervisor_prompt,
+                        supervisor_model=supervisor_model,
+                        session_inventory_message=session_inventory_message or "",
+                        user_intent=user_intent,
+                        accumulated_context=accumulated_context,
+                        had_failures=had_failures,
+                        failure_summaries=failure_summaries,
+                    )
+                except Exception as exc:
+                    logger.error("[ORCHESTRATOR] Erro ao gerar resposta direta do plano: %s", exc)
+                    final_result = _sanitize_user_facing_response(
+                        accumulated_context or "Desculpe, não consegui concluir a resposta com segurança.",
+                        had_failures=True,
+                    )
+                async for event in _yield_text_chunks(final_result):
+                    yield event
+                if execution_logger:
+                    await execution_logger.log_event(
+                        execution_id,
+                        event_type="pipeline_terminated",
+                        message=f"Pipeline encerrado no step {step.step}/{len(plan_output.steps)} (direct_answer).",
+                        raw_payload={"step": step.step, "action": step.action},
+                    )
+                return
 
             try:
                 supervisor_agent_id = None
@@ -1104,6 +1332,7 @@ async def orchestrate_and_stream(
 
             # Tratamento da resposta do Supervisor / Tool Call
             if message.get("tool_calls"):
+                tool_failed = False
                 for tool in message["tool_calls"]:
                     func_name = tool["function"]["name"]
                     try:
@@ -1151,11 +1380,19 @@ async def orchestrate_and_stream(
                                 )
                             async for artifact_event in _emit_file_artifacts(specialist_result):
                                 yield artifact_event
-                            accumulated_context += f"\n[Passo {step.step} - session_file]: {specialist_result}"
-                            yield sse(
-                                "thought",
-                                f"Arquivo de sessão consultado: {func_args.get('file_name', '')}",
-                            )
+                            if _is_error_result(specialist_result):
+                                had_failures = True
+                                tool_failed = True
+                                failure_msg = f"Falha ao consultar o anexo {func_args.get('file_name', '') or 'da sessão'}."
+                                failure_summaries.append(failure_msg)
+                                accumulated_context += f"\n[Passo {step.step} - ERRO session_file]: {specialist_result}"
+                                yield sse("thought", failure_msg)
+                            else:
+                                accumulated_context += f"\n[Passo {step.step} - session_file]: {specialist_result}"
+                                yield sse(
+                                    "thought",
+                                    f"Arquivo de sessão consultado: {func_args.get('file_name', '')}",
+                                )
 
                         elif route == "web_search":
                             query = func_args.get("query", "")
@@ -1190,8 +1427,16 @@ async def orchestrate_and_stream(
                                 )
                             async for artifact_event in _emit_file_artifacts(specialist_result):
                                 yield artifact_event
-                            accumulated_context += f"\n[Passo {step.step} - web_search]: {specialist_result}"
-                            yield sse("thought", f"Dados obtidos da web via busca: {query}")
+                            if _is_error_result(specialist_result):
+                                had_failures = True
+                                tool_failed = True
+                                failure_msg = f"Falha na pesquisa web para '{query[:80]}'."
+                                failure_summaries.append(failure_msg)
+                                accumulated_context += f"\n[Passo {step.step} - ERRO web_search]: {specialist_result}"
+                                yield sse("thought", failure_msg)
+                            else:
+                                accumulated_context += f"\n[Passo {step.step} - web_search]: {specialist_result}"
+                                yield sse("thought", f"Dados obtidos da web via busca: {query}")
 
                         elif route == "python":
                             yield sse("steps", f"<step>Executando código Python (Passo {step.step})...</step>")
@@ -1214,18 +1459,16 @@ async def orchestrate_and_stream(
                                     tool_args=func_args,
                                     tool_result=str(specialist_result)[:2000],
                                 )
-                            if specialist_result.startswith("Erro"):
-                                if execution_logger:
-                                    await execution_logger.finish_agent(
-                                        tool_agent_id,
-                                        status="failed",
-                                        output_payload={"preview": specialist_result[:2000]},
-                                        error_text=specialist_result,
-                                    )
-                                yield sse("error", specialist_result)
-                                return
-                            accumulated_context += f"\n[Passo {step.step} - python]: {specialist_result}"
-                            yield sse("thought", f"Resultado do código Python: {specialist_result[:120]}...")
+                            if _is_error_result(specialist_result):
+                                had_failures = True
+                                tool_failed = True
+                                failure_msg = "Falha na execução Python deste passo."
+                                failure_summaries.append(failure_msg)
+                                accumulated_context += f"\n[Passo {step.step} - ERRO python]: {specialist_result}"
+                                yield sse("thought", failure_msg)
+                            else:
+                                accumulated_context += f"\n[Passo {step.step} - python]: {specialist_result}"
+                                yield sse("thought", f"Resultado do código Python: {specialist_result[:120]}...")
 
                         elif route == "browser":
                             url = func_args.get("url", "")
@@ -1294,14 +1537,18 @@ async def orchestrate_and_stream(
                             async for artifact_event in _emit_file_artifacts(specialist_result):
                                 yield artifact_event
 
-                            if specialist_result.startswith("Erro"):
+                            if _is_error_result(specialist_result):
                                 yield sse("browser_action", json.dumps({
                                     "status": "error",
                                     "url": url,
                                     "title": specialist_result[:100]
                                 }))
-                                yield sse("thought", f"Falha ao extrair dados de {url}. Ajustando rota...")
-                                accumulated_context += f"\n[Passo {step.step} - browser]: Falha ao acessar {url}: {specialist_result}"
+                                had_failures = True
+                                tool_failed = True
+                                failure_msg = f"Falha ao acessar {url} no navegador."
+                                failure_summaries.append(failure_msg)
+                                yield sse("thought", failure_msg)
+                                accumulated_context += f"\n[Passo {step.step} - ERRO browser]: {specialist_result}"
                             else:
                                 yield sse("browser_action", json.dumps({
                                     "status": "done",
@@ -1333,7 +1580,15 @@ async def orchestrate_and_stream(
                                 )
                             async for artifact_event in _emit_file_artifacts(research_result):
                                 yield artifact_event
-                            accumulated_context += f"\n[Passo {step.step} - deep_research]: {research_result}"
+                            if _is_error_result(research_result) or not research_result.strip():
+                                had_failures = True
+                                tool_failed = True
+                                failure_msg = f"Falha na pesquisa profunda para '{research_query[:80]}'."
+                                failure_summaries.append(failure_msg)
+                                accumulated_context += f"\n[Passo {step.step} - ERRO deep_research]: {research_result or 'Sem resultado.'}"
+                                yield sse("thought", failure_msg)
+                            else:
+                                accumulated_context += f"\n[Passo {step.step} - deep_research]: {research_result}"
 
                         elif route == "spy_pages":
                             yield sse("steps", f"<step>Analisando sites via SimilarWeb (Passo {step.step})...</step>")
@@ -1349,8 +1604,16 @@ async def orchestrate_and_stream(
                                 specialist_result = await skills_loader.execute_dynamic_skill(func_name, func_args)
                             except Exception as e:
                                 specialist_result = f"Erro na skill {func_name}: {e}"
-                            accumulated_context += f"\n[Passo {step.step} - {func_name}]: {specialist_result}"
-                            yield sse("thought", f"Skill {func_name} executada com sucesso.")
+                            if _is_error_result(specialist_result):
+                                had_failures = True
+                                tool_failed = True
+                                failure_msg = f"Falha na skill {func_name}."
+                                failure_summaries.append(failure_msg)
+                                accumulated_context += f"\n[Passo {step.step} - ERRO {func_name}]: {specialist_result}"
+                                yield sse("thought", failure_msg)
+                            else:
+                                accumulated_context += f"\n[Passo {step.step} - {func_name}]: {specialist_result}"
+                                yield sse("thought", f"Skill {func_name} executada com sucesso.")
 
                         elif is_terminal:
                             # Ferramentas que PODEM ser terminais (text_generator, design_generator)
@@ -1383,7 +1646,14 @@ async def orchestrate_and_stream(
                                     raw_payload={"preview": final_result[:2000], "is_terminal": step.is_terminal},
                                 )
 
-                            if step.is_terminal:
+                            if _is_error_result(final_result):
+                                had_failures = True
+                                tool_failed = True
+                                failure_msg = f"Falha na etapa terminal {route}."
+                                failure_summaries.append(failure_msg)
+                                accumulated_context += f"\n[Passo {step.step} - ERRO {route}]: {final_result}"
+                                yield sse("thought", failure_msg)
+                            elif step.is_terminal:
                                 # ── TERMINAL: envia direto ao frontend e para o pipeline ──
                                 if route == "text_generator":
                                     doc_match = _DOC_TAG_RE.search(final_result)
@@ -1506,15 +1776,18 @@ async def orchestrate_and_stream(
                             success_preview = locals().get("specialist_result") or locals().get("research_result") or ""
                             await execution_logger.finish_agent(
                                 tool_agent_id,
-                                status="failed" if str(success_preview).startswith("Erro") else "completed",
+                                status="failed" if _is_error_result(success_preview) else "completed",
                                 output_payload={"preview": str(success_preview)[:2000]},
-                                error_text=str(success_preview)[:2000] if str(success_preview).startswith("Erro") else None,
+                                error_text=str(success_preview)[:2000] if _is_error_result(success_preview) else None,
                             )
 
                     except Exception as tool_exc:
                         # Captura qualquer erro (ImportError, timeout, etc.) sem matar o pipeline
                         logger.error(f"[ORCHESTRATOR] Erro na tool '%s' (Passo %s): %s", func_name, step.step, tool_exc)
                         error_msg = f"Ferramenta '{func_name}' falhou: {tool_exc}"
+                        had_failures = True
+                        tool_failed = True
+                        failure_summaries.append(error_msg)
                         accumulated_context += f"\n[Passo {step.step} - ERRO {route}]: {error_msg}"
                         yield sse("thought", f"Erro no passo {step.step}: {error_msg}")
                         if execution_logger:
@@ -1532,6 +1805,18 @@ async def orchestrate_and_stream(
                                 status="failed",
                                 error_text=error_msg,
                             )
+
+                if tool_failed:
+                    abort_pipeline = True
+                    if execution_logger:
+                        await execution_logger.log_event(
+                            execution_id,
+                            level="warning",
+                            event_type="pipeline_aborted",
+                            message=f"Pipeline interrompido após falha no passo {step.step}.",
+                            raw_payload={"step": step.step, "failures": failure_summaries[-3:]},
+                        )
+                    break
 
             else:
                 # O LLM decidiu não usar TOOL, apenas gerou texto
@@ -1571,18 +1856,17 @@ async def orchestrate_and_stream(
         yield sse("steps", "<step>Consolidando resultados dos passos...</step>")
         yield sse("thought", "Organizando os resultados coletados e redigindo a resposta final...")
         
-        final_prompt = [
-            {"role": "system", "content": supervisor_prompt},
-            *(
-                [{"role": "system", "content": session_inventory_message}]
-                if session_inventory_message
-                else []
-            ),
-            {"role": "user", "content": f"Pedido inicial: {user_intent}\n\nExecutei um plano de vários passos e recolhi o seguinte histórico/resultados:\n{accumulated_context}\n\nPor favor, escreva a resposta final amigável e conclusiva para o utilizador, incluindo todos os links de arquivos ou sumários relevantes obtidos nos passos."}
-        ]
-        
         try:
-            async for event in _stream_assistant_text(final_prompt, supervisor_model):
+            final_response = await _generate_consolidated_response(
+                supervisor_prompt=supervisor_prompt,
+                supervisor_model=supervisor_model,
+                session_inventory_message=session_inventory_message or "",
+                user_intent=user_intent,
+                accumulated_context=accumulated_context,
+                had_failures=had_failures,
+                failure_summaries=failure_summaries,
+            )
+            async for event in _yield_text_chunks(final_response):
                 yield event
             if execution_logger:
                 await execution_logger.log_event(
@@ -1600,8 +1884,12 @@ async def orchestrate_and_stream(
                     message=str(exc),
                 )
             yield sse("error", f"Falha ao consolidar a resposta final: {exc}")
-            fallback_text = accumulated_context or "Desculpe, não consegui consolidar a resposta final."
-            yield sse("chunk", fallback_text)
+            fallback_text = _sanitize_user_facing_response(
+                accumulated_context or "Desculpe, não consegui consolidar a resposta final.",
+                had_failures=True,
+            )
+            async for event in _yield_text_chunks(fallback_text):
+                yield event
 
         return
 
@@ -1617,6 +1905,7 @@ async def orchestrate_and_stream(
     if session_inventory_message:
         current_messages.append({"role": "system", "content": session_inventory_message})
     current_messages += messages
+    referenced_session_file = _select_referenced_session_file(user_intent, session_id)
     MAX_ITERATIONS = 3
 
     for iteration in range(MAX_ITERATIONS):
@@ -1698,6 +1987,15 @@ async def orchestrate_and_stream(
                 # Contexto recente para sub-agentes
                 recent_context = [m for m in messages if m.get("role") in ["user", "assistant"]][-5:]
 
+                if route == "browser" and referenced_session_file:
+                    route = "session_file"
+                    is_terminal = False
+                    func_name = "read_session_file"
+                    func_args = {
+                        "session_id": session_id,
+                        "file_name": referenced_session_file.get("name", ""),
+                    }
+
                 # ── ROTA: Pesquisa Web Rápida (direto, sem sub-agente, sem QA) ──
                 if route == "session_file":
                     file_name = func_args.get("file_name", "")
@@ -1724,11 +2022,11 @@ async def orchestrate_and_stream(
                     if execution_logger:
                         await execution_logger.finish_agent(
                             react_agent_id,
-                            status="failed" if specialist_result.startswith("Erro") else "completed",
+                            status="failed" if _is_error_result(specialist_result) else "completed",
                             output_payload={"preview": specialist_result[:2000]},
-                            error_text=specialist_result if specialist_result.startswith("Erro") else None,
+                            error_text=specialist_result if _is_error_result(specialist_result) else None,
                         )
-                    if specialist_result.startswith("Erro"):
+                    if _is_error_result(specialist_result):
                         yield sse("error", specialist_result)
                         return
 
@@ -1767,7 +2065,7 @@ async def orchestrate_and_stream(
                             tool_result=str(specialist_result)[:2000],
                         )
 
-                    if fetch_url and not specialist_result.startswith("Erro"):
+                    if fetch_url and not _is_error_result(specialist_result):
                         yield sse("steps", f"<step>Lendo página {fetch_url[:50]}...</step>")
                         try:
                             page_content = await asyncio.wait_for(
@@ -1791,19 +2089,27 @@ async def orchestrate_and_stream(
                     if execution_logger:
                         await execution_logger.finish_agent(
                             react_agent_id,
-                            status="completed",
+                            status="failed" if _is_error_result(specialist_result) else "completed",
                             output_payload={"preview": specialist_result[:2000]},
+                            error_text=specialist_result if _is_error_result(specialist_result) else None,
                         )
-                    # Força o supervisor a sintetizar e responder agora —
-                    # evita que o LLM fique em loop chamando mais buscas.
-                    current_messages.append({
-                        "role": "system",
-                        "content": (
-                            "Os dados da busca foram obtidos com sucesso. "
-                            "Sintetize as informações recebidas e responda ao usuário agora de forma clara e objetiva. "
-                            "NÃO chame mais ferramentas de busca."
-                        ),
-                    })
+                    if _is_error_result(specialist_result):
+                        current_messages.append({
+                            "role": "system",
+                            "content": (
+                                "A busca web falhou. NÃO invente dados nem cite resultados não verificados. "
+                                "Explique a limitação ao usuário e peça outra abordagem se necessário."
+                            ),
+                        })
+                    else:
+                        current_messages.append({
+                            "role": "system",
+                            "content": (
+                                "Os dados da busca foram obtidos com sucesso. "
+                                "Sintetize as informações recebidas e responda ao usuário agora de forma clara e objetiva. "
+                                "NÃO chame mais ferramentas de busca."
+                            ),
+                        })
                     yield sse("steps", "<step>Dados recebidos — elaborando resposta...</step>")
 
                 # ── ROTA: Execução Python (direto, sem sub-agente, sem QA) ──
@@ -1826,7 +2132,7 @@ async def orchestrate_and_stream(
                             tool_args=func_args,
                             tool_result=str(specialist_result)[:2000],
                         )
-                    if specialist_result.startswith("Erro"):
+                    if _is_error_result(specialist_result):
                         if execution_logger:
                             await execution_logger.finish_agent(
                                 react_agent_id,
@@ -1845,9 +2151,9 @@ async def orchestrate_and_stream(
                     if execution_logger:
                         await execution_logger.finish_agent(
                             react_agent_id,
-                            status="completed" if not specialist_result.startswith("Erro") else "failed",
+                            status="completed" if not _is_error_result(specialist_result) else "failed",
                             output_payload={"preview": specialist_result[:2000]},
-                            error_text=specialist_result if specialist_result.startswith("Erro") else None,
+                            error_text=specialist_result if _is_error_result(specialist_result) else None,
                         )
 
                 # ── ROTA: Browser (direto, sem sub-agente, sem QA) ──
@@ -1915,7 +2221,7 @@ async def orchestrate_and_stream(
                     async for artifact_event in _emit_file_artifacts(specialist_result):
                         yield artifact_event
 
-                    if specialist_result.startswith("Erro"):
+                    if _is_error_result(specialist_result):
                         yield sse("browser_action", json.dumps({
                             "status": "error",
                             "url": url,
@@ -1932,6 +2238,7 @@ async def orchestrate_and_stream(
                             "content": (
                                 "O navegador falhou ou está indisponível. "
                                 "NÃO tente usar ask_browser novamente. "
+                                "NÃO invente dados da página nem diga que conseguiu acessar algo que falhou. "
                                 "Se precisar de dados da web, use ask_web_search. "
                                 "Caso contrário, responda ao usuário com as informações disponíveis."
                             ),
@@ -1952,9 +2259,9 @@ async def orchestrate_and_stream(
                     if execution_logger:
                         await execution_logger.finish_agent(
                             react_agent_id,
-                            status="completed" if not specialist_result.startswith("Erro") else "failed",
+                            status="completed" if not _is_error_result(specialist_result) else "failed",
                             output_payload={"preview": specialist_result[:2000]},
-                            error_text=specialist_result if specialist_result.startswith("Erro") else None,
+                            error_text=specialist_result if _is_error_result(specialist_result) else None,
                         )
 
                 # ── ROTA: Pesquisa Profunda (multi-step, paralelo) ──
@@ -1995,9 +2302,19 @@ async def orchestrate_and_stream(
                         )
                         await execution_logger.finish_agent(
                             react_agent_id,
-                            status="completed",
+                            status="failed" if _is_error_result(research_result) else "completed",
                             output_payload={"preview": research_result[:2000]},
+                            error_text=research_result if _is_error_result(research_result) else None,
                         )
+                    if _is_error_result(research_result):
+                        current_messages.append({
+                            "role": "system",
+                            "content": (
+                                "A pesquisa profunda falhou ou foi inconclusiva. "
+                                "NÃO invente fatos nem cite fontes não verificadas. "
+                                "Explique a limitação ao usuário."
+                            ),
+                        })
                     yield sse("steps", "<step>Pesquisa profunda concluída — preparando resposta...</step>")
 
                 # ── ROTA: Spy Pages (SimilarWeb via Apify) ──
@@ -2208,10 +2525,11 @@ async def orchestrate_and_stream(
                 return
 
             # A resposta já está em message["content"] — fazemos streaming direto sem segunda chamada LLM.
-            final_content = content or "Desculpe, não consegui gerar uma resposta. Tente novamente."
-            chunk_size = 40
-            for i in range(0, len(final_content), chunk_size):
-                yield sse("chunk", final_content[i:i + chunk_size])
+            final_content = _sanitize_user_facing_response(
+                content or "Desculpe, não consegui gerar uma resposta. Tente novamente."
+            )
+            async for event in _yield_text_chunks(final_content):
+                yield event
 
             return
 
