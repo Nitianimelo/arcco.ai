@@ -1,17 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const supabaseKey = (
-  (import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY as string | undefined) ||
-  (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)
-);
+const DEFAULT_SUPABASE_URL = 'https://gfkycxdbbzczrwikhcpr.supabase.co';
+const DEFAULT_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdma3ljeGRiYnpjenJ3aWtoY3ByIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk3ODI1OTMsImV4cCI6MjA4NTM1ODU5M30.DbXQr0nL8cfsRskYy-j4mHsgblgd1Zo5Ka5ccFmSYV8';
 
-if (!supabaseUrl || !supabaseKey) {
-  throw new Error(
-    'Supabase não configurado. Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY ' +
-    '(ou VITE_SUPABASE_SERVICE_ROLE_KEY para o ambiente local do admin).'
-  );
-}
+const supabaseUrl =
+  (import.meta.env.VITE_SUPABASE_URL as string | undefined) ||
+  DEFAULT_SUPABASE_URL;
+
+// No frontend, sempre use a anon key. Service role não deve ir para produção no browser.
+const supabaseKey =
+  (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ||
+  DEFAULT_SUPABASE_ANON_KEY;
 
 export const supabase = createClient(supabaseUrl, supabaseKey);
 
