@@ -36,7 +36,7 @@
     "canvas_preset": "instagram-square",
     "category": "brand",
     "description": "Post de feed quadrado com headline dominante, suporte curto e CTA discreto.",
-    "tags": ["feed", "instagram", "square", "minimal", "brand", "post"],
+    "tags": ["feed", "instagram", "square", "minimal", "brand", "post", "promotion", "promoção", "promocao", "oferta", "campanha", "editorial", "festivo"],
     "requires_image": true,
     "default_image_query": "premium editorial background",
     "slots": ["eyebrow", "headline", "subheadline", "hero_image", "cta", "logo"]
@@ -50,7 +50,7 @@
     "canvas_preset": "instagram-portrait",
     "category": "editorial",
     "description": "Post retrato com fotografia hero, bloco editorial e CTA no rodapé.",
-    "tags": ["feed", "portrait", "editorial", "instagram", "campanha", "foto"],
+    "tags": ["feed", "portrait", "editorial", "instagram", "campanha", "foto", "promoção", "promocao", "oferta", "lifestyle", "premium"],
     "requires_image": true,
     "default_image_query": "editorial fashion minimal",
     "slots": ["eyebrow", "headline", "subheadline", "hero_image", "cta"]

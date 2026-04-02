@@ -24,8 +24,8 @@ from backend.core.llm import call_openrouter
 from backend.agents import registry
 from backend.services.design_template_registry import (
     build_slot_defaults,
+    choose_design_route,
     infer_template_family,
-    pick_design_template,
 )
 from backend.services.unsplash import build_unsplash_url
 
@@ -90,6 +90,8 @@ class StaticDesignSpec(BaseModel):
     template_id: Optional[str] = Field(default=None, description="ID do template determinístico escolhido.")
     template_label: Optional[str] = Field(default=None, description="Nome amigável do template escolhido.")
     template_css_class: Optional[str] = Field(default=None, description="Classe CSS-base do template, quando aplicável.")
+    render_mode: Optional[Literal["deterministic", "guided", "open"]] = Field(default=None, description="Estratégia de renderização: template fixo, template guiado ou criação livre.")
+    template_score: Optional[int] = Field(default=None, description="Score de aderência do template escolhido.")
     image_provider: Optional[Literal["unsplash"]] = Field(default=None, description="Provedor de imagem recomendado.")
     image_query: Optional[str] = Field(default=None, description="Query de imagem sugerida para preencher o template.")
     image_url: Optional[str] = Field(default=None, description="URL pronta de imagem para o template, se disponível.")
@@ -115,7 +117,9 @@ def _build_fallback_spec(topic: str, format_hint: str, context_data: str) -> Sta
     if "páscoa" in topic.lower() or "pascoa" in topic.lower():
         palette = ["#7C5C3B", "#F4E6C8", "#D9B99B"]
     template_family = infer_template_family(topic, format_hint, context_data)
-    template = pick_design_template(topic, template_family, context_data, format_hint)
+    selection = choose_design_route(topic, template_family, context_data, format_hint)
+    template = selection["template"]
+    render_mode = str(selection["mode"])
     image_query = _default_image_query(topic, context_data, template)
     image_size = (1080, 1920) if template_family == "story" else (1080, 1350 if template_family == "feed" and "1350" in (template or {}).get("format", "") else 1080)
     image_url = (
@@ -143,6 +147,8 @@ def _build_fallback_spec(topic: str, format_hint: str, context_data: str) -> Sta
         template_id=(template or {}).get("id"),
         template_label=(template or {}).get("label"),
         template_css_class=(template or {}).get("css_class"),
+        render_mode=render_mode,
+        template_score=int(selection.get("score", -1) or 0),
         image_provider=("unsplash" if image_url else None),
         image_query=(image_query if image_url else None),
         image_url=image_url,
@@ -186,7 +192,9 @@ async def execute(args: dict) -> str:
         user_content += f"\n\nContexto adicional:\n{context_data}"
 
     template_family = infer_template_family(topic, format_hint, context_data)
-    template = pick_design_template(topic, template_family, context_data, format_hint)
+    selection = choose_design_route(topic, template_family, context_data, format_hint)
+    template = selection["template"]
+    render_mode = str(selection["mode"])
     if template:
         image_query = _default_image_query(topic, context_data, template)
         user_content += (
@@ -199,9 +207,18 @@ async def execute(args: dict) -> str:
             f"- formato: {template.get('format', '')}\n"
             f"- canvas_preset: {template.get('canvas_preset', '')}\n"
             f"- slots: {', '.join(template.get('slots', []))}\n"
+            f"- render_mode recomendado: {render_mode}\n"
+            f"- template_score: {selection.get('score', -1)}\n"
             f"- slot_updates base: {json.dumps(build_slot_defaults(topic, context_data, template), ensure_ascii=False)}\n"
             f"- use fotografia do Unsplash quando fizer sentido com a query: {image_query}\n"
             "- se usar imagem, devolva também image_url otimizada para o formato do template.\n"
+        )
+    else:
+        user_content += (
+            "\n\nESTRATÉGIA DE RENDERIZAÇÃO:\n"
+            f"- render_mode recomendado: {render_mode}\n"
+            f"- template_score: {selection.get('score', -1)}\n"
+            "- não há template com aderência suficiente; monte uma direção mais livre.\n"
         )
 
     model = (
@@ -234,6 +251,8 @@ async def execute(args: dict) -> str:
 
         parsed = json.loads(raw)
         spec = StaticDesignSpec.model_validate(parsed)
+        spec.render_mode = render_mode
+        spec.template_score = int(selection.get("score", -1) or 0)
         if template:
             if not spec.template_id:
                 spec.template_family = template_family
@@ -252,6 +271,11 @@ async def execute(args: dict) -> str:
                 spec.format = str(template.get("format", format_hint or "1080x1080"))
             if not spec.slot_updates:
                 spec.slot_updates = build_slot_defaults(topic, context_data, template)
+        else:
+            spec.template_family = None
+            spec.template_id = None
+            spec.template_label = None
+            spec.template_css_class = None
         logger.info("[STATIC_DESIGN_GENERATOR] Spec gerado: '%s' | formato: %s", spec.title, spec.format)
         return spec.model_dump_json(ensure_ascii=False)
     except Exception as exc:

@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from backend.core.llm import call_openrouter
 from backend.agents import registry
-from backend.services.design_template_registry import build_slot_defaults, pick_design_template
+from backend.services.design_template_registry import build_slot_defaults, choose_design_route
 
 logger = logging.getLogger(__name__)
 _SLIDE_LLM_TIMEOUT_SECONDS = 28.0
@@ -91,6 +91,8 @@ class SlideDeck(BaseModel):
     template_id: Optional[str] = Field(default=None, description="ID do template selecionado.")
     template_label: Optional[str] = Field(default=None, description="Nome amigável do template selecionado.")
     canvas_preset: Optional[str] = Field(default=None, description="Preset do preview/export associado ao template.")
+    render_mode: Optional[Literal["deterministic", "guided", "open"]] = Field(default=None, description="Estratégia de renderização do deck.")
+    template_score: Optional[int] = Field(default=None, description="Score de aderência do template selecionado.")
     slot_updates: dict[str, str] = Field(default_factory=dict, description="Slots semânticos globais do deck/template.")
     slides: List[Slide] = Field(
         description="Lista de slides com a narrativa completa. Para carrossel de Instagram, normalmente 3-8 slides. Para apresentações, 6-14 slides."
@@ -118,7 +120,8 @@ def _extract_points(context_data: str, max_points: int = 6) -> list[str]:
 
 def _build_fallback_deck(topic: str, context_data: str) -> SlideDeck:
     points = _extract_points(context_data)
-    template = pick_design_template(topic, "slide", context_data, "16:9")
+    selection = choose_design_route(topic, "slide", context_data, "16:9")
+    template = selection["template"]
     intro = points[:2] or [
         "Contextualize o tema com clareza e impacto.",
         "Mostre rapidamente por que isso importa agora.",
@@ -138,6 +141,8 @@ def _build_fallback_deck(topic: str, context_data: str) -> SlideDeck:
         template_id=(template or {}).get("id"),
         template_label=(template or {}).get("label"),
         canvas_preset=(template or {}).get("canvas_preset"),
+        render_mode=str(selection["mode"]),
+        template_score=int(selection.get("score", -1) or 0),
         slot_updates=build_slot_defaults(topic, context_data, template),
         slides=[
             Slide(
@@ -220,7 +225,8 @@ async def execute(args: dict) -> str:
     user_content = f"Crie a estrutura de slides sobre: {topic}"
     if context_data:
         user_content += f"\n\nDados de contexto para embasar os slides:\n{context_data}"
-    template = pick_design_template(topic, "slide", context_data, "16:9")
+    selection = choose_design_route(topic, "slide", context_data, "16:9")
+    template = selection["template"]
     if template:
         user_content += (
             "\n\nTEMPLATE DETERMINÍSTICO DE SLIDE DISPONÍVEL:\n"
@@ -228,8 +234,17 @@ async def execute(args: dict) -> str:
             f"- label: {template['label']}\n"
             f"- descrição: {template.get('description', '')}\n"
             f"- canvas_preset: {template.get('canvas_preset', '')}\n"
+            f"- render_mode recomendado: {selection.get('mode')}\n"
+            f"- template_score: {selection.get('score', -1)}\n"
             f"- slots: {', '.join(template.get('slots', []))}\n"
             f"- slot_updates base: {json.dumps(build_slot_defaults(topic, context_data, template), ensure_ascii=False)}\n"
+        )
+    else:
+        user_content += (
+            "\n\nESTRATÉGIA DE RENDERIZAÇÃO:\n"
+            f"- render_mode recomendado: {selection.get('mode')}\n"
+            f"- template_score: {selection.get('score', -1)}\n"
+            "- não há template com aderência suficiente; preserve liberdade criativa com boa estrutura narrativa.\n"
         )
 
     model = (
@@ -262,6 +277,8 @@ async def execute(args: dict) -> str:
 
         parsed = json.loads(raw)
         deck = SlideDeck.model_validate(parsed)
+        deck.render_mode = str(selection["mode"])
+        deck.template_score = int(selection.get("score", -1) or 0)
         if template:
             if not deck.template_family:
                 deck.template_family = "slide"
@@ -273,6 +290,10 @@ async def execute(args: dict) -> str:
                 deck.canvas_preset = str(template.get("canvas_preset", ""))
             if not deck.slot_updates:
                 deck.slot_updates = build_slot_defaults(topic, context_data, template)
+        else:
+            deck.template_family = None
+            deck.template_id = None
+            deck.template_label = None
 
         slide_count = len(deck.slides)
         logger.info("[SLIDE_GENERATOR] Deck gerado: '%s' | %d slides", deck.title, slide_count)

@@ -485,7 +485,12 @@ def _render_local_design_if_possible(raw_context: str) -> str | None:
     if not raw_context:
         return None
     try:
-        from backend.services.design_template_renderer import render_design_template_from_context
+        from backend.services.design_template_renderer import parse_template_payload, render_design_template_from_context
+        payload = parse_template_payload(raw_context)
+        if payload:
+            render_mode = str(payload.get("render_mode") or "").strip().lower()
+            if render_mode and render_mode != "deterministic":
+                return None
         return render_design_template_from_context(raw_context)
     except Exception:
         logger.exception("[ORCHESTRATOR] Falha ao renderizar design determinístico local.")

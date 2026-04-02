@@ -73,24 +73,37 @@ def _match_format_hint(item: dict[str, Any], format_hint: str) -> int:
     return score
 
 
-def pick_design_template(topic: str, family: str, context_data: str = "", format_hint: str = "") -> dict[str, Any] | None:
+def _score_template(item: dict[str, Any], topic: str, context_data: str = "", format_hint: str = "") -> int:
     haystack = f"{topic} {context_data}".lower()
+    score = 0
+    score += _match_format_hint(item, format_hint)
+    score += _semantic_template_score(item, haystack)
+    return score
+
+
+def _semantic_template_score(item: dict[str, Any], haystack: str) -> int:
+    score = 0
+    generic_tags = {"story", "feed", "slide", "slides", "instagram", "post", "square", "portrait", "carrossel", "carousel"}
+    for tag in item.get("tags", []):
+        tag_text = str(tag).lower()
+        if tag_text and tag_text not in generic_tags and tag_text in haystack:
+            score += 3
+    for token in (
+        str(item.get("label", "")).lower(),
+        str(item.get("category", "")).lower(),
+        str(item.get("description", "")).lower(),
+    ):
+        if token and token in haystack:
+            score += 1
+    return score
+
+
+def pick_design_template(topic: str, family: str, context_data: str = "", format_hint: str = "") -> dict[str, Any] | None:
     best_item: dict[str, Any] | None = None
     best_score = -1
 
     for item in list_design_templates(family):
-        score = 0
-        score += _match_format_hint(item, format_hint)
-        for tag in item.get("tags", []):
-            if str(tag).lower() in haystack:
-                score += 3
-        for token in (
-            str(item.get("label", "")).lower(),
-            str(item.get("category", "")).lower(),
-            str(item.get("description", "")).lower(),
-        ):
-            if token and token in haystack:
-                score += 1
+        score = _score_template(item, topic, context_data, format_hint)
         if score > best_score:
             best_item = item
             best_score = score
@@ -99,6 +112,69 @@ def pick_design_template(topic: str, family: str, context_data: str = "", format
         return best_item
     items = list_design_templates(family)
     return items[0] if items else None
+
+
+def choose_design_route(topic: str, family: str, context_data: str = "", format_hint: str = "") -> dict[str, Any]:
+    haystack = f"{topic} {context_data} {format_hint}".lower()
+    best_item: dict[str, Any] | None = None
+    best_score = -1
+    best_semantic_score = -1
+    for item in list_design_templates(family):
+        score = _score_template(item, topic, context_data, format_hint)
+        semantic_score = _semantic_template_score(item, f"{topic} {context_data}".lower())
+        if score > best_score:
+            best_item = item
+            best_score = score
+            best_semantic_score = semantic_score
+
+    explicit_open = any(
+        token in haystack
+        for token in (
+            "do zero",
+            "sem template",
+            "livre",
+            "autoral",
+            "fora do padrão",
+            "fora do padrao",
+            "experimental",
+            "original",
+            "único",
+            "unico",
+            "surpreendente",
+        )
+    )
+
+    if explicit_open or not best_item:
+        return {"mode": "open", "template": None, "score": best_score, "semantic_score": best_semantic_score}
+
+    if family in {"story", "feed"}:
+        if best_score >= 6 and best_semantic_score >= 3:
+            mode = "deterministic"
+        elif best_score >= 6 and best_semantic_score >= 1:
+            mode = "guided"
+        else:
+            mode = "open"
+    elif family == "a4":
+        if best_score >= 7 and best_semantic_score >= 3:
+            mode = "deterministic"
+        elif best_score >= 5:
+            mode = "guided"
+        else:
+            mode = "open"
+    else:
+        if best_score >= 8 and best_semantic_score >= 4:
+            mode = "deterministic"
+        elif best_score >= 5:
+            mode = "guided"
+        else:
+            mode = "open"
+
+    return {
+        "mode": mode,
+        "template": best_item if mode != "open" else None,
+        "score": best_score,
+        "semantic_score": best_semantic_score,
+    }
 
 
 def _collapse_whitespace(value: str) -> str:
