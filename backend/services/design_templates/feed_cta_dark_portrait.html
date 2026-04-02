@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #0b0b0d; }
+    .container-base { background: #000; color: #fff; }
+    .cta-shell { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 3cqw; }
+    .cta-kicker { color: rgba(255,255,255,.65); text-transform: uppercase; letter-spacing: .16em; }
+    .cta-title { margin: .4em 0 .35em; font-size: 3.2cqw; line-height: 1.08; max-width: 13ch; }
+    .cta-body { margin: 0; color: rgba(255,255,255,.72); max-width: 24ch; }
+    .cta-button { margin-top: 1.6cqw; padding: .95em 1.5em; border-radius: 999px; background: #fff; color: #000; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div id="arcco-design-content" class="cta-shell">
+      <span class="cq-kicker cta-kicker">{{ slots.eyebrow }}</span>
+      <h1 class="cq-title cta-title" data-role="headline">{{ slots.headline }}</h1>
+      <p class="cq-body cta-body" data-role="subheadline">{{ slots.subheadline }}</p>
+      <div class="cta-button" data-role="cta">{{ slots.cta }}</div>
+    </div>
+  </div>
+</body>
+</html>

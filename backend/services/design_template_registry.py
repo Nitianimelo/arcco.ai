@@ -266,22 +266,55 @@ def _infer_cta(topic: str, context_data: str) -> str:
     return "Saiba mais"
 
 
+def _content_chunks(topic: str, context_data: str, limit: int = 72, count: int = 4) -> list[str]:
+    raw_parts = re.split(r"(?<=[.!?])\s+|\n+|•| - ", context_data or "")
+    parts = [_collapse_whitespace(part).strip(" -:") for part in raw_parts if _collapse_whitespace(part)]
+    chunks = [_trim_sentence(part, limit) for part in parts[:count] if part]
+    if not chunks:
+        chunks = [_trim_sentence(topic or "Mensagem principal da peça.", limit)]
+    while len(chunks) < count:
+        chunks.append(chunks[-1])
+    return chunks[:count]
+
+
 def build_slot_defaults(topic: str, context_data: str, template: dict[str, Any] | None) -> dict[str, str]:
     slots = list((template or {}).get("slots", []))
     headline = _infer_headline(topic, context_data)
     support = _infer_subheadline(topic, context_data)
     eyebrow = _infer_eyebrow(topic, context_data)
     cta = _infer_cta(topic, context_data)
+    quoted = _extract_first_quoted_phrase(context_data) or support
+    chunks = _content_chunks(topic, context_data)
     defaults: dict[str, str] = {}
     for slot in slots:
         if slot in {"headline", "heading", "title"}:
             defaults[slot] = headline[:96]
+        elif slot == "quote":
+            defaults[slot] = _trim_sentence(quoted, 180)
         elif slot in {"subheadline", "subtitle", "intro", "summary", "support_body"}:
             defaults[slot] = support
         elif slot in {"cta", "closing"}:
             defaults[slot] = cta
         elif slot in {"eyebrow", "section_kicker", "badge"}:
             defaults[slot] = eyebrow
+        elif slot in {"section_1", "step_1", "body_left", "myth", "note_1"}:
+            defaults[slot] = chunks[0]
+        elif slot in {"section_2", "step_2", "body_right", "fact", "note_2"}:
+            defaults[slot] = chunks[1]
+        elif slot in {"section_3", "step_3", "note_3"}:
+            defaults[slot] = chunks[2]
+        elif slot == "note_4":
+            defaults[slot] = chunks[3]
+        elif slot == "testimonial_quote":
+            defaults[slot] = _trim_sentence(quoted, 180)
+        elif slot == "author_name":
+            defaults[slot] = "Cliente Arcco"
+        elif slot == "author_role":
+            defaults[slot] = "Caso real"
+        elif slot == "myth_label":
+            defaults[slot] = "Mito"
+        elif slot == "fact_label":
+            defaults[slot] = "Verdade"
         elif slot in {"hero_image", "cover_image"}:
             defaults[slot] = ""
         elif slot == "big_value":

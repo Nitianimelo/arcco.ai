@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #0b0b0d; }
+    .container-base { background: #f9f9f9; color: #111; }
+    .notes-shell { height: 100%; padding: 2.2cqw; }
+    .notes-header { display: flex; justify-content: space-between; color: #eab308; font-weight: 700; font-size: 1.1cqw; margin-bottom: 1.6cqw; }
+    .notes-title { margin: 0 0 .6em; font-size: 2.2cqw; font-weight: 900; }
+    .notes-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: .9cqw; }
+    .notes-item { font-size: 1.3cqw; line-height: 1.45; font-weight: 300; color: #333; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div id="arcco-design-content" class="notes-shell">
+      <div class="notes-header"><span>&lt;</span><span>{{ slots.eyebrow }}</span></div>
+      <h1 class="cq-title notes-title" data-role="headline">{{ slots.headline }}</h1>
+      <ul class="notes-list">
+        <li class="notes-item">- {{ slots.note_1 }}</li>
+        <li class="notes-item">- {{ slots.note_2 }}</li>
+        <li class="notes-item">- {{ slots.note_3 }}</li>
+        <li class="notes-item">- {{ slots.note_4 }}</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>

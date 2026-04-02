@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #0b0b0d; }
+    .container-base { background: #f8fafc; color: #0f172a; }
+    .steps-shell { height: 100%; padding: 2.6cqw; display: flex; flex-direction: column; gap: 1.2cqw; }
+    .steps-title { margin: 0 0 .3em; font-family: "Space Grotesk", sans-serif; font-size: 2.6cqw; line-height: 1.05; }
+    .step-card { background: #fff; border-left: .45cqw solid #3b82f6; border-radius: 0 1cqw 1cqw 0; padding: 1.2cqw; box-shadow: 0 .5cqw 1.2cqw rgba(15,23,42,.05); }
+    .step-head { margin: 0 0 .35em; font-weight: 800; color: #0f172a; }
+    .step-body { margin: 0; color: #64748b; font-size: 1.05cqw; line-height: 1.45; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div id="arcco-design-content" class="steps-shell">
+      <span class="cq-kicker">{{ slots.eyebrow }}</span>
+      <h1 class="cq-title steps-title" data-role="headline">{{ slots.headline }}</h1>
+      <div class="step-card">
+        <p class="step-head">1. Primeiro passo</p>
+        <p class="step-body">{{ slots.step_1 }}</p>
+      </div>
+      <div class="step-card">
+        <p class="step-head">2. Construção</p>
+        <p class="step-body">{{ slots.step_2 }}</p>
+      </div>
+      <div class="step-card">
+        <p class="step-head">3. Aplicação</p>
+        <p class="step-body">{{ slots.step_3 }}</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

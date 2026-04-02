@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #0b0b0d; }
+    .container-base { background: #101114; color: #f8fafc; }
+    .cover-shell { height: 100%; display: flex; flex-direction: column; justify-content: flex-end; padding: 2.8cqw; }
+    .cover-kicker { letter-spacing: .22em; text-transform: uppercase; color: #94a3b8; font-weight: 700; }
+    .cover-title { margin: .45em 0 .2em; font-family: "Space Grotesk", sans-serif; font-size: 4.3cqw; line-height: .92; text-transform: uppercase; color: #fff; }
+    .cover-body { margin: 0; color: #a1a1aa; max-width: 26ch; }
+    .cover-dots { margin-top: 2.2cqw; display: inline-flex; gap: .6cqw; }
+    .cover-dot { width: .8cqw; height: .8cqw; border-radius: 999px; background: rgba(255,255,255,.24); }
+    .cover-dot.active { background: #fff; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div id="arcco-design-content" class="cover-shell">
+      <span class="cq-kicker cover-kicker">{{ slots.eyebrow }}</span>
+      <h1 class="cq-title cover-title" data-role="headline">{{ slots.headline }}</h1>
+      <p class="cq-body cover-body" data-role="subheadline">{{ slots.subheadline }}</p>
+      <div class="cover-dots">
+        <span class="cover-dot active"></span>
+        <span class="cover-dot"></span>
+        <span class="cover-dot"></span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

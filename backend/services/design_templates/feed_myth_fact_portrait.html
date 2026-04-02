@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #0b0b0d; }
+    .container-base { display: flex; flex-direction: column; }
+    .half { height: 50%; padding: 2.6cqw; display: flex; flex-direction: column; justify-content: center; }
+    .top { background: #fee2e2; color: #991b1b; }
+    .bottom { background: #d1fae5; color: #065f46; }
+    .badge { display: inline-flex; align-self: flex-start; padding: .45em .8em; border-radius: .5em; font-size: .9cqw; font-weight: 800; text-transform: uppercase; letter-spacing: .14em; margin-bottom: .9cqw; }
+    .top .badge { background: #fecaca; }
+    .bottom .badge { background: #a7f3d0; }
+    .copy { margin: 0; font-size: 2.05cqw; font-weight: 800; line-height: 1.18; max-width: 12ch; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div id="arcco-design-content" class="half top">
+      <span class="badge">{{ slots.myth_label }}</span>
+      <p class="copy">{{ slots.myth }}</p>
+    </div>
+    <div class="half bottom">
+      <span class="badge">{{ slots.fact_label }}</span>
+      <p class="copy">{{ slots.fact }}</p>
+    </div>
+  </div>
+</body>
+</html>

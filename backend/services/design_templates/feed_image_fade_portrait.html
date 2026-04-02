@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #0b0b0d; }
+    .container-base { position: relative; overflow: hidden; }
+    .hero-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    .overlay { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,.08) 20%, rgba(0,0,0,.86) 100%); }
+    .fade-shell { position: relative; z-index: 2; height: 100%; padding: 2.8cqw; display: flex; flex-direction: column; justify-content: flex-end; color: #fff; }
+    .fade-tag { align-self: flex-start; margin-bottom: 1.2cqw; padding: .45em .8em; border-radius: .5em; background: #2563eb; text-transform: uppercase; letter-spacing: .12em; font-size: .9cqw; font-weight: 700; }
+    .fade-title { margin: 0; font-size: 3.4cqw; line-height: 1.05; max-width: 11ch; }
+    .fade-body { margin: .8em 0 0; color: rgba(255,255,255,.78); max-width: 28ch; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <img class="hero-image" src="{{ hero_image_url }}" alt="{{ slots.headline }}" />
+    <div class="overlay"></div>
+    <div id="arcco-design-content" class="fade-shell">
+      <span class="fade-tag">{{ slots.eyebrow }}</span>
+      <h1 class="cq-title fade-title" data-role="headline">{{ slots.headline }}</h1>
+      <p class="cq-body fade-body" data-role="subheadline">{{ slots.subheadline }}</p>
+    </div>
+  </div>
+</body>
+</html>
