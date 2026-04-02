@@ -35,7 +35,8 @@ logger = logging.getLogger(__name__)
 _BROWSER_TIMEOUT = 60.0   # segundos
 _SEARCH_TIMEOUT = 30.0    # segundos
 _HEARTBEAT_INTERVAL = 5.0 # segundos
-_SUPERVISOR_TIMEOUT = 35.0
+_SUPERVISOR_TIMEOUT = 60.0
+_SKILL_TIMEOUT = 60.0
 _SPECIALIST_TIMEOUT = 90.0
 _TERMINAL_TIMEOUT = 90.0
 _QA_TIMEOUT = 20.0
@@ -367,9 +368,6 @@ def _normalize_plan_for_session_files(plan_output, *, user_intent: str, session_
 
 
 def _normalize_plan_for_visual_requests(plan_output, *, user_intent: str):
-    if not _VISUAL_REQUEST_PATTERN.search(user_intent or ""):
-        return plan_output
-
     design_indexes = [idx for idx, step in enumerate(plan_output.steps) if step.action == "design_generator"]
     if not design_indexes:
         return plan_output
@@ -395,6 +393,41 @@ async def _emit_file_artifacts(content: str) -> AsyncGenerator[str, None]:
 
     for label, url in md_links:
         yield sse("file_artifact", _artifact_payload(label, url))
+
+
+def _looks_like_design_html(content: str) -> bool:
+    trimmed = (content or "").strip()
+    if not trimmed:
+        return False
+    return trimmed.startswith("<!DOCTYPE") or trimmed.lower().startswith("<html")
+
+
+_VISUAL_SKILL_BLOCK_RE = re.compile(
+    r"\[Passo \d+ - (?P<route>slide_generator|static_design_generator)\]: (?P<content>.*?)(?=\n\[Passo \d+ - |\Z)",
+    re.DOTALL,
+)
+
+
+def _extract_visual_context_for_design(accumulated_context: str) -> str:
+    if not accumulated_context:
+        return ""
+    matches = list(_VISUAL_SKILL_BLOCK_RE.finditer(accumulated_context))
+    if matches:
+        content = matches[-1].group("content").strip()
+        if content:
+            return content
+    return accumulated_context
+
+
+async def _emit_design_artifact(content: str) -> AsyncGenerator[str, None]:
+    if not _looks_like_design_html(content):
+        return
+
+    designs = [part.strip() for part in content.split("<!-- ARCCO_DESIGN_SEPARATOR -->") if part.strip()]
+    if not designs:
+        return
+
+    yield sse("design_artifact", json.dumps({"designs": designs}))
 
 
 async def _stream_assistant_text(messages: list, model: str) -> AsyncGenerator[str, None]:
@@ -1600,20 +1633,68 @@ async def orchestrate_and_stream(
 
                         elif route == "dynamic_skill":
                             yield sse("steps", f"<step>Executando skill: {func_name} (Passo {step.step})...</step>")
-                            try:
-                                specialist_result = await skills_loader.execute_dynamic_skill(func_name, func_args)
-                            except Exception as e:
-                                specialist_result = f"Erro na skill {func_name}: {e}"
+                            specialist_result = None
+                            async for event in _exec_with_heartbeat(
+                                skills_loader.execute_dynamic_skill(func_name, func_args),
+                                lambda elapsed: sse("steps", f"<step>Executando skill {func_name} — {int(elapsed)}s...</step>"),
+                                timeout=_SKILL_TIMEOUT,
+                            ):
+                                if isinstance(event, dict) and "_result" in event:
+                                    if event.get("_timeout"):
+                                        specialist_result = (
+                                            f"Erro na skill {func_name}: Timeout de {int(_SKILL_TIMEOUT)}s."
+                                        )
+                                        logger.error(
+                                            "[ORCHESTRATOR] dynamic_skill timeout (planner) skill=%s step=%s",
+                                            func_name,
+                                            step.step,
+                                        )
+                                    elif event.get("_error"):
+                                        specialist_result = f"Erro na skill {func_name}: {event['_error']}"
+                                        logger.error(
+                                            "[ORCHESTRATOR] dynamic_skill error (planner) skill=%s step=%s: %s",
+                                            func_name,
+                                            step.step,
+                                            event["_error"],
+                                        )
+                                    else:
+                                        specialist_result = event["_result"]
+                                else:
+                                    yield event
+                            if specialist_result is None:
+                                specialist_result = f"Erro na skill {func_name}: resultado vazio."
+                            if execution_logger:
+                                await execution_logger.log_event(
+                                    execution_id,
+                                    execution_agent_id=tool_agent_id,
+                                    level="error" if _is_error_result(specialist_result) else "info",
+                                    event_type="tool_error" if _is_error_result(specialist_result) else "tool_result",
+                                    message=(
+                                        f"Skill {func_name} falhou"
+                                        if _is_error_result(specialist_result)
+                                        else f"Skill {func_name} concluída"
+                                    ),
+                                    tool_name=func_name,
+                                    tool_args=func_args,
+                                    tool_result=str(specialist_result)[:2000],
+                                )
                             if _is_error_result(specialist_result):
                                 had_failures = True
                                 tool_failed = True
-                                failure_msg = f"Falha na skill {func_name}."
-                                failure_summaries.append(failure_msg)
+                                failure_msg = f"Falha na skill {func_name}: {specialist_result}"
+                                failure_summaries.append(failure_msg[:300])
                                 accumulated_context += f"\n[Passo {step.step} - ERRO {func_name}]: {specialist_result}"
                                 yield sse("thought", failure_msg)
                             else:
                                 accumulated_context += f"\n[Passo {step.step} - {func_name}]: {specialist_result}"
                                 yield sse("thought", f"Skill {func_name} executada com sucesso.")
+                            if execution_logger:
+                                await execution_logger.finish_agent(
+                                    tool_agent_id,
+                                    status="failed" if _is_error_result(specialist_result) else "completed",
+                                    output_payload={"preview": str(specialist_result)[:2000]},
+                                    error_text=str(specialist_result)[:2000] if _is_error_result(specialist_result) else None,
+                                )
 
                         elif is_terminal:
                             # Ferramentas que PODEM ser terminais (text_generator, design_generator)
@@ -1621,7 +1702,8 @@ async def orchestrate_and_stream(
                             if route == "text_generator":
                                 content = f"Título sugerido: {func_args.get('title_hint', '')}\nContexto Prévio: {accumulated_context}\nInstruções: {func_args.get('instructions', '')}"
                             elif route == "design_generator":
-                                content = f"Contexto Prévio:\n{accumulated_context}\n\nInstruções: {func_args.get('instructions', '')}"
+                                design_context = _extract_visual_context_for_design(accumulated_context)
+                                content = f"Contexto Prévio:\n{design_context}\n\nInstruções: {func_args.get('instructions', '')}"
                             else:
                                 content = json.dumps(func_args)
 
@@ -2356,16 +2438,62 @@ async def orchestrate_and_stream(
                 # ── ROTA: Dynamic Skill (skills de negócio registradas em backend/skills/) ──
                 elif route == "dynamic_skill":
                     yield sse("steps", f"<step>Executando skill: {func_name}...</step>")
-                    try:
-                        specialist_result = await skills_loader.execute_dynamic_skill(func_name, func_args)
-                    except Exception as e:
-                        specialist_result = f"Erro na skill {func_name}: {e}"
+                    specialist_result = None
+                    async for event in _exec_with_heartbeat(
+                        skills_loader.execute_dynamic_skill(func_name, func_args),
+                        lambda elapsed: sse("steps", f"<step>Executando skill {func_name} — {int(elapsed)}s...</step>"),
+                        timeout=_SKILL_TIMEOUT,
+                    ):
+                        if isinstance(event, dict) and "_result" in event:
+                            if event.get("_timeout"):
+                                specialist_result = f"Erro na skill {func_name}: Timeout de {int(_SKILL_TIMEOUT)}s."
+                                logger.error("[ORCHESTRATOR] dynamic_skill timeout (react) skill=%s", func_name)
+                            elif event.get("_error"):
+                                specialist_result = f"Erro na skill {func_name}: {event['_error']}"
+                                logger.error("[ORCHESTRATOR] dynamic_skill error (react) skill=%s: %s", func_name, event["_error"])
+                            else:
+                                specialist_result = event["_result"]
+                        else:
+                            yield event
+                    if specialist_result is None:
+                        specialist_result = f"Erro na skill {func_name}: resultado vazio."
                     current_messages.append({
                         "role": "tool",
                         "tool_call_id": tool["id"],
                         "content": specialist_result,
                     })
-                    yield sse("thought", f"Skill {func_name} executada com sucesso.")
+                    if execution_logger:
+                        await execution_logger.log_event(
+                            execution_id,
+                            execution_agent_id=react_agent_id,
+                            level="error" if _is_error_result(specialist_result) else "info",
+                            event_type="tool_error" if _is_error_result(specialist_result) else "tool_result",
+                            message=(
+                                f"Skill {func_name} falhou"
+                                if _is_error_result(specialist_result)
+                                else f"Skill {func_name} concluída"
+                            ),
+                            tool_name=func_name,
+                            tool_args=func_args,
+                            tool_result=str(specialist_result)[:2000],
+                        )
+                        await execution_logger.finish_agent(
+                            react_agent_id,
+                            status="failed" if _is_error_result(specialist_result) else "completed",
+                            output_payload={"preview": str(specialist_result)[:2000]},
+                            error_text=str(specialist_result)[:2000] if _is_error_result(specialist_result) else None,
+                        )
+                    if _is_error_result(specialist_result):
+                        current_messages.append({
+                            "role": "system",
+                            "content": (
+                                f"A skill {func_name} falhou. NÃO invente a saída dessa skill. "
+                                "Explique a limitação ou siga com os dados já disponíveis."
+                            ),
+                        })
+                        yield sse("thought", f"Falha na skill {func_name}.")
+                    else:
+                        yield sse("thought", f"Skill {func_name} executada com sucesso.")
 
                 # ── ROTA: Terminal (text_generator, design_generator) ──
                 elif is_terminal:
@@ -2474,6 +2602,27 @@ async def orchestrate_and_stream(
                     if not specialist_result.strip():
                         specialist_result = "O especialista não retornou resultado. Tente reformular o pedido."
                         logger.warning(f"[ORCHESTRATOR] Especialista '{route}' retornou vazio")
+
+                    if route == "design_generator":
+                        if _looks_like_design_html(specialist_result):
+                            if execution_logger:
+                                await execution_logger.log_event(
+                                    execution_id,
+                                    execution_agent_id=tool_agent_id,
+                                    event_type="terminal_result",
+                                    message="Resultado visual convertido em terminal por design_generator",
+                                    raw_payload={"preview": specialist_result[:2000], "forced_terminal": True},
+                                )
+                                await execution_logger.finish_agent(
+                                    tool_agent_id,
+                                    status="completed",
+                                    output_payload={"preview": specialist_result[:2000], "forced_terminal": True},
+                                )
+
+                            chunk_size = 40
+                            for i in range(0, len(specialist_result), chunk_size):
+                                yield sse("chunk", specialist_result[i:i + chunk_size])
+                            return
 
                     # ANTI-LEAK: Para rotas de arquivo, enviar APENAS o link pro Supervisor
                     if route in ROUTES_REQUIRING_LINK:

@@ -2,6 +2,7 @@
 Wrapper para chamadas LLM via OpenRouter e Anthropic.
 """
 
+import asyncio
 import logging
 import re
 import time
@@ -253,6 +254,7 @@ async def call_openrouter(
     temperature: float = 0.7,
     tools: Optional[list] = None,
     tool_choice=None,
+    timeout_seconds: float = 45.0,
 ) -> dict:
     """
     Chamada ao OpenRouter API.
@@ -279,16 +281,21 @@ async def call_openrouter(
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
 
-    async with httpx.AsyncClient(timeout=45.0) as client:
-        response = await client.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://arcco.ai",
-                "X-Title": "Arcco.ai Agent",
-            },
-            json=payload,
+    request_headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://arcco.ai",
+        "X-Title": "Arcco.ai Agent",
+    }
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds)) as client:
+        response = await asyncio.wait_for(
+            client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers=request_headers,
+                json=payload,
+            ),
+            timeout=timeout_seconds,
         )
 
         # Se 401, tenta recarregar a key do Supabase e tentar uma vez mais
@@ -298,15 +305,16 @@ async def call_openrouter(
                 new_key = await get_api_key(force_refresh=True)
                 if new_key and new_key != api_key:
                     print(f"[CALL_OPENROUTER] Retrying with new key: {new_key[:15]}...")
-                    response = await client.post(
-                        "https://openrouter.ai/api/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {new_key}",
-                            "Content-Type": "application/json",
-                            "HTTP-Referer": "https://arcco.ai",
-                            "X-Title": "Arcco.ai Agent",
-                        },
-                        json=payload,
+                    response = await asyncio.wait_for(
+                        client.post(
+                            "https://openrouter.ai/api/v1/chat/completions",
+                            headers={
+                                **request_headers,
+                                "Authorization": f"Bearer {new_key}",
+                            },
+                            json=payload,
+                        ),
+                        timeout=timeout_seconds,
                     )
             except Exception as e:
                 print(f"[CALL_OPENROUTER] Key refresh failed: {e}")

@@ -9,8 +9,10 @@ Fluxo ideal no Planner:
   web_search → slide_generator → design_generator (terminal)
 """
 
+import asyncio
 import json
 import logging
+import re
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -19,6 +21,7 @@ from backend.core.llm import call_openrouter
 from backend.agents import registry
 
 logger = logging.getLogger(__name__)
+_SLIDE_LLM_TIMEOUT_SECONDS = 28.0
 
 # ── Contrato da Skill ─────────────────────────────────────────────────────────
 
@@ -33,7 +36,8 @@ SKILL_META = {
     ),
     "keywords": [
         "slide", "slides", "apresentação", "apresentacao", "pitch", "deck",
-        "powerpoint", "pptx", "keynote", "palestra", "deck de vendas", "slideshow"
+        "powerpoint", "pptx", "keynote", "palestra", "deck de vendas", "slideshow",
+        "carrossel", "carousel", "instagram"
     ],
     "parameters": {
         "type": "object",
@@ -83,15 +87,82 @@ class SlideDeck(BaseModel):
         description="Título do arquivo da apresentação. Conciso e descritivo."
     )
     slides: List[Slide] = Field(
-        description="Lista de slides com a narrativa completa. Mínimo 6, máximo 14 slides."
+        description="Lista de slides com a narrativa completa. Para carrossel de Instagram, normalmente 3-8 slides. Para apresentações, 6-14 slides."
+    )
+
+
+def _clean_line(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    return cleaned.strip(" -•*")
+
+
+def _extract_points(context_data: str, max_points: int = 6) -> list[str]:
+    raw_parts = re.split(r"[\n\r]+|(?<=[.!?])\s+", context_data or "")
+    points: list[str] = []
+    for part in raw_parts:
+        cleaned = _clean_line(part)
+        if len(cleaned) < 18:
+            continue
+        if cleaned not in points:
+            points.append(cleaned[:180])
+        if len(points) >= max_points:
+            break
+    return points
+
+
+def _build_fallback_deck(topic: str, context_data: str) -> SlideDeck:
+    points = _extract_points(context_data)
+    intro = points[:2] or [
+        "Contextualize o tema com clareza e impacto.",
+        "Mostre rapidamente por que isso importa agora.",
+    ]
+    details = points[2:5] or [
+        "Destaque os fatos principais em linguagem simples.",
+        "Organize os pontos em ordem lógica para leitura rápida.",
+        "Mantenha o foco em impacto e consequência.",
+    ]
+    closing = points[5:6] or [
+        "Feche com consequência, próximo passo ou chamada para ação.",
+    ]
+    short_topic = _clean_line(topic)[:72] or "Apresentação"
+    return SlideDeck(
+        title=short_topic,
+        slides=[
+            Slide(
+                layout="title_and_subtitle",
+                heading=short_topic[:48],
+                points=[],
+                big_value=None,
+                speaker_notes="Apresente o tema com contexto rápido, destaque por que ele importa e prepare a transição para os fatos centrais.",
+            ),
+            Slide(
+                layout="bullets",
+                heading="O que aconteceu",
+                points=intro + details[:2],
+                big_value=None,
+                speaker_notes="Explique os fatos centrais em sequência curta, usando apenas os dados mais relevantes para manter clareza e ritmo.",
+            ),
+            Slide(
+                layout="bullets",
+                heading="Impactos e próximos passos",
+                points=details[2:4] + closing,
+                big_value=None,
+                speaker_notes="Feche com impacto, consequência e um próximo passo claro para o público.",
+            ),
+        ],
     )
 
 
 # ── Execução da Skill ─────────────────────────────────────────────────────────
 
-_SYSTEM_PROMPT = """Você é um Designer de UX e Copywriter Sênior com experiência em apresentações nível Apple Keynote e decks McKinsey.
+_SYSTEM_PROMPT = """Você é um Designer de UX e Copywriter Sênior com experiência em apresentações nível Apple Keynote, decks McKinsey e carrosséis de alto impacto para Instagram.
 
 Sua missão: criar uma apresentação de slides de alto impacto que conta uma história clara e persuasiva.
+
+REGRA DE CONTAGEM DE SLIDES:
+- Se o pedido mencionar explicitamente 3 slides, 4 slides, 5 slides etc., respeite esse número.
+- Se o pedido for um carrossel de Instagram e não informar quantidade, prefira 3 a 6 slides.
+- Se o pedido for uma apresentação/deck sem quantidade explícita, use entre 6 e 14 slides.
 
 FRAMEWORK DE STORYTELLING:
 - Identifique a intenção (Pitch de vendas / Relatório executivo / Apresentação educacional)
@@ -132,35 +203,45 @@ async def execute(args: dict) -> str:
         + f"\n\nOUTPUT SCHEMA OBRIGATÓRIO (retorne APENAS o JSON válido):\n{json.dumps(schema)}"
     )
 
-    user_content = f"Crie uma apresentação sobre: {topic}"
+    user_content = f"Crie a estrutura de slides sobre: {topic}"
     if context_data:
         user_content += f"\n\nDados de contexto para embasar os slides:\n{context_data}"
 
-    model = registry.get_model("text_generator") or "openai/gpt-4o-mini"
+    model = (
+        registry.get_model("slide_generator")
+        or registry.get_model("text_generator")
+        or "openai/gpt-4o-mini"
+    )
     logger.info("[SLIDE_GENERATOR] Gerando deck para: '%s' | modelo: %s", topic[:60], model)
 
-    data = await call_openrouter(
-        messages=[
-            {"role": "system", "content": system_with_schema},
-            {"role": "user",   "content": user_content},
-        ],
-        model=model,
-        max_tokens=3000,
-        temperature=0.7,
-    )
+    try:
+        data = await asyncio.wait_for(
+            call_openrouter(
+                messages=[
+                    {"role": "system", "content": system_with_schema},
+                    {"role": "user",   "content": user_content},
+                ],
+                model=model,
+                max_tokens=2200,
+                temperature=0.4,
+                timeout_seconds=_SLIDE_LLM_TIMEOUT_SECONDS,
+            ),
+            timeout=_SLIDE_LLM_TIMEOUT_SECONDS + 2.0,
+        )
 
-    raw = data["choices"][0]["message"]["content"].strip()
+        raw = data["choices"][0]["message"]["content"].strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1]
+            if raw.endswith("```"):
+                raw = raw.rsplit("\n", 1)[0]
 
-    # Strip markdown backticks (mesmo padrão do planner.py)
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1]
-        if raw.endswith("```"):
-            raw = raw.rsplit("\n", 1)[0]
+        parsed = json.loads(raw)
+        deck = SlideDeck.model_validate(parsed)
 
-    parsed = json.loads(raw)
-    deck = SlideDeck.model_validate(parsed)
-
-    slide_count = len(deck.slides)
-    logger.info("[SLIDE_GENERATOR] Deck gerado: '%s' | %d slides", deck.title, slide_count)
-
-    return deck.model_dump_json(ensure_ascii=False)
+        slide_count = len(deck.slides)
+        logger.info("[SLIDE_GENERATOR] Deck gerado: '%s' | %d slides", deck.title, slide_count)
+        return deck.model_dump_json(ensure_ascii=False)
+    except Exception as exc:
+        logger.warning("[SLIDE_GENERATOR] Fallback local acionado para '%s': %s", topic[:60], exc)
+        fallback = _build_fallback_deck(topic, context_data)
+        return fallback.model_dump_json(ensure_ascii=False)
