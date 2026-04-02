@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -100,11 +101,101 @@ def pick_design_template(topic: str, family: str, context_data: str = "", format
     return items[0] if items else None
 
 
+def _collapse_whitespace(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "")).strip()
+
+
+def _trim_sentence(value: str, limit: int) -> str:
+    text = _collapse_whitespace(value)
+    if len(text) <= limit:
+        return text
+    clipped = text[:limit].rsplit(" ", 1)[0].rstrip(",;:-")
+    if not clipped:
+        clipped = text[:limit].rstrip(",;:-")
+    return clipped + "…"
+
+
+def _extract_first_quoted_phrase(text: str) -> str:
+    match = re.search(r"[\"'“”‘’]([^\"“”‘’']{4,80})[\"'“”‘’]", text or "")
+    return _collapse_whitespace(match.group(1)) if match else ""
+
+
+def _infer_eyebrow(topic: str, context_data: str) -> str:
+    haystack = f"{topic} {context_data}".lower()
+    if "natal" in haystack:
+        return "Especial de Natal"
+    if "dia dos pais" in haystack:
+        return "Dia dos Pais"
+    if "páscoa" in haystack or "pascoa" in haystack:
+        return "Especial de Páscoa"
+    if any(token in haystack for token in ("promo", "oferta", "desconto", "sale")):
+        return "Oferta"
+    if "novo" in haystack or "lançamento" in haystack or "lancamento" in haystack:
+        return "Novo"
+    return "Destaque"
+
+
+def _infer_headline(topic: str, context_data: str) -> str:
+    lowered = f"{topic} {context_data}".lower()
+    if "natal" in lowered and any(token in lowered for token in ("promo", "promoção", "promocao", "oferta", "desconto")):
+        return "Ofertas de Natal"
+    if "dia dos pais" in lowered and any(token in lowered for token in ("festa", "evento", "convite")):
+        return "Festa de Dia dos Pais"
+    quoted = _extract_first_quoted_phrase(context_data)
+    if quoted and len(quoted) <= 48:
+        return quoted
+    normalized_topic = _collapse_whitespace(topic)
+    cleaned = re.sub(
+        r"^(post|story|banner|slide|apresenta[çc][ãa]o|carrossel)\s+(de|para)\s+",
+        "",
+        normalized_topic,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"^(post|story|banner|slide)\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip(" -:")
+    return _trim_sentence(cleaned or normalized_topic or "Título principal", 56)
+
+
+def _infer_subheadline(topic: str, context_data: str) -> str:
+    sentences = re.split(r"(?<=[.!?])\s+|\n+", context_data or "")
+    cleaned_sentences = [
+        _collapse_whitespace(sentence).strip(" -:")
+        for sentence in sentences
+        if _collapse_whitespace(sentence)
+    ]
+    if cleaned_sentences:
+        candidate = cleaned_sentences[0]
+        if len(candidate) < 40 and len(cleaned_sentences) > 1:
+            candidate = f"{candidate} {cleaned_sentences[1]}"
+        return _trim_sentence(candidate, 120)
+    return _trim_sentence(topic or "Mensagem principal da peça.", 120)
+
+
+def _infer_cta(topic: str, context_data: str) -> str:
+    haystack = f"{topic} {context_data}"
+    quoted_phrases = re.findall(r"[\"'“”‘’]([^\"“”‘’']{4,80})[\"'“”‘’]", haystack)
+    for phrase in quoted_phrases:
+        cleaned = _collapse_whitespace(phrase)
+        if any(token in cleaned.lower() for token in ("aproveite", "confira", "ver", "garanta", "compre", "saiba", "celebre", "participe")):
+            return _trim_sentence(cleaned, 38)
+    lowered = haystack.lower()
+    if "natal" in lowered and any(token in lowered for token in ("promo", "oferta", "desconto")):
+        return "Ver ofertas"
+    if "dia dos pais" in lowered:
+        return "Celebrar agora"
+    if any(token in lowered for token in ("evento", "festa", "convite", "inscrição", "inscricao")):
+        return "Confirmar presença"
+    if any(token in lowered for token in ("promo", "oferta", "desconto")):
+        return "Aproveitar agora"
+    return "Saiba mais"
+
+
 def build_slot_defaults(topic: str, context_data: str, template: dict[str, Any] | None) -> dict[str, str]:
     slots = list((template or {}).get("slots", []))
-    headline = topic.strip() or "Título principal"
-    support = (context_data or "").strip().replace("\n", " ")
-    support = support[:180] if support else "Mensagem principal da peça."
+    headline = _infer_headline(topic, context_data)
+    support = _infer_subheadline(topic, context_data)
+    eyebrow = _infer_eyebrow(topic, context_data)
+    cta = _infer_cta(topic, context_data)
     defaults: dict[str, str] = {}
     for slot in slots:
         if slot in {"headline", "heading", "title"}:
@@ -112,9 +203,9 @@ def build_slot_defaults(topic: str, context_data: str, template: dict[str, Any] 
         elif slot in {"subheadline", "subtitle", "intro", "summary", "support_body"}:
             defaults[slot] = support
         elif slot in {"cta", "closing"}:
-            defaults[slot] = "Personalize a chamada final conforme a campanha."
+            defaults[slot] = cta
         elif slot in {"eyebrow", "section_kicker", "badge"}:
-            defaults[slot] = "Novo"
+            defaults[slot] = eyebrow
         elif slot in {"hero_image", "cover_image"}:
             defaults[slot] = ""
         elif slot == "big_value":
@@ -125,6 +216,8 @@ def build_slot_defaults(topic: str, context_data: str, template: dict[str, Any] 
             defaults[slot] = "Ajuste os detalhes finais antes da apresentação."
         elif slot == "supporting_points":
             defaults[slot] = "Ponto 1 | Ponto 2 | Ponto 3"
+        elif slot == "logo":
+            defaults[slot] = ""
         else:
             defaults[slot] = support
     return defaults

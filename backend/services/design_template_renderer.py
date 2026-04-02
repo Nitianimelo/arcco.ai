@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 from backend.services.design_template_registry import (
@@ -144,10 +145,24 @@ def render_design_template_from_payload(payload: dict[str, Any]) -> str | None:
 def parse_template_payload(raw: str) -> dict[str, Any] | None:
     import json
 
+    text = (raw or "").strip()
     try:
-        data = json.loads((raw or "").strip())
+        data = json.loads(text)
     except Exception:
-        return None
+        match = None
+        for candidate in (
+            r'(\{[\s\S]*"template_id"[\s\S]*\})',
+            r'(\{[\s\S]*"canvas_preset"[\s\S]*\})',
+        ):
+            match = re.search(candidate, text)
+            if match:
+                break
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group(1))
+        except Exception:
+            return None
     if not isinstance(data, dict):
         return None
     if not data.get("template_id"):

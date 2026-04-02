@@ -159,6 +159,7 @@ interface BrowserClarificationPayload {
   actionUrl?: string;
   actionLabel?: string;
   resumeToken?: string;
+  originalPrompt?: string;
 }
 
 const allSuggestions = [
@@ -262,6 +263,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const [textDocArtifact, setTextDocArtifact] = useState<{ title: string; content: string } | null>(null);
   const [designArtifact, setDesignArtifact] = useState<string[] | null>(null);
   const [clarificationQuestions, setClarificationQuestions] = useState<BrowserClarificationPayload | null>(null);
+  const clarificationBasePromptRef = useRef<string | null>(null);
   const [chatThinkingMessage, setChatThinkingMessage] = useState('');
   const [chatThinkingVisible, setChatThinkingVisible] = useState(false);
   const [chatThinkingDeep, setChatThinkingDeep] = useState(false);
@@ -1109,7 +1111,12 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             try {
               const questions = JSON.parse(content);
               if (Array.isArray(questions) && questions.length > 0) {
-                setClarificationQuestions({ questions });
+                const latestUserPrompt = [...messagesRef.current].reverse().find(msg => msg.role === 'user')?.content?.trim() || '';
+                clarificationBasePromptRef.current = latestUserPrompt || clarificationBasePromptRef.current;
+                setClarificationQuestions({
+                  questions,
+                  originalPrompt: latestUserPrompt || clarificationBasePromptRef.current || undefined,
+                });
               }
             } catch { /* ignore parse errors */ }
             return;
@@ -1119,12 +1126,15 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             try {
               const payload = JSON.parse(content);
               if (payload && Array.isArray(payload.questions) && payload.questions.length > 0) {
+                const latestUserPrompt = [...messagesRef.current].reverse().find(msg => msg.role === 'user')?.content?.trim() || '';
+                clarificationBasePromptRef.current = latestUserPrompt || clarificationBasePromptRef.current;
                 setClarificationQuestions({
                   questions: payload.questions,
                   helperText: payload.message,
                   actionUrl: payload.action_url,
                   actionLabel: payload.action_label,
                   resumeToken: payload.resume_token,
+                  originalPrompt: latestUserPrompt || clarificationBasePromptRef.current || undefined,
                 });
                 pushNarrativeThinking(payload.message || 'Encontrei um bloqueio visual e preciso da sua ajuda para continuar.');
               }
@@ -2176,11 +2186,22 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                       actionUrl={clarificationQuestions.actionUrl}
                       actionLabel={clarificationQuestions.actionLabel}
                       onSubmit={(answers) => {
-                        const responseText = clarificationQuestions.questions.map((q, i) =>
+                        const basePrompt = (
+                          clarificationQuestions.originalPrompt
+                          || clarificationBasePromptRef.current
+                          || [...messagesRef.current].reverse().find(msg => msg.role === 'user')?.content?.trim()
+                          || ''
+                        ).trim();
+                        const answerText = clarificationQuestions.questions.map((q, i) =>
                           `${q.text} ${answers[i]}`
                         ).join('\n');
+                        const compactAnswer = answers.filter(Boolean).join(', ').trim();
+                        const responseText = basePrompt
+                          ? `${basePrompt}\nFormato escolhido: ${compactAnswer || answerText}`
+                          : answerText;
                         const resumeToken = clarificationQuestions.resumeToken;
                         setClarificationQuestions(null);
+                        clarificationBasePromptRef.current = null;
                         handleSendMessage(responseText, { browserResumeToken: resumeToken });
                       }}
                     />
