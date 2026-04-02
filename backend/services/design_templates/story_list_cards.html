@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #e0f2fe; color: #0369a1; }
+    .list-shell { height: 100%; padding: 3.2cqw; display: flex; flex-direction: column; gap: 1.3cqw; }
+    .list-title { margin: 0 0 .5em; font-size: 2.5cqw; line-height: 1.1; color: #0f172a; }
+    .item { display: flex; gap: 1cqw; background: #fff; padding: 1.2cqw; border-radius: 1.1cqw; box-shadow: 0 .5cqw 1.2cqw rgba(15,23,42,.06); }
+    .num { font-size: 2.1cqw; font-weight: 900; color: #7dd3fc; line-height: 1; }
+    .copy { font-size: 1.15cqw; line-height: 1.45; color: #334155; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div id="arcco-design-content" class="list-shell">
+      <span class="cq-kicker">{{ slots.eyebrow }}</span>
+      <h1 class="cq-title list-title" data-role="headline">{{ slots.headline }}</h1>
+      <div class="item"><div class="num">1</div><div class="copy">{{ slots.step_1 }}</div></div>
+      <div class="item"><div class="num">2</div><div class="copy">{{ slots.step_2 }}</div></div>
+      <div class="item"><div class="num">3</div><div class="copy">{{ slots.step_3 }}</div></div>
+    </div>
+  </div>
+</body>
+</html>

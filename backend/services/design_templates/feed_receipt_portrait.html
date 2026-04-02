@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #e5e7eb; display: flex; align-items: center; justify-content: center; }
+    .receipt { width: 82%; background: #fff; padding: 1.8cqw; font-family: "Courier Prime", monospace; box-shadow: 0 1cqw 2cqw rgba(0,0,0,.1); position: relative; }
+    .receipt::after { content: ""; position: absolute; bottom: -.8cqw; left: 0; width: 100%; height: .8cqw; background: repeating-linear-gradient(45deg, transparent, transparent .8cqw, #fff .8cqw, #fff 1.6cqw); }
+    .line { display: flex; justify-content: space-between; border-bottom: 1px dashed #ccc; padding: .55cqw 0; font-size: .9cqw; }
+    .ttl { text-align: center; font-weight: 800; margin-top: 1.4cqw; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div id="arcco-design-content" class="receipt">
+      <h3 style="text-align:center; margin:0 0 1.2cqw 0;">{{ slots.headline }}</h3>
+      <div class="line"><span>{{ slots.line_1 }}</span><span>OK</span></div>
+      <div class="line"><span>{{ slots.line_2 }}</span><span>OK</span></div>
+      <div class="line"><span>{{ slots.line_3 }}</span><span>OK</span></div>
+      <p class="ttl">{{ slots.total }}</p>
+    </div>
+  </div>
+</body>
+</html>

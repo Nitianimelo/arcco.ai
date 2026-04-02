@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #282c34; color: #abb2bf; }
+    .shell { height: 100%; padding: 2.8cqw; display: flex; flex-direction: column; justify-content: center; }
+    .hdr { display: flex; gap: .55cqw; margin-bottom: 1.8cqw; }
+    .d { width: .95cqw; height: .95cqw; border-radius: 999px; }
+    pre { margin: 0; font-family: "Fira Code", monospace; font-size: 1.05cqw; line-height: 1.6; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div id="arcco-design-content" class="shell">
+      <div class="hdr">
+        <span class="d" style="background:#ff5f56"></span>
+        <span class="d" style="background:#ffbd2e"></span>
+        <span class="d" style="background:#27c93f"></span>
+      </div>
+      <pre>{{ slots.code_snippet }}</pre>
+    </div>
+  </div>
+</body>
+</html>

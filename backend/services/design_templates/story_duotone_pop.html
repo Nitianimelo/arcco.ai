@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #ff3366; position: relative; color: #fff; overflow: hidden; }
+    .layer { position: absolute; inset: 0; }
+    .layer img { width: 100%; height: 100%; object-fit: cover; mix-blend-mode: multiply; filter: grayscale(100%) contrast(1.5); }
+    .copy { position: absolute; left: 2.2cqw; right: 2.2cqw; bottom: 7%; z-index: 2; }
+    .title { margin: 0; font-family: "Space Grotesk", sans-serif; font-size: 4.3cqw; line-height: .92; text-transform: uppercase; mix-blend-mode: overlay; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div class="layer"><img src="{{ hero_image_url }}" alt="{{ slots.headline }}" /></div>
+    <div id="arcco-design-content" class="copy">
+      <span class="cq-kicker">{{ slots.eyebrow }}</span>
+      <h1 class="cq-title title" data-role="headline">{{ slots.headline }}</h1>
+    </div>
+  </div>
+</body>
+</html>

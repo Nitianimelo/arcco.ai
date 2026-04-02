@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #e2e8f0; color: #1e293b; }
+    .shell { height: 100%; padding: 2.2cqw; display: flex; flex-direction: column; }
+    .board { display: flex; gap: 1cqw; flex: 1; }
+    .col { flex: 1; background: #cbd5e1; border-radius: 1cqw; padding: 1cqw; display: flex; flex-direction: column; gap: .8cqw; }
+    .card { background: #fff; padding: .9cqw; border-radius: .65cqw; box-shadow: 0 .2cqw .5cqw rgba(0,0,0,.05); font-size: .95cqw; font-weight: 700; border-left: .25cqw solid #3b82f6; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div id="arcco-design-content" class="shell">
+      <h1 class="cq-title" data-role="headline">{{ slots.headline }}</h1>
+      <div class="board">
+        <div class="col">
+          <span class="cq-kicker">{{ slots.eyebrow }}</span>
+          <div class="card">{{ slots.card_1 }}</div>
+          <div class="card">{{ slots.card_2 }}</div>
+        </div>
+        <div class="col">
+          <span class="cq-kicker">{{ slots.cta }}</span>
+          <div class="card">{{ slots.card_3 }}</div>
+          <div class="card">{{ slots.card_4 }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

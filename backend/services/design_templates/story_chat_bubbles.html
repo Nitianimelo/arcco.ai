@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: linear-gradient(180deg, #e2e8f0 0%, #f8fafc 100%); color: #1e293b; }
+    .shell { height: 100%; padding: 3cqw 2.4cqw; display: flex; flex-direction: column; gap: 1.2cqw; }
+    .time { text-align: center; color: #64748b; font-size: .95cqw; margin-bottom: .6cqw; }
+    .bubble { max-width: 82%; padding: 1.1cqw 1.3cqw; border-radius: 1.5cqw; font-size: 1.15cqw; line-height: 1.4; box-shadow: 0 .45cqw 1cqw rgba(15,23,42,.07); }
+    .received { background: #fff; align-self: flex-start; border-bottom-left-radius: .5cqw; }
+    .sent { background: #3b82f6; color: #fff; align-self: flex-end; border-bottom-right-radius: .5cqw; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div id="arcco-design-content" class="shell">
+      <div class="time">{{ slots.time }}</div>
+      <div class="bubble received">{{ slots.bubble_1 }}</div>
+      <div class="bubble sent">{{ slots.bubble_2 }}</div>
+      <div class="bubble received">{{ slots.bubble_3 }}</div>
+    </div>
+  </div>
+</body>
+</html>

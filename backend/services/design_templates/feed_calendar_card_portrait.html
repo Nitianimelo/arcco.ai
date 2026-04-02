@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #f3f4f6; display: flex; align-items: center; justify-content: center; }
+    .cal { width: 100%; margin: 3cqw; background: #fff; border-radius: 1.2cqw; overflow: hidden; box-shadow: 0 1cqw 2cqw rgba(0,0,0,.08); }
+    .head { background: #ef4444; color: #fff; padding: 1.4cqw; text-align: center; font-weight: 800; font-size: 1.45cqw; }
+    .body { padding: 4cqw 2cqw; text-align: center; }
+    .day { font-size: 7cqw; font-weight: 900; color: #111; line-height: 1; }
+    .copy { color: #666; margin-top: 1.2cqw; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div id="arcco-design-content" class="cal">
+      <div class="head">{{ slots.month }}</div>
+      <div class="body">
+        <div class="day">{{ slots.day }}</div>
+        <p class="copy">{{ slots.headline }}</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

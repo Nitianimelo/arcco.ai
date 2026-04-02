@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: linear-gradient(135deg, #a78bfa, #f472b6); }
+    .shell { height: 100%; padding: 2.4cqw; display: flex; align-items: center; justify-content: center; }
+    .tweet { width: 90%; background: #fff; border-radius: 1.6cqw; padding: 1.8cqw; box-shadow: 0 1.2cqw 2.8cqw rgba(0,0,0,.14); }
+    .header { display: flex; gap: 1cqw; align-items: center; margin-bottom: 1.4cqw; }
+    .avatar { width: 3.6cqw; height: 3.6cqw; border-radius: 999px; background: #333; }
+    .name { margin: 0; font-size: 1.05cqw; font-weight: 800; }
+    .user { margin: 0; color: #888; font-size: .9cqw; }
+    .text { margin: 0; font-size: 1.5cqw; line-height: 1.38; color: #111; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div id="arcco-design-content" class="shell">
+      <div class="tweet">
+        <div class="header">
+          <div class="avatar"></div>
+          <div>
+            <p class="name">{{ slots.tweet_name }}</p>
+            <p class="user">{{ slots.tweet_user }}</p>
+          </div>
+        </div>
+        <p class="text">{{ slots.tweet_text }}</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

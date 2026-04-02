@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { position: relative; display: flex; align-items: flex-end; justify-content: center; padding: 2.8cqw; overflow: hidden; }
+    .hero { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    .shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,.15), rgba(0,0,0,.5)); }
+    .subs { position: relative; z-index: 2; color: #fde047; text-align: center; font-family: Arial, sans-serif; font-size: 1.8cqw; font-weight: 800; text-shadow: 2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <img class="hero" src="{{ hero_image_url }}" alt="{{ slots.quote }}" />
+    <div class="shade"></div>
+    <div id="arcco-design-content" class="subs">{{ slots.quote }}</div>
+  </div>
+</body>
+</html>

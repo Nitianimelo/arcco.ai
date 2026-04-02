@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #111827; color: #fff; }
+    .shell { height: 100%; padding: 3cqw; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+    .art { width: 22cqw; height: 22cqw; border-radius: 2cqw; overflow: hidden; box-shadow: 0 1.6cqw 4cqw rgba(0,0,0,.35); margin-bottom: 2.6cqw; }
+    .art img { width: 100%; height: 100%; object-fit: cover; }
+    .title { margin: 0; font-size: 2.1cqw; }
+    .body { margin: .5em 0 0; color: #94a3b8; }
+    .bar { width: 100%; height: .55cqw; border-radius: 999px; background: rgba(255,255,255,.15); margin-top: 2.2cqw; overflow: hidden; }
+    .fill { width: 48%; height: 100%; background: #fff; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div id="arcco-design-content" class="shell">
+      <div class="art"><img src="{{ hero_image_url }}" alt="{{ slots.track_title }}" /></div>
+      <h1 class="cq-title title" data-role="headline">{{ slots.track_title }}</h1>
+      <p class="cq-body body" data-role="subheadline">{{ slots.track_subtitle }}</p>
+      <div class="bar"><div class="fill"></div></div>
+    </div>
+  </div>
+</body>
+</html>

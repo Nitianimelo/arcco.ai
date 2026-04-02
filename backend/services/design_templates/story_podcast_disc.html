@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #18181b; color: #fff; }
+    .shell { height: 100%; padding: 3cqw; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+    .disc { width: 22cqw; height: 22cqw; border-radius: 999px; overflow: hidden; border: .35cqw solid #fff; box-shadow: 0 0 3cqw rgba(255,255,255,.2); margin-bottom: 3cqw; }
+    .disc img { width: 100%; height: 100%; object-fit: cover; }
+    .waves { display: flex; gap: .45cqw; height: 4.5cqw; align-items: end; margin-bottom: 2cqw; }
+    .waves span { width: .6cqw; background: #10b981; border-radius: 999px; }
+    .title { margin: 0; font-size: 2.2cqw; line-height: 1.2; }
+    .body { margin-top: .6em; color: #a1a1aa; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div id="arcco-design-content" class="shell">
+      <div class="disc"><img src="{{ hero_image_url }}" alt="{{ slots.headline }}" /></div>
+      <div class="waves">
+        <span style="height:1.6cqw"></span><span style="height:3cqw"></span><span style="height:4.2cqw"></span><span style="height:2.3cqw"></span><span style="height:3.6cqw"></span>
+      </div>
+      <span class="cq-kicker">{{ slots.eyebrow }}</span>
+      <h1 class="cq-title title" data-role="headline">{{ slots.headline }}</h1>
+      <p class="cq-body body" data-role="subheadline">{{ slots.subheadline }}</p>
+    </div>
+  </div>
+</body>
+</html>

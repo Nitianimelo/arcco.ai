@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: linear-gradient(45deg, #ff0000, #ffff00, #00ff00, #0000ff); filter: saturate(1.7); display: flex; align-items: center; justify-content: center; position: relative; }
+    .copy { position: relative; z-index: 2; color: #fff; text-align: center; mix-blend-mode: overlay; }
+    .title { margin: 0; font-family: "Space Grotesk", sans-serif; font-size: 5cqw; font-weight: 900; line-height: .92; text-transform: uppercase; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div id="arcco-design-content" class="copy">
+      <h1 class="cq-title title" data-role="headline">{{ slots.headline }}</h1>
+    </div>
+  </div>
+</body>
+</html>

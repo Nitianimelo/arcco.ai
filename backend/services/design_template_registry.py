@@ -277,6 +277,11 @@ def _content_chunks(topic: str, context_data: str, limit: int = 72, count: int =
     return chunks[:count]
 
 
+def _topic_words(topic: str, fallback: str = "Arcco") -> list[str]:
+    words = [word for word in re.split(r"\s+", _collapse_whitespace(topic)) if word]
+    return words or [fallback]
+
+
 def build_slot_defaults(topic: str, context_data: str, template: dict[str, Any] | None) -> dict[str, str]:
     slots = list((template or {}).get("slots", []))
     headline = _infer_headline(topic, context_data)
@@ -284,7 +289,8 @@ def build_slot_defaults(topic: str, context_data: str, template: dict[str, Any] 
     eyebrow = _infer_eyebrow(topic, context_data)
     cta = _infer_cta(topic, context_data)
     quoted = _extract_first_quoted_phrase(context_data) or support
-    chunks = _content_chunks(topic, context_data)
+    chunks = _content_chunks(topic, context_data, count=6)
+    words = _topic_words(topic)
     defaults: dict[str, str] = {}
     for slot in slots:
         if slot in {"headline", "heading", "title"}:
@@ -305,16 +311,90 @@ def build_slot_defaults(topic: str, context_data: str, template: dict[str, Any] 
             defaults[slot] = chunks[2]
         elif slot == "note_4":
             defaults[slot] = chunks[3]
+        elif slot == "note_5":
+            defaults[slot] = chunks[4]
+        elif slot == "note_6":
+            defaults[slot] = chunks[5]
         elif slot == "testimonial_quote":
             defaults[slot] = _trim_sentence(quoted, 180)
         elif slot == "author_name":
             defaults[slot] = "Cliente Arcco"
         elif slot == "author_role":
             defaults[slot] = "Caso real"
+        elif slot == "author":
+            defaults[slot] = "Equipe Arcco"
         elif slot == "myth_label":
             defaults[slot] = "Mito"
         elif slot == "fact_label":
             defaults[slot] = "Verdade"
+        elif slot == "tweet_name":
+            defaults[slot] = words[0][:24]
+        elif slot == "tweet_user":
+            defaults[slot] = "@" + re.sub(r"[^a-z0-9]+", "", words[0].lower())[:14]
+        elif slot == "tweet_text":
+            defaults[slot] = _trim_sentence(quoted, 180)
+        elif slot == "code_snippet":
+            defaults[slot] = 'printf("Hello, Arcco!");'
+        elif slot == "card_1":
+            defaults[slot] = chunks[0]
+        elif slot == "card_2":
+            defaults[slot] = chunks[1]
+        elif slot == "card_3":
+            defaults[slot] = chunks[2]
+        elif slot == "card_4":
+            defaults[slot] = chunks[3]
+        elif slot == "line_1":
+            defaults[slot] = chunks[0]
+        elif slot == "line_2":
+            defaults[slot] = chunks[1]
+        elif slot == "line_3":
+            defaults[slot] = chunks[2]
+        elif slot == "total":
+            defaults[slot] = eyebrow
+        elif slot == "poll_question":
+            defaults[slot] = headline[:96]
+        elif slot == "option_a":
+            defaults[slot] = chunks[0]
+        elif slot == "option_b":
+            defaults[slot] = chunks[1]
+        elif slot == "day":
+            defaults[slot] = "15"
+        elif slot == "month":
+            defaults[slot] = eyebrow
+        elif slot == "tab_1":
+            defaults[slot] = words[0][:18]
+        elif slot == "tab_2":
+            defaults[slot] = words[1][:18] if len(words) > 1 else "Projeto"
+        elif slot == "tab_3":
+            defaults[slot] = words[2][:18] if len(words) > 2 else "Notas"
+        elif slot == "status":
+            defaults[slot] = "Status: Running"
+        elif slot == "track_title":
+            defaults[slot] = headline[:48]
+        elif slot == "track_subtitle":
+            defaults[slot] = support[:72]
+        elif slot == "bubble_1":
+            defaults[slot] = chunks[0]
+        elif slot == "bubble_2":
+            defaults[slot] = chunks[1]
+        elif slot == "bubble_3":
+            defaults[slot] = chunks[2]
+        elif slot == "time":
+            defaults[slot] = "09:41"
+        elif slot == "price":
+            defaults[slot] = "R$ 149"
+        elif slot == "label":
+            defaults[slot] = eyebrow
+        elif slot == "product_code":
+            defaults[slot] = "ARCCO_001"
+        elif slot == "playlist_title":
+            defaults[slot] = headline[:48]
+        elif slot == "track_1":
+            defaults[slot] = chunks[0]
+        elif slot == "track_2":
+            defaults[slot] = chunks[1]
+        elif slot == "track_3":
+            defaults[slot] = chunks[2]
         elif slot in {"hero_image", "cover_image"}:
             defaults[slot] = ""
         elif slot == "big_value":

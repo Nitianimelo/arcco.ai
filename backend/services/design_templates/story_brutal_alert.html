@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #facc15; color: #000; overflow: hidden; position: relative; }
+    .bg { position: absolute; inset: 0; font-family: Anton, sans-serif; font-size: 7cqw; opacity: .08; transform: rotate(-10deg) scale(1.2); top: 28%; left: -12%; white-space: nowrap; }
+    .copy { position: absolute; left: 2.2cqw; right: 2.2cqw; bottom: 7%; border-top: .45cqw solid #000; padding-top: 2cqw; }
+    .title { margin: 0; font-family: Anton, sans-serif; font-size: 7cqw; line-height: .88; text-transform: uppercase; }
+    .tag { display: inline-block; margin-top: 1.2cqw; padding: .55em .9em; background: #000; color: #facc15; font-weight: 900; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div class="bg">{{ slots.headline }} {{ slots.headline }}</div>
+    <div id="arcco-design-content" class="copy">
+      <span class="cq-kicker">{{ slots.badge }}</span>
+      <h1 class="cq-title title" data-role="headline">{{ slots.headline }}</h1>
+      <div class="tag" data-role="cta">{{ slots.cta }}</div>
+    </div>
+  </div>
+</body>
+</html>

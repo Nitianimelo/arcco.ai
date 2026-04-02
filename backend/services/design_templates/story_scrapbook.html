@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #f8f9fa; color: #111; display: flex; align-items: center; justify-content: center; position: relative; }
+    .polaroid { width: 72%; background: #fff; padding: 1.1cqw 1.1cqw 4cqw; transform: rotate(4deg); box-shadow: .4cqw 1.1cqw 2cqw rgba(0,0,0,.1); position: relative; }
+    .polaroid img { width: 100%; height: auto; display: block; filter: contrast(1.15) sepia(.18); }
+    .tape { position: absolute; top: -1.3cqw; left: 50%; transform: translateX(-50%) rotate(-5deg); width: 8cqw; height: 2.2cqw; background: rgba(255,255,255,.45); border: 1px solid rgba(0,0,0,.08); }
+    .caption { position: absolute; left: 1.1cqw; bottom: 1.1cqw; font-family: "Courier New", monospace; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div id="arcco-design-content" class="polaroid">
+      <div class="tape"></div>
+      <img src="{{ hero_image_url }}" alt="{{ slots.headline }}" />
+      <p class="caption">{{ slots.headline }}</p>
+    </div>
+  </div>
+</body>
+</html>

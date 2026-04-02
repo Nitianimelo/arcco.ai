@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #000; color: #fff; position: relative; overflow: hidden; }
+    .blob { position: absolute; border-radius: 999px; filter: blur(60px); opacity: .72; }
+    .b1 { width: 24cqw; height: 24cqw; background: #60a5fa; top: -4cqw; left: -4cqw; }
+    .b2 { width: 28cqw; height: 28cqw; background: #c084fc; right: -4cqw; bottom: -4cqw; }
+    .copy { position: relative; z-index: 2; height: 100%; padding: 4cqw; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+    .title { margin: .3em 0; font-family: Georgia, serif; font-style: italic; font-size: 3.2cqw; }
+    .body { margin: 0; max-width: 18ch; color: rgba(255,255,255,.8); }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div class="blob b1"></div>
+    <div class="blob b2"></div>
+    <div id="arcco-design-content" class="copy">
+      <span class="cq-kicker">{{ slots.eyebrow }}</span>
+      <h1 class="cq-title title" data-role="headline">{{ slots.headline }}</h1>
+      <p class="cq-body body" data-role="subheadline">{{ slots.subheadline }}</p>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #fff; color: #27272a; padding: 1.6cqw; }
+    .inner { border: 1px solid #e4e4e7; height: 100%; position: relative; }
+    .image-box { position: absolute; top: 18%; right: 0; width: 78%; height: 44%; overflow: hidden; background: #f4f4f5; }
+    .image-box img { width: 100%; height: 100%; object-fit: cover; filter: grayscale(100%); }
+    .copy { position: absolute; left: 2cqw; right: 24%; bottom: 6%; }
+    .title { margin: 0 0 .35em; font-family: Georgia, serif; font-size: 3cqw; font-style: italic; }
+    .body { margin: 0; text-transform: uppercase; letter-spacing: .12em; font-size: .9cqw; color: #71717a; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div id="arcco-design-content" class="inner">
+      <div class="image-box"><img src="{{ hero_image_url }}" alt="{{ slots.headline }}" /></div>
+      <div class="copy">
+        <span class="cq-kicker">{{ slots.eyebrow }}</span>
+        <h1 class="cq-title title" data-role="headline">{{ slots.headline }}</h1>
+        <p class="cq-body body" data-role="subheadline">{{ slots.subheadline }}</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
