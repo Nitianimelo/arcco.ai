@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #0b0b0d; }
+    .container-base { background: linear-gradient(180deg, rgba(253,247,236,.97), rgba(244,230,200,.94)); }
+    .boho-overlay { position: absolute; inset: 0; background: radial-gradient(circle at 85% 10%, rgba(217,197,178,.45), transparent 28%); }
+    .boho-copy { justify-content: space-between; }
+    .boho-kicker { letter-spacing: .24em; text-transform: uppercase; font-size: 1.05cqw; color: #5d432c; font-weight: 700; }
+    .boho-title { font-family: Georgia, "Times New Roman", serif; font-style: italic; color: #2f241c; }
+    .boho-body { color: #5e5246; }
+    .boho-cta { display: inline-flex; align-self: flex-start; padding: .95em 1.6em; border-radius: 999px; background: #5d432c; color: #fff; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; font-size: .95cqw; }
+    .boho-frame { position: relative; width: 100%; height: 100%; border-radius: 28px; overflow: hidden; box-shadow: 0 20px 50px rgba(93,67,44,.22); background: #fff7ef; }
+    .boho-frame::before { content: ""; position: absolute; inset: 16px; border: 2px solid rgba(93,67,44,.28); border-radius: 22px; pointer-events: none; }
+    .boho-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div class="boho-overlay"></div>
+    <div id="arcco-design-content" class="content-shell boho-copy">
+      <div class="content-copy">
+        <span class="cq-kicker boho-kicker">{{ slots.eyebrow }}</span>
+        <h1 class="cq-title boho-title" data-role="headline">{{ slots.headline }}</h1>
+        <p class="cq-body boho-body" data-role="subheadline">{{ slots.subheadline }}</p>
+        <div class="content-actions">
+          <span class="boho-cta">{{ slots.cta }}</span>
+        </div>
+      </div>
+      <div class="content-media">
+        <div class="content-card boho-frame">
+          <img src="{{ hero_image_url }}" alt="{{ slots.headline }}" />
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

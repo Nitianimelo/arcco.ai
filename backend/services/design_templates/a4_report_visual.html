@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #d8dde5; }
+    .container-base { background: #ffffff; color: #0f172a; }
+    .visual-shell { display: grid; grid-template-rows: auto auto 1fr auto; gap: 1.4cqw; padding: 7cqw; height: 100%; }
+    .visual-title { margin: 0; font-size: clamp(34px, 3.8cqw, 56px); line-height: 1.04; }
+    .summary { color: #334155; font-size: clamp(15px, 1.15cqw, 22px); line-height: 1.55; }
+    .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 1cqw; }
+    .metric { padding: 1.4cqw; border-radius: 22px; background: #f8fafc; border: 1px solid rgba(15,23,42,.08); }
+    .metric strong { display: block; font-size: clamp(22px, 2.4cqw, 34px); }
+    .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2cqw; font-size: clamp(14px, 1.05cqw, 20px); line-height: 1.68; color: #1e293b; }
+    .closing { font-weight: 700; color: #0f172a; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-a4">
+    <div id="arcco-design-content" class="visual-shell">
+      <h1 class="visual-title" data-role="headline">{{ slots.title }}</h1>
+      <div class="summary">{{ slots.summary }}</div>
+      <div class="metrics">
+        <div class="metric"><strong>{{ slots.metric_1 }}</strong><span>Indicador principal</span></div>
+        <div class="metric"><strong>{{ slots.metric_2 }}</strong><span>Eixo secundário</span></div>
+      </div>
+      <div class="columns">
+        <div>{{ slots.body_left }}</div>
+        <div>{{ slots.body_right }}</div>
+      </div>
+      <div class="closing">{{ slots.closing }}</div>
+    </div>
+  </div>
+</body>
+</html>

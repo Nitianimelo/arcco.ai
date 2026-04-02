@@ -51,6 +51,7 @@ class ExportHtmlRequest(BaseModel):
     slide_index: Optional[int] = None    # None = todos os slides, 0-based = slide específico
     page_size: Optional[str] = None      # "widescreen", "a4-landscape", "a4-portrait", "letter-landscape", "letter-portrait"
     resolution: Optional[str] = None     # "hd-720", "hd-1080"
+    canvas_preset: Optional[str] = None  # "instagram-square" | "instagram-portrait" | "story" | "banner" | "widescreen"
 
 
 @router.post("/export-doc")
@@ -106,14 +107,17 @@ async def export_html(req: ExportHtmlRequest):
     """Converte HTML em PDF, PPTX, PNG ou JPEG para download direto."""
     fmt = req.format.lower()
     title = req.title or "apresentacao"
+    from backend.services.design_contract import normalize_design_html
+    normalized_html = normalize_design_html(req.html, canvas_preset=req.canvas_preset)
 
     try:
         if fmt == "pdf":
             from backend.services.file_service import generate_pdf_playwright
             file_bytes = await generate_pdf_playwright(
-                req.html,
+                normalized_html,
                 slide_index=req.slide_index,
                 page_size=req.page_size,
+                canvas_preset=req.canvas_preset,
             )
             mime = "application/pdf"
             ext = "pdf"
@@ -121,9 +125,10 @@ async def export_html(req: ExportHtmlRequest):
         elif fmt == "pptx":
             from backend.services.file_service import html_to_pptx
             file_bytes = await html_to_pptx(
-                req.html, title,
+                normalized_html, title,
                 slide_index=req.slide_index,
                 page_size=req.page_size,
+                canvas_preset=req.canvas_preset,
             )
             mime = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
             ext = "pptx"
@@ -132,9 +137,10 @@ async def export_html(req: ExportHtmlRequest):
             real_fmt = "jpeg" if fmt in ("jpeg", "jpg") else "png"
             from backend.services.file_service import html_to_screenshot
             result = await html_to_screenshot(
-                req.html, real_fmt,
+                normalized_html, real_fmt,
                 slide_index=req.slide_index,
                 resolution=req.resolution,
+                canvas_preset=req.canvas_preset,
             )
             # Se retorno é tuple, é ZIP multi-imagem (bytes, mime, ext)
             if isinstance(result, tuple):

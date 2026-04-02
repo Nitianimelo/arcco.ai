@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
+from backend.services.design_contract import CANVAS_PRESETS
+
 logger = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent / "pdf_templates"
@@ -59,6 +61,7 @@ async def generate_pdf_playwright(
     html_content: str,
     slide_index: Optional[int] = None,
     page_size: Optional[str] = None,
+    canvas_preset: Optional[str] = None,
 ) -> bytes:
     """
     Gera PDF de alta qualidade usando Playwright para renderizar HTML+Tailwind CSS.
@@ -70,7 +73,11 @@ async def generate_pdf_playwright(
         from playwright.sync_api import sync_playwright
 
         inject_html = _inject_tailwind_if_needed(html_content)
-        vw, vh = _PAGE_VIEWPORTS.get(page_size or "widescreen", (1280, 720))
+        if canvas_preset and canvas_preset in CANVAS_PRESETS:
+            spec = CANVAS_PRESETS[canvas_preset]
+            vw, vh = spec["width"], spec["height"]
+        else:
+            vw, vh = _PAGE_VIEWPORTS.get(page_size or "widescreen", (1280, 720))
 
         with sync_playwright() as p:
             browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
@@ -124,9 +131,10 @@ async def generate_pdf_playwright(
                     return pdf_buf.getvalue()
                 else:
                     pdf_bytes = page.pdf(
-                        format="A4",
+                        width=f"{vw}px",
+                        height=f"{vh}px",
                         print_background=True,
-                        margin={"top": "1.5cm", "right": "1.5cm", "bottom": "1.5cm", "left": "1.5cm"},
+                        margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
                     )
                     return pdf_bytes
             finally:
@@ -319,6 +327,7 @@ async def html_to_screenshot(
     img_format: str = "png",
     slide_index: Optional[int] = None,
     resolution: Optional[str] = None,
+    canvas_preset: Optional[str] = None,
 ) -> Union[bytes, tuple]:
     """
     Captura screenshot de um HTML via Playwright.
@@ -328,7 +337,11 @@ async def html_to_screenshot(
     """
     inject = _inject_tailwind_if_needed(html_content)
     fmt = img_format.lower() if img_format.lower() in ("png", "jpeg") else "png"
-    vw, vh = _RES_VIEWPORTS.get(resolution or "hd-720", (1280, 720))
+    if canvas_preset and canvas_preset in CANVAS_PRESETS:
+        spec = CANVAS_PRESETS[canvas_preset]
+        vw, vh = spec["width"], spec["height"]
+    else:
+        vw, vh = _RES_VIEWPORTS.get(resolution or "hd-720", (1280, 720))
 
     def _sync() -> Union[bytes, tuple]:
         import zipfile
@@ -373,6 +386,7 @@ async def html_to_pptx(
     title: str = "Apresentação",
     slide_index: Optional[int] = None,
     page_size: Optional[str] = None,
+    canvas_preset: Optional[str] = None,
 ) -> bytes:
     """
     Converte HTML com slides (.slide) em PPTX via screenshots Playwright.
@@ -381,7 +395,11 @@ async def html_to_pptx(
     O viewport e dimensões do PPTX se adaptam ao page_size escolhido.
     """
     inject = _inject_tailwind_if_needed(html_content)
-    vw, vh = _PAGE_VIEWPORTS.get(page_size or "widescreen", (1280, 720))
+    if canvas_preset and canvas_preset in CANVAS_PRESETS:
+        spec = CANVAS_PRESETS[canvas_preset]
+        vw, vh = spec["width"], spec["height"]
+    else:
+        vw, vh = _PAGE_VIEWPORTS.get(page_size or "widescreen", (1280, 720))
 
     # Dimensões do PPTX em EMUs (English Metric Units) — 914400 EMUs = 1 inch
     _PPTX_DIMS = {
@@ -391,7 +409,11 @@ async def html_to_pptx(
         "letter-landscape": (10058400, 7772400),    # 11.0 x 8.5 in
         "letter-portrait":  (7772400, 10058400),    # 8.5 x 11.0 in
     }
-    pptx_w, pptx_h = _PPTX_DIMS.get(page_size or "widescreen", (12192000, 6858000))
+    if canvas_preset and canvas_preset in CANVAS_PRESETS:
+        emu_per_px = 9525
+        pptx_w, pptx_h = vw * emu_per_px, vh * emu_per_px
+    else:
+        pptx_w, pptx_h = _PPTX_DIMS.get(page_size or "widescreen", (12192000, 6858000))
 
     def _sync() -> bytes:
         import io as _io

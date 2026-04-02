@@ -24,6 +24,8 @@ import { ChatSession, Message } from '../lib/chatStorage';
 import { conversationApi } from '../lib/conversationApi';
 import { withBackendUrl } from '../lib/backendUrl';
 
+const DESIGN_ARTIFACT_SENTINEL = '__ARCCO_DESIGN_ARTIFACT__';
+
 interface FilePreviewCardProps {
   url: string;
   filename: string;
@@ -1095,6 +1097,9 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
               const payload = JSON.parse(content);
               if (Array.isArray(payload?.designs) && payload.designs.length > 0) {
                 setDesignArtifact(payload.designs);
+                setMessages(prev => prev.map(msg =>
+                  msg.id === assistantMsgId ? { ...msg, content: DESIGN_ARTIFACT_SENTINEL } : msg
+                ));
               }
             } catch { /* ignore parse errors */ }
             return;
@@ -1355,6 +1360,10 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   };
 
   const renderContent = (content: string) => {
+    if (content === DESIGN_ARTIFACT_SENTINEL) {
+      return null;
+    }
+
     // Detecta resposta que é uma apresentação HTML completa (terminal tool generate_web_page)
     const trimmedContent = content.trim();
     if (trimmedContent.startsWith('<!DOCTYPE') || trimmedContent.toLowerCase().startsWith('<html')) {
@@ -2043,6 +2052,11 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   const isLastAssistant = msg.role === 'assistant' && msgIndex === messages.length - 1;
                   const isStreaming = isLastAssistant && isLoading && msg.content.length > 0;
                   const shouldRenderAgentPanel = isAgentMode && isLastAssistant;
+                  const shouldRenderInlineDesignArtifact =
+                    msg.role === 'assistant' &&
+                    msg.content === DESIGN_ARTIFACT_SENTINEL &&
+                    !!designArtifact &&
+                    designArtifact.length > 0;
 
                   // Esconde balão vazio quando thinking está ativo, mas mantém o painel acima
                   if (isLastAssistant && !msg.content && (chatThinkingVisible || isLoading)) {
@@ -2055,6 +2069,29 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                       );
                     }
                     return null;
+                  }
+
+                  if (shouldRenderInlineDesignArtifact) {
+                    return (
+                      <React.Fragment key={msg.id}>
+                        {shouldRenderAgentPanel && renderAgentActivityPanel()}
+                        <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%]">
+                          {designArtifact.length > 1 ? (
+                            <DesignGallery
+                              designs={designArtifact}
+                              isStreaming={false}
+                              onOpenPreview={(index) => setDesignPreview({ designs: designArtifact, initialIndex: index })}
+                            />
+                          ) : (
+                            <PresentationCard
+                              html={designArtifact[0]}
+                              isStreaming={false}
+                              onOpenPreview={() => setDesignPreview({ designs: designArtifact, initialIndex: 0 })}
+                            />
+                          )}
+                        </div>
+                      </React.Fragment>
+                    );
                   }
 
                   return (
@@ -2161,7 +2198,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   </div>
                 )}
 
-                {designArtifact && designArtifact.length > 0 && !isLoading && (
+                {designArtifact && designArtifact.length > 0 && !isLoading && !messages.some(msg => msg.content === DESIGN_ARTIFACT_SENTINEL) && (
                   <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%]">
                     {designArtifact.length > 1 ? (
                       <DesignGallery

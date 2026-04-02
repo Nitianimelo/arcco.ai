@@ -24,6 +24,7 @@ from typing import Any, AsyncGenerator
 
 from backend.core.llm import call_openrouter, stream_openrouter
 from backend.agents import registry
+from backend.agents.planner import ClarificationQuestion
 from backend.agents.executor import execute_tool
 from backend.agents.tools import SUPERVISOR_TOOLS, COMPUTER_TOOLS, SPY_PAGES_TOOLS
 from backend.services.browser_service import BrowserHandoffRequired, get_paused_browser_session
@@ -368,6 +369,33 @@ def _normalize_plan_for_session_files(plan_output, *, user_intent: str, session_
 
 
 def _normalize_plan_for_visual_requests(plan_output, *, user_intent: str):
+    normalized = (user_intent or "").lower()
+    mentions_instagram = "instagram" in normalized or "insta" in normalized
+    asks_post_like = any(token in normalized for token in ("post", "arte", "criativo", "imagem", "peça", "peca"))
+    has_specific_visual_format = any(
+        token in normalized
+        for token in ("story", "stories", "feed", "carrossel", "carousel", "slide", "slides", "apresenta", "deck", "banner", "thumb", "thumbnail", "a4")
+    )
+    if mentions_instagram and asks_post_like and not has_specific_visual_format:
+        plan_output.needs_clarification = True
+        plan_output.questions = [
+            ClarificationQuestion(
+                type="choice",
+                text="Qual formato você quer para essa peça de Instagram?",
+                options=["Story", "Feed", "Carrossel"],
+            )
+        ]
+        plan_output.acknowledgment = "Preciso só do formato antes de gerar a peça."
+        plan_output.steps = []
+        logger.info("[ORCHESTRATOR] Pedido visual genérico do Instagram convertido em clarificação obrigatória.")
+        return plan_output
+
+    if plan_output.steps and not plan_output.is_complex:
+        has_non_direct_step = any(step.action != "direct_answer" for step in plan_output.steps)
+        if has_non_direct_step:
+            plan_output.is_complex = True
+            logger.info("[ORCHESTRATOR] Plano com steps não-diretos forçado para fluxo complexo.")
+
     design_indexes = [idx for idx, step in enumerate(plan_output.steps) if step.action == "design_generator"]
     if not design_indexes:
         return plan_output
@@ -431,6 +459,37 @@ def _extract_visual_context_for_design(accumulated_context: str) -> str:
         if content:
             return content
     return accumulated_context
+
+
+def _extract_template_payload_from_messages(messages: list[dict]) -> str:
+    for message in reversed(messages or []):
+        content = message.get("content")
+        if isinstance(content, str):
+            trimmed = content.strip()
+            if trimmed.startswith("{") and '"template_id"' in trimmed:
+                return trimmed
+    return ""
+
+
+def _extract_template_payload_from_any_messages(messages: list[dict]) -> str:
+    for message in reversed(messages or []):
+        content = message.get("content")
+        if isinstance(content, str):
+            trimmed = content.strip()
+            if trimmed.startswith("{") and '"template_id"' in trimmed:
+                return trimmed
+    return ""
+
+
+def _render_local_design_if_possible(raw_context: str) -> str | None:
+    if not raw_context:
+        return None
+    try:
+        from backend.services.design_template_renderer import render_design_template_from_context
+        return render_design_template_from_context(raw_context)
+    except Exception:
+        logger.exception("[ORCHESTRATOR] Falha ao renderizar design determinístico local.")
+        return None
 
 
 async def _emit_design_artifact(content: str) -> AsyncGenerator[str, None]:
@@ -1703,6 +1762,53 @@ async def orchestrate_and_stream(
                             else:
                                 accumulated_context += f"\n[Passo {step.step} - {func_name}]: {specialist_result}"
                                 yield sse("thought", f"Skill {func_name} executada com sucesso.")
+                                if step.is_terminal:
+                                    local_rendered_design = _render_local_design_if_possible(str(specialist_result))
+                                    if local_rendered_design:
+                                        if execution_logger:
+                                            await execution_logger.log_event(
+                                                execution_id,
+                                                execution_agent_id=tool_agent_id,
+                                                event_type="terminal_result",
+                                                message=f"Resultado terminal gerado por {func_name}",
+                                                raw_payload={
+                                                    "preview": local_rendered_design[:2000],
+                                                    "is_terminal": True,
+                                                    "artifact_only": True,
+                                                    "forced_terminal": True,
+                                                },
+                                            )
+                                            await execution_logger.finish_agent(
+                                                tool_agent_id,
+                                                status="completed",
+                                                output_payload={
+                                                    "preview": local_rendered_design[:2000],
+                                                    "artifact_only": True,
+                                                    "forced_terminal": True,
+                                                },
+                                            )
+                                        remaining_steps = [s.step for s in plan_output.steps if s.step > step.step]
+                                        if execution_logger:
+                                            await execution_logger.log_event(
+                                                execution_id,
+                                                event_type="pipeline_terminated",
+                                                message=f"Pipeline encerrado no step {step.step}/{len(plan_output.steps)} ({func_name}, terminal artifact).",
+                                                raw_payload={
+                                                    "artifact_only": True,
+                                                    "skipped_steps": remaining_steps,
+                                                    "terminal_step": step.step,
+                                                    "terminal_route": func_name,
+                                                    "accumulated_context_chars": len(accumulated_context),
+                                                },
+                                            )
+                                        yield sse("design_artifact", json.dumps({
+                                            "designs": [
+                                                part.strip()
+                                                for part in local_rendered_design.split("<!-- ARCCO_DESIGN_SEPARATOR -->")
+                                                if part.strip()
+                                            ]
+                                        }))
+                                        return
                             if execution_logger:
                                 await execution_logger.finish_agent(
                                     tool_agent_id,
@@ -1714,10 +1820,12 @@ async def orchestrate_and_stream(
                         elif is_terminal:
                             # Ferramentas que PODEM ser terminais (text_generator, design_generator)
                             # O planner decide via step.is_terminal se este step encerra o pipeline
+                            local_rendered_design = None
                             if route == "text_generator":
                                 content = f"Título sugerido: {func_args.get('title_hint', '')}\nContexto Prévio: {accumulated_context}\nInstruções: {func_args.get('instructions', '')}"
                             elif route == "design_generator":
                                 design_context = _extract_visual_context_for_design(accumulated_context)
+                                local_rendered_design = _render_local_design_if_possible(design_context)
                                 content = f"Contexto Prévio:\n{design_context}\n\nInstruções: {func_args.get('instructions', '')}"
                             else:
                                 content = json.dumps(func_args)
@@ -1727,13 +1835,16 @@ async def orchestrate_and_stream(
                             route_model = registry.get_model(route) or supervisor_model
                             route_tools = registry.get_tools(route)
 
-                            final_result = await _run_terminal_one_shot(
-                                temp_msgs,
-                                route_model,
-                                route_prompt,
-                                route_tools,
-                                user_id=user_id,
-                            )
+                            if local_rendered_design:
+                                final_result = local_rendered_design
+                            else:
+                                final_result = await _run_terminal_one_shot(
+                                    temp_msgs,
+                                    route_model,
+                                    route_prompt,
+                                    route_tools,
+                                    user_id=user_id,
+                                )
                             if execution_logger:
                                 await execution_logger.log_event(
                                     execution_id,
@@ -2538,9 +2649,32 @@ async def orchestrate_and_stream(
                         yield sse("thought", f"Falha na skill {func_name}.")
                     else:
                         yield sse("thought", f"Skill {func_name} executada com sucesso.")
+                        if func_name == "static_design_generator":
+                            local_rendered = _render_local_design_if_possible(str(specialist_result))
+                            if local_rendered:
+                                if execution_logger:
+                                    await execution_logger.log_event(
+                                        execution_id,
+                                        execution_agent_id=react_agent_id,
+                                        event_type="terminal_result",
+                                        message="Resultado visual convertido em terminal por static_design_generator",
+                                        raw_payload={"preview": local_rendered[:2000], "artifact_only": True, "forced_terminal": True},
+                                    )
+                                    await execution_logger.finish_agent(
+                                        react_agent_id,
+                                        status="completed",
+                                        output_payload={"preview": local_rendered[:2000], "artifact_only": True, "forced_terminal": True},
+                                    )
+                                yield sse("design_artifact", json.dumps({
+                                    "designs": [
+                                        part.strip() for part in local_rendered.split("<!-- ARCCO_DESIGN_SEPARATOR -->") if part.strip()
+                                    ]
+                                }))
+                                return
 
                 # ── ROTA: Terminal (text_generator, design_generator) ──
                 elif is_terminal:
+                    local_rendered_design = None
                     if route == "text_generator":
                         step_message = "Estruturando documento bruto e preparando preview..."
                         content = (
@@ -2550,6 +2684,8 @@ async def orchestrate_and_stream(
                         )
                     elif route == "design_generator":
                         step_message = "Construindo design editável e preparando preview..."
+                        message_context = _extract_template_payload_from_messages(recent_context) or _extract_template_payload_from_any_messages(current_messages)
+                        local_rendered_design = _render_local_design_if_possible(message_context)
                         content = (
                             f"Título sugerido: {func_args.get('title_hint', '')}\n"
                             "Instruções: Gere por padrão uma peça quadrada 1:1, alinhada, centralizada, "
@@ -2570,13 +2706,16 @@ async def orchestrate_and_stream(
                     route_model = registry.get_model(route) or model
                     route_tools = registry.get_tools(route)
 
-                    final_result = await _run_terminal_one_shot(
-                        temp_msgs,
-                        route_model,
-                        route_prompt,
-                        route_tools,
-                        user_id=user_id,
-                    )
+                    if local_rendered_design:
+                        final_result = local_rendered_design
+                    else:
+                        final_result = await _run_terminal_one_shot(
+                            temp_msgs,
+                            route_model,
+                            route_prompt,
+                            route_tools,
+                            user_id=user_id,
+                        )
                     if execution_logger:
                         await execution_logger.log_event(
                             execution_id,
@@ -2593,6 +2732,21 @@ async def orchestrate_and_stream(
                             doc_content = doc_match.group(2).strip()
                             yield sse("text_doc", json.dumps({"title": doc_title, "content": doc_content}))
                             final_result = _DOC_TAG_RE.sub(doc_content, final_result)
+                    elif route == "design_generator":
+                        design_html = _extract_design_html(final_result)
+                        if design_html:
+                            yield sse("design_artifact", json.dumps({
+                                "designs": [
+                                    part.strip() for part in design_html.split("<!-- ARCCO_DESIGN_SEPARATOR -->") if part.strip()
+                                ]
+                            }))
+                            if execution_logger:
+                                await execution_logger.finish_agent(
+                                    react_agent_id,
+                                    status="completed",
+                                    output_payload={"preview": design_html[:2000], "artifact_only": True},
+                                )
+                            return
 
                     chunk_size = 40
                     for i in range(0, len(final_result), chunk_size):

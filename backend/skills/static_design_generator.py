@@ -22,6 +22,12 @@ from pydantic import BaseModel, Field
 
 from backend.core.llm import call_openrouter
 from backend.agents import registry
+from backend.services.design_template_registry import (
+    build_slot_defaults,
+    infer_template_family,
+    pick_design_template,
+)
+from backend.services.unsplash import build_unsplash_url
 
 logger = logging.getLogger(__name__)
 _STATIC_DESIGN_LLM_TIMEOUT_SECONDS = 24.0
@@ -71,6 +77,7 @@ class VisualBlock(BaseModel):
 class StaticDesignSpec(BaseModel):
     title: str = Field(description="Nome da peça visual.")
     format: str = Field(description="Formato/canvas sugerido. Ex: 1080x1080, 1080x1350.")
+    canvas_preset: Optional[str] = Field(default=None, description="Preset interno sugerido. Ex: ig-story ou ig-post-square.")
     visual_goal: str = Field(description="Objetivo da peça. Ex: captar atenção, converter, educar, anunciar.")
     art_direction: str = Field(description="Direção estética resumida em 1-2 frases.")
     palette: List[str] = Field(description="Paleta principal em hex ou nomes curtos.")
@@ -79,6 +86,27 @@ class StaticDesignSpec(BaseModel):
     blocks: List[VisualBlock] = Field(description="Blocos principais da peça em ordem de prioridade.")
     background_idea: Optional[str] = Field(default=None, description="Ideia visual para o fundo.")
     decorative_elements: List[str] = Field(default_factory=list, description="Ícones, shapes ou elementos decorativos.")
+    template_family: Optional[Literal["story", "feed", "a4", "slide"]] = Field(default=None, description="Família de template determinístico, quando houver.")
+    template_id: Optional[str] = Field(default=None, description="ID do template determinístico escolhido.")
+    template_label: Optional[str] = Field(default=None, description="Nome amigável do template escolhido.")
+    template_css_class: Optional[str] = Field(default=None, description="Classe CSS-base do template, quando aplicável.")
+    image_provider: Optional[Literal["unsplash"]] = Field(default=None, description="Provedor de imagem recomendado.")
+    image_query: Optional[str] = Field(default=None, description="Query de imagem sugerida para preencher o template.")
+    image_url: Optional[str] = Field(default=None, description="URL pronta de imagem para o template, se disponível.")
+    slot_updates: dict[str, str] = Field(default_factory=dict, description="Mapa semântico de slots para preenchimento do template.")
+
+
+def _default_image_query(topic: str, context_data: str, template: dict | None) -> str:
+    base = (topic or "").strip()
+    if template and template.get("default_image_query"):
+        default = str(template["default_image_query"]).strip()
+        if base:
+            return f"{base}, {default}"
+        return default
+    if context_data:
+        trimmed = context_data.strip().replace("\n", " ")
+        return f"{base}, {trimmed[:80]}".strip(", ")
+    return base or "premium editorial story background"
 
 
 def _build_fallback_spec(topic: str, format_hint: str, context_data: str) -> StaticDesignSpec:
@@ -86,9 +114,19 @@ def _build_fallback_spec(topic: str, format_hint: str, context_data: str) -> Sta
     palette = ["#0F172A", "#E2E8F0", "#38BDF8"]
     if "páscoa" in topic.lower() or "pascoa" in topic.lower():
         palette = ["#7C5C3B", "#F4E6C8", "#D9B99B"]
+    template_family = infer_template_family(topic, format_hint, context_data)
+    template = pick_design_template(topic, template_family, context_data, format_hint)
+    image_query = _default_image_query(topic, context_data, template)
+    image_size = (1080, 1920) if template_family == "story" else (1080, 1350 if template_family == "feed" and "1350" in (template or {}).get("format", "") else 1080)
+    image_url = (
+        build_unsplash_url(image_query, width=image_size[0], height=image_size[1])
+        if template and template.get("requires_image")
+        else None
+    )
     return StaticDesignSpec(
         title=title[:90],
-        format=(format_hint or "1080x1080"),
+        format=((template or {}).get("format") or (format_hint or "1080x1080")),
+        canvas_preset=(template or {}).get("canvas_preset"),
         visual_goal="Captar atenção com leitura rápida e hierarquia clara.",
         art_direction="Visual limpo, contraste forte e foco no headline principal.",
         palette=palette,
@@ -101,6 +139,14 @@ def _build_fallback_spec(topic: str, format_hint: str, context_data: str) -> Sta
         ],
         background_idea="Gradiente sutil com textura leve ou formas geométricas amplas.",
         decorative_elements=["shape abstrato", "ícone temático discreto"],
+        template_family=template_family if template else None,
+        template_id=(template or {}).get("id"),
+        template_label=(template or {}).get("label"),
+        template_css_class=(template or {}).get("css_class"),
+        image_provider=("unsplash" if image_url else None),
+        image_query=(image_query if image_url else None),
+        image_url=image_url,
+        slot_updates=build_slot_defaults(topic, context_data, template),
     )
 
 
@@ -114,6 +160,10 @@ REGRAS:
 - Organize a informação em blocos visuais com prioridade.
 - Evite poluição: poucos blocos, hierarquia forte, CTA claro quando fizer sentido.
 - Não escreva HTML. Seu trabalho é devolver o briefing visual estruturado em JSON.
+- Sempre prefira um template determinístico quando houver catálogo disponível para a família correta: story, feed, a4 ou slide.
+- Devolva template_family, template_id, template_label, canvas_preset e slot_updates semânticos.
+- Quando a composição pedir fotografia, devolva image_query e image_url do Unsplash.
+- Se houver template determinístico indicado, respeite sua lógica visual em vez de inventar um layout totalmente novo.
 
 Retorne APENAS JSON válido, sem markdown."""
 
@@ -134,6 +184,25 @@ async def execute(args: dict) -> str:
         user_content += f"\nFormato desejado: {format_hint}"
     if context_data:
         user_content += f"\n\nContexto adicional:\n{context_data}"
+
+    template_family = infer_template_family(topic, format_hint, context_data)
+    template = pick_design_template(topic, template_family, context_data, format_hint)
+    if template:
+        image_query = _default_image_query(topic, context_data, template)
+        user_content += (
+            "\n\nCATÁLOGO DETERMINÍSTICO DISPONÍVEL:\n"
+            f"- família: {template_family}\n"
+            f"- template_id recomendado: {template['id']}\n"
+            f"- label: {template['label']}\n"
+            f"- categoria: {template.get('category', '')}\n"
+            f"- descrição: {template.get('description', '')}\n"
+            f"- formato: {template.get('format', '')}\n"
+            f"- canvas_preset: {template.get('canvas_preset', '')}\n"
+            f"- slots: {', '.join(template.get('slots', []))}\n"
+            f"- slot_updates base: {json.dumps(build_slot_defaults(topic, context_data, template), ensure_ascii=False)}\n"
+            f"- use fotografia do Unsplash quando fizer sentido com a query: {image_query}\n"
+            "- se usar imagem, devolva também image_url otimizada para o formato do template.\n"
+        )
 
     model = (
         registry.get_model("static_design_generator")
@@ -165,6 +234,24 @@ async def execute(args: dict) -> str:
 
         parsed = json.loads(raw)
         spec = StaticDesignSpec.model_validate(parsed)
+        if template:
+            if not spec.template_id:
+                spec.template_family = template_family
+                spec.template_id = str(template["id"])
+                spec.template_label = str(template["label"])
+                spec.template_css_class = str(template.get("css_class", ""))
+            if not spec.canvas_preset:
+                spec.canvas_preset = str(template.get("canvas_preset", ""))
+            if not spec.image_query:
+                spec.image_query = _default_image_query(topic, context_data, template)
+            if not spec.image_url and template.get("requires_image"):
+                spec.image_provider = "unsplash"
+                width, height = (1080, 1920) if template_family == "story" else (1080, 1350 if template_family == "feed" and "1350" in str(template.get("format", "")) else 1080)
+                spec.image_url = build_unsplash_url(spec.image_query or topic, width=width, height=height)
+            if not spec.format:
+                spec.format = str(template.get("format", format_hint or "1080x1080"))
+            if not spec.slot_updates:
+                spec.slot_updates = build_slot_defaults(topic, context_data, template)
         logger.info("[STATIC_DESIGN_GENERATOR] Spec gerado: '%s' | formato: %s", spec.title, spec.format)
         return spec.model_dump_json(ensure_ascii=False)
     except Exception as exc:

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #020617; }
+    .container-base { background: linear-gradient(180deg, #020617 0%, #0f172a 100%); color: #e2e8f0; }
+    .tech-bg { position: absolute; inset: 0; background: linear-gradient(145deg, rgba(14,165,233,.18), transparent 42%), radial-gradient(circle at 18% 18%, rgba(56,189,248,.18), transparent 28%); }
+    .tech-badge { display: inline-flex; align-self: flex-start; padding: .55em .9em; border-radius: 12px; border: 1px solid rgba(56,189,248,.5); background: rgba(56,189,248,.14); color: #7dd3fc; font-size: .9cqw; text-transform: uppercase; letter-spacing: .16em; }
+    .tech-title { color: #f8fafc; text-transform: uppercase; }
+    .tech-body { color: #cbd5e1; }
+    .tech-panel { width: 100%; height: 100%; border-radius: 24px; background: rgba(15,23,42,.7); border: 1px solid rgba(148,163,184,.18); box-shadow: inset 0 1px 0 rgba(255,255,255,.05); padding: 2.2cqw; display: flex; flex-direction: column; justify-content: flex-end; gap: 1.2cqw; }
+    .tech-lines { flex: 1; border-radius: 16px; background: linear-gradient(180deg, rgba(56,189,248,.08), rgba(15,23,42,.2)); position: relative; overflow: hidden; }
+    .tech-lines::before { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(180deg, transparent, transparent 14px, rgba(56,189,248,.13) 14px, rgba(56,189,248,.13) 15px); }
+    .tech-code { font-family: monospace; color: #7dd3fc; white-space: pre-line; font-size: 1.05cqw; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div class="tech-bg"></div>
+    <div id="arcco-design-content" class="content-shell">
+      <div class="content-copy">
+        <span class="tech-badge">{{ slots.badge }}</span>
+        <h1 class="cq-title tech-title" data-role="headline">{{ slots.headline }}</h1>
+        <p class="cq-body tech-body" data-role="subheadline">{{ slots.support_body }}</p>
+      </div>
+      <div class="content-media">
+        <div class="tech-panel">
+          <div class="tech-lines"></div>
+          <div class="tech-code">{{ slots.support_body }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #0b0b0d; }
+    .slide { width: 100%; min-height: 100%; }
+    .container-base { background: linear-gradient(140deg, #08111f 0%, #0f172a 55%, #0b1222 100%); color: #e2e8f0; }
+    .slide-card { width: 100%; height: 100%; border-radius: 28px; overflow: hidden; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06); }
+    .slide-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .slide-kicker { color: #7dd3fc; text-transform: uppercase; letter-spacing: .18em; }
+    .slide-title { color: #fff; }
+    .slide-body { color: #cbd5e1; }
+    .slide-note { color: #7dd3fc; font-size: .9cqw; text-transform: uppercase; letter-spacing: .12em; }
+    ul { margin: 0; padding-left: 1.2em; }
+    li { margin: .35em 0; }
+  </style>
+</head>
+<body>
+  <section class="slide container-base format-slide-16-9">
+    <div id="arcco-design-content" class="content-shell">
+      <div class="content-copy">
+        <span class="cq-kicker slide-kicker">{{ slide.kicker }}</span>
+        <h1 class="cq-title slide-title" data-role="headline">{{ slide.heading }}</h1>
+        <div class="cq-body slide-body">
+          {{ slide.points_html }}
+        </div>
+        <div class="slide-note">{{ slide.note }}</div>
+      </div>
+      <div class="content-media">
+        <div class="slide-card">
+          {{ slide.hero_image_html }}
+        </div>
+      </div>
+    </div>
+  </section>
+</body>
+</html>

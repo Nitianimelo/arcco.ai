@@ -1,10 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Canvas as FabricCanvas, Textbox, FabricImage, FabricObject } from 'fabric';
-import html2canvas from 'html2canvas';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  AlignCenter,
-  AlignLeft,
-  AlignRight,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -18,9 +13,14 @@ import {
   Minimize2,
   Monitor,
   Presentation,
-  Type,
   X,
 } from 'lucide-react';
+import {
+  CANVAS_PRESETS,
+  type CanvasPreset,
+  inferCanvasPreset,
+  normalizeDesignHtml,
+} from '../../lib/designContract';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -34,34 +34,12 @@ interface DesignPreviewModalProps {
 }
 
 type ExportFormat = 'pdf' | 'pptx' | 'png' | 'jpeg';
-type PageSizeOption = 'widescreen' | 'a4-landscape' | 'a4-portrait' | 'letter-landscape' | 'letter-portrait';
 type ResolutionOption = 'hd-720' | 'hd-1080';
 type SlideSelection = 'all' | 'current';
-
-interface TextInfo {
-  text: string;
-  left: number;
-  top: number;
-  width: number;
-  fontSize: number;
-  fontFamily: string;
-  color: string;
-  fontWeight: string;
-  textAlign: string;
-}
-
-interface SelectedState {
-  text: string;
-  fontSize: number;
-  textAlign: string;
-  color: string;
-}
 
 // ────────────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────────────
-
-const CANVAS_SIZE = 1080;
 
 const EXPORT_BUTTONS: { fmt: ExportFormat; label: string; icon: React.ReactNode }[] = [
   { fmt: 'png', label: 'PNG', icon: <Image size={14} /> },
@@ -70,28 +48,15 @@ const EXPORT_BUTTONS: { fmt: ExportFormat; label: string; icon: React.ReactNode 
   { fmt: 'pptx', label: 'PPTX', icon: <Presentation size={14} /> },
 ];
 
-const FONT_OPTIONS = [
-  'Georgia',
-  'Helvetica Neue',
-  'Arial',
-  'Trebuchet MS',
-  'Gill Sans',
-  'Verdana',
-  'Times New Roman',
-];
-
-const PAGE_SIZE_OPTIONS: { value: PageSizeOption; label: string }[] = [
-  { value: 'widescreen', label: '16:9 Widescreen' },
-  { value: 'a4-landscape', label: 'A4 Paisagem' },
-  { value: 'a4-portrait', label: 'A4 Retrato' },
-  { value: 'letter-landscape', label: 'Letter Paisagem' },
-  { value: 'letter-portrait', label: 'Letter Retrato' },
-];
-
 const RESOLUTION_OPTIONS: { value: ResolutionOption; label: string }[] = [
   { value: 'hd-720', label: '1280 x 720 (HD)' },
   { value: 'hd-1080', label: '1920 x 1080 (Full HD)' },
 ];
+
+function describeResolution(format: ExportFormat, resolution: ResolutionOption) {
+  if (format !== 'png' && format !== 'jpeg') return 'Vetorial / documento';
+  return resolution === 'hd-1080' ? '1920 x 1080' : '1280 x 720';
+}
 
 // ────────────────────────────────────────────────────────────────
 // Detection utilities
@@ -108,7 +73,7 @@ function countSlidesFromHtml(html: string): number {
 }
 
 // ────────────────────────────────────────────────────────────────
-// Utility functions (single-design Fabric mode)
+// Utility functions
 // ────────────────────────────────────────────────────────────────
 
 function extractTitle(html: string) {
@@ -118,102 +83,6 @@ function extractTitle(html: string) {
 function ensureHtmlDocument(src: string): string {
   if (/<!doctype html>/i.test(src) || /<html[\s>]/i.test(src)) return src;
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Design</title></head><body>${src}</body></html>`;
-}
-
-function rgbToHex(rgb: string): string {
-  const m = rgb.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-  if (!m) return rgb.startsWith('#') ? rgb : '#000000';
-  const hex = (n: number) => n.toString(16).padStart(2, '0');
-  return `#${hex(+m[1])}${hex(+m[2])}${hex(+m[3])}`;
-}
-
-function hasVisibleText(node: HTMLElement): boolean {
-  const text = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
-  return text.length > 0 && text.length <= 500;
-}
-
-function collectLeafTextElements(root: HTMLElement, iframeWindow: Window): HTMLElement[] {
-  const all = Array.from(root.querySelectorAll<HTMLElement>('*')).filter((el) => {
-    if (el.closest('script, style, svg, canvas, noscript')) return false;
-    const cs = iframeWindow.getComputedStyle(el);
-    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
-    const rect = el.getBoundingClientRect();
-    if (rect.width < 5 || rect.height < 5) return false;
-    return hasVisibleText(el);
-  });
-  return all.filter((el) => !all.some((other) => other !== el && el.contains(other)));
-}
-
-async function htmlToFabricData(html: string): Promise<{ bgDataUrl: string; texts: TextInfo[] }> {
-  const normalized = ensureHtmlDocument(html);
-  return new Promise((resolve, reject) => {
-    const iframe = document.createElement('iframe');
-    iframe.style.cssText = 'position:fixed;left:-9999px;top:0;width:1080px;height:1080px;border:none;opacity:0;pointer-events:none;';
-    document.body.appendChild(iframe);
-
-    iframe.addEventListener('load', async () => {
-      try {
-        const doc = iframe.contentDocument;
-        if (!doc) throw new Error('Cannot access iframe document');
-        await new Promise((r) => setTimeout(r, 800));
-        const root = doc.body;
-        const rootRect = root.getBoundingClientRect();
-        const iframeWin = iframe.contentWindow!;
-        const textElements = collectLeafTextElements(root, iframeWin);
-        const texts: TextInfo[] = [];
-
-        for (const el of textElements) {
-          const rect = el.getBoundingClientRect();
-          const cs = iframeWin.getComputedStyle(el);
-          texts.push({
-            text: el.innerText.trim(),
-            left: rect.left - rootRect.left,
-            top: rect.top - rootRect.top,
-            width: Math.max(rect.width, 50),
-            fontSize: parseFloat(cs.fontSize) || 16,
-            fontFamily: cs.fontFamily.split(',')[0].replace(/['"]/g, '').trim(),
-            color: rgbToHex(cs.color),
-            fontWeight: cs.fontWeight,
-            textAlign: cs.textAlign || 'left',
-          });
-        }
-
-        const savedVisibility: string[] = [];
-        textElements.forEach((el, i) => {
-          savedVisibility[i] = el.style.visibility;
-          el.style.visibility = 'hidden';
-        });
-
-        const captureCanvas = await html2canvas(root, {
-          width: CANVAS_SIZE,
-          height: CANVAS_SIZE,
-          scale: 1,
-          useCORS: true,
-          allowTaint: true,
-          backgroundColor: null,
-          logging: false,
-        });
-        const bgDataUrl = captureCanvas.toDataURL('image/png');
-
-        textElements.forEach((el, i) => {
-          el.style.visibility = savedVisibility[i];
-        });
-
-        document.body.removeChild(iframe);
-        resolve({ bgDataUrl, texts });
-      } catch (err) {
-        document.body.removeChild(iframe);
-        reject(err);
-      }
-    });
-
-    iframe.addEventListener('error', () => {
-      document.body.removeChild(iframe);
-      reject(new Error('Failed to load design in iframe'));
-    });
-
-    iframe.srcdoc = normalized;
-  });
 }
 
 async function downloadBlob(blob: Blob, filename: string) {
@@ -231,6 +100,7 @@ interface ExportOptions {
   slide_index?: number;
   page_size?: string;
   resolution?: string;
+  canvas_preset?: CanvasPreset;
 }
 
 async function downloadHtmlExport(html: string, title: string, format: ExportFormat, opts?: ExportOptions) {
@@ -327,28 +197,57 @@ function injectPresentationNav(html: string): string {
 }
 
 // ────────────────────────────────────────────────────────────────
-// ColorSwatch
-// ────────────────────────────────────────────────────────────────
-
-function ColorSwatch({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const hexVal = value.startsWith('#') ? value : rgbToHex(value);
-  return (
-    <div className="relative">
-      <div className="w-7 h-7 rounded-lg border border-[#333] shadow-sm cursor-pointer" style={{ backgroundColor: hexVal }} />
-      <input
-        type="color"
-        value={hexVal}
-        onChange={(e) => onChange(e.target.value)}
-        className="absolute inset-0 opacity-0 cursor-pointer"
-        style={{ minWidth: 44, minHeight: 44, margin: '-9px' }}
-      />
-    </div>
-  );
-}
-
-// ────────────────────────────────────────────────────────────────
 // Main Component
 // ────────────────────────────────────────────────────────────────
+
+const getPresetAspect = (preset: CanvasPreset): string => {
+  const spec = CANVAS_PRESETS[preset];
+  return `${spec.width} / ${spec.height}`;
+};
+
+type FrameKind = 'mobile' | 'tablet' | 'desktop';
+
+const getFrameKind = (preset: CanvasPreset): FrameKind => {
+  if (preset === 'story' || preset === 'instagram-square' || preset === 'instagram-portrait') return 'mobile';
+  if (preset === 'a4-portrait' || preset === 'a4-landscape') return 'tablet';
+  return 'desktop';
+};
+
+const renderFrameShell = (kind: FrameKind, children: React.ReactNode) => {
+  if (kind === 'mobile') {
+    return (
+      <div className="relative rounded-[2.2rem] border border-[#2a2d33] bg-[#050506] p-3 shadow-[0_30px_90px_rgba(0,0,0,0.55)]">
+        <div className="pointer-events-none absolute left-1/2 top-2 h-1.5 w-20 -translate-x-1/2 rounded-full bg-[#15171b]" />
+        <div className="overflow-hidden rounded-[1.6rem] border border-[#17191d] bg-[#09090c]">
+          {children}
+        </div>
+      </div>
+    );
+  }
+
+  if (kind === 'tablet') {
+    return (
+      <div className="relative rounded-[2rem] border border-[#2a2d33] bg-[#050506] p-4 shadow-[0_30px_90px_rgba(0,0,0,0.48)]">
+        <div className="overflow-hidden rounded-[1.35rem] border border-[#17191d] bg-[#09090c]">
+          {children}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-[1.4rem] border border-[#2a2d33] bg-[#050506] p-3 shadow-[0_30px_90px_rgba(0,0,0,0.42)]">
+      <div className="mb-3 flex items-center gap-2 px-2">
+        <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
+        <span className="h-2.5 w-2.5 rounded-full bg-[#febc2e]" />
+        <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
+      </div>
+      <div className="overflow-hidden rounded-[0.9rem] border border-[#17191d] bg-[#09090c]">
+        {children}
+      </div>
+    </div>
+  );
+};
 
 const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose, designs, initialIndex = 0 }) => {
   const [activeIndex, setActiveIndex] = useState(initialIndex);
@@ -357,28 +256,26 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
   const [error, setError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
-  const [selectedState, setSelectedState] = useState<SelectedState | null>(null);
-
-  // Fabric mode refs
-  const containerRef = useRef<HTMLDivElement>(null);
-  const canvasElRef = useRef<HTMLCanvasElement>(null);
-  const fabricRef = useRef<FabricCanvas | null>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
   // Presentation mode state
   const [currentSlide, setCurrentSlide] = useState(0);
   const [totalSlides, setTotalSlides] = useState(0);
   const presIframeRef = useRef<HTMLIFrameElement>(null);
+  const singleIframeRef = useRef<HTMLIFrameElement>(null);
 
-  // Export options state (presentation mode only)
   const [selectedFmt, setSelectedFmt] = useState<ExportFormat>('png');
   const [slideSelection, setSlideSelection] = useState<SlideSelection>('all');
-  const [pageSize, setPageSize] = useState<PageSizeOption>('widescreen');
   const [resolution, setResolution] = useState<ResolutionOption>('hd-720');
+  const [previewPreset, setPreviewPreset] = useState<CanvasPreset>('instagram-square');
 
   const currentHtml = designs[activeIndex] || '';
   const title = extractTitle(currentHtml);
   const isPresentationMode = isMultiSlidePresentation(currentHtml);
+  const normalizedPreviewHtml = normalizeDesignHtml(currentHtml, previewPreset);
+  const previewPresetSpec = CANVAS_PRESETS[previewPreset];
+  const previewAspect = getPresetAspect(previewPreset);
+  const frameKind = getFrameKind(previewPreset);
 
   // ── Presentation: listen for messages from iframe ──
   useEffect(() => {
@@ -409,126 +306,20 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
     return () => clearTimeout(t);
   }, [isOpen, activeIndex, isPresentationMode, currentHtml]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const inferred = inferCanvasPreset(currentHtml);
+    const fallbackPreset =
+      isPresentationMode && inferred === 'banner'
+        ? 'widescreen'
+        : inferred;
+    setPreviewPreset(fallbackPreset);
+    setIsLoading(true);
+  }, [isOpen, isPresentationMode, currentHtml, activeIndex]);
+
   const goToSlide = (index: number) => {
     presIframeRef.current?.contentWindow?.postMessage({ type: 'arcco_go_to_slide', index }, '*');
   };
-
-  // ── Fabric mode: Build canvas from HTML ──
-  const buildCanvas = useCallback(async (html: string) => {
-    if (fabricRef.current) {
-      fabricRef.current.dispose();
-      fabricRef.current = null;
-    }
-    if (!canvasElRef.current || !containerRef.current) return;
-
-    setIsLoading(true);
-    setSelectedState(null);
-    setError(null);
-
-    try {
-      const { bgDataUrl, texts } = await htmlToFabricData(html);
-      if (!canvasElRef.current || !containerRef.current) return;
-
-      const fc = new FabricCanvas(canvasElRef.current, {
-        width: CANVAS_SIZE,
-        height: CANVAS_SIZE,
-        backgroundColor: 'transparent',
-        selection: true,
-        preserveObjectStacking: true,
-      });
-
-      const bgImg = await FabricImage.fromURL(bgDataUrl);
-      bgImg.set({
-        scaleX: CANVAS_SIZE / (bgImg.width || CANVAS_SIZE),
-        scaleY: CANVAS_SIZE / (bgImg.height || CANVAS_SIZE),
-        originX: 'left',
-        originY: 'top',
-        selectable: false,
-        evented: false,
-      });
-      fc.backgroundImage = bgImg;
-
-      for (const t of texts) {
-        const tb = new Textbox(t.text, {
-          left: t.left,
-          top: t.top,
-          width: t.width,
-          fontSize: t.fontSize,
-          fontFamily: t.fontFamily,
-          fill: t.color,
-          textAlign: t.textAlign as any,
-          fontWeight: t.fontWeight === 'bold' || parseInt(t.fontWeight) >= 700 ? 'bold' : 'normal',
-          editable: true,
-          selectable: true,
-          borderColor: '#ea580c',
-          cornerColor: '#ea580c',
-          cornerStyle: 'circle',
-          cornerSize: 8,
-          transparentCorners: false,
-          padding: 4,
-        });
-        fc.add(tb);
-      }
-
-      const updateSidebar = (obj: FabricObject | undefined) => {
-        if (!obj || !(obj instanceof Textbox)) { setSelectedState(null); return; }
-        setSelectedState({
-          text: obj.text || '',
-          fontSize: obj.fontSize || 16,
-          textAlign: (obj.textAlign as string) || 'left',
-          color: typeof obj.fill === 'string' ? obj.fill : '#000000',
-        });
-      };
-
-      fc.on('selection:created', (e) => updateSidebar(e.selected?.[0]));
-      fc.on('selection:updated', (e) => updateSidebar(e.selected?.[0]));
-      fc.on('selection:cleared', () => setSelectedState(null));
-      fc.on('object:modified', (e) => updateSidebar(e.target));
-      fc.on('text:changed', (e) => updateSidebar(e.target));
-
-      fabricRef.current = fc;
-      fitToContainer();
-      fc.requestRenderAll();
-    } catch (err: any) {
-      setError(`Erro ao processar design: ${err.message}`);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  const fitToContainer = useCallback(() => {
-    const fc = fabricRef.current;
-    const container = containerRef.current;
-    if (!fc || !container) return;
-    const cw = container.clientWidth;
-    const ch = container.clientHeight;
-    if (cw === 0 || ch === 0) return;
-    const zoom = Math.min(cw / CANVAS_SIZE, ch / CANVAS_SIZE) * 0.88;
-    fc.setZoom(zoom);
-    fc.setDimensions({ width: CANVAS_SIZE * zoom, height: CANVAS_SIZE * zoom });
-    fc.requestRenderAll();
-  }, []);
-
-  // ── Fabric mode: Init on open / design change ──
-  useEffect(() => {
-    if (!isOpen || !currentHtml || isPresentationMode) return;
-    const t = setTimeout(() => buildCanvas(currentHtml), 50);
-    return () => clearTimeout(t);
-  }, [isOpen, activeIndex, buildCanvas, currentHtml, isPresentationMode]);
-
-  // ── Resize handler ──
-  useEffect(() => {
-    if (!isOpen) return;
-    const handler = () => { if (!isPresentationMode) fitToContainer(); };
-    window.addEventListener('resize', handler);
-    return () => window.removeEventListener('resize', handler);
-  }, [isOpen, fitToContainer, isPresentationMode]);
-
-  useEffect(() => {
-    if (!isOpen || isPresentationMode) return;
-    const t = setTimeout(fitToContainer, 100);
-    return () => clearTimeout(t);
-  }, [isFullscreen, isOpen, fitToContainer, isPresentationMode]);
 
   // ── Escape to close ──
   useEffect(() => {
@@ -558,108 +349,19 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
     return () => document.removeEventListener('mousedown', handler);
   }, [showExportMenu]);
 
-  // ── Cleanup on unmount ──
-  useEffect(() => {
-    return () => {
-      if (fabricRef.current) {
-        fabricRef.current.dispose();
-        fabricRef.current = null;
-      }
-    };
-  }, []);
-
-  // ── Fabric sidebar handlers ──
-  const getActiveTextbox = (): Textbox | null => {
-    const fc = fabricRef.current;
-    if (!fc) return null;
-    const obj = fc.getActiveObject();
-    return obj instanceof Textbox ? obj : null;
-  };
-
-  const handleTextChange = (value: string) => {
-    const tb = getActiveTextbox();
-    if (!tb) return;
-    tb.set({ text: value });
-    fabricRef.current?.requestRenderAll();
-    setSelectedState((s) => s ? { ...s, text: value } : s);
-  };
-
-  const handleFontSizeChange = (size: number) => {
-    const tb = getActiveTextbox();
-    if (!tb) return;
-    tb.set({ fontSize: size });
-    fabricRef.current?.requestRenderAll();
-    setSelectedState((s) => s ? { ...s, fontSize: size } : s);
-  };
-
-  const handleAlignChange = (align: string) => {
-    const tb = getActiveTextbox();
-    if (!tb) return;
-    tb.set({ textAlign: align });
-    fabricRef.current?.requestRenderAll();
-    setSelectedState((s) => s ? { ...s, textAlign: align } : s);
-  };
-
-  const handleColorChange = (color: string) => {
-    const tb = getActiveTextbox();
-    if (!tb) return;
-    tb.set({ fill: color });
-    fabricRef.current?.requestRenderAll();
-    setSelectedState((s) => s ? { ...s, color } : s);
-  };
-
-  const handleFontFamilyChange = (fontFamily: string) => {
-    const tb = getActiveTextbox();
-    if (!tb) return;
-    tb.set({ fontFamily });
-    fabricRef.current?.requestRenderAll();
-  };
-
-  // ── Export helpers ──
-  const exportFullResDataUrl = (format: 'png' | 'jpeg' = 'png'): string => {
-    const fc = fabricRef.current;
-    if (!fc) return '';
-    fc.discardActiveObject();
-    const currentZoom = fc.getZoom();
-    const currentW = fc.getWidth();
-    const currentH = fc.getHeight();
-    fc.setZoom(1);
-    fc.setDimensions({ width: CANVAS_SIZE, height: CANVAS_SIZE });
-    fc.requestRenderAll();
-    const dataUrl = fc.toDataURL({ format, quality: 1, multiplier: 1 });
-    fc.setZoom(currentZoom);
-    fc.setDimensions({ width: currentW, height: currentH });
-    fc.requestRenderAll();
-    return dataUrl;
-  };
-
   const handleExport = async (fmt: ExportFormat) => {
     setLoadingFmt(fmt);
     setError(null);
     setShowExportMenu(false);
     try {
+      const opts: ExportOptions = { canvas_preset: previewPreset };
       if (isPresentationMode) {
-        // Presentation mode: build export options from state
-        const opts: ExportOptions = {};
         if (slideSelection === 'current') opts.slide_index = currentSlide;
-        if (fmt === 'pdf' || fmt === 'pptx') {
-          opts.page_size = pageSize;
-        } else {
-          opts.resolution = resolution;
-        }
-        await downloadHtmlExport(currentHtml, title, fmt, opts);
+        if (fmt === 'png' || fmt === 'jpeg') opts.resolution = resolution;
+        await downloadHtmlExport(normalizedPreviewHtml, title, fmt, opts);
       } else {
-        // Single design: Fabric canvas export
-        if (fmt === 'png' || fmt === 'jpeg') {
-          const dataUrl = exportFullResDataUrl(fmt);
-          const res = await fetch(dataUrl);
-          const blob = await res.blob();
-          await downloadBlob(blob, `design.${fmt}`);
-        } else {
-          const pngDataUrl = exportFullResDataUrl('png');
-          const wrapperHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="margin:0;padding:0;width:${CANVAS_SIZE}px;height:${CANVAS_SIZE}px"><img src="${pngDataUrl}" style="width:${CANVAS_SIZE}px;height:${CANVAS_SIZE}px;display:block"></body></html>`;
-          await downloadHtmlExport(wrapperHtml, title, fmt);
-        }
+        if (fmt === 'png' || fmt === 'jpeg') opts.resolution = resolution;
+        await downloadHtmlExport(normalizedPreviewHtml, title, fmt, opts);
       }
     } catch (e: any) {
       setError(`Erro ao exportar: ${e.message}`);
@@ -730,7 +432,7 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
                               onClick={() => setSlideSelection(value)}
                               className={`flex-1 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
                                 slideSelection === value
-                                  ? 'bg-orange-500/15 text-orange-300 border border-orange-500/30'
+                                  ? 'bg-white/[0.10] text-neutral-100 border border-[#434750]'
                                   : 'text-neutral-500 hover:text-neutral-300 bg-white/[0.03] border border-[#2a2a2e]'
                               }`}
                             >
@@ -750,7 +452,7 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
                               onClick={() => setSelectedFmt(fmt)}
                               className={`flex flex-col items-center gap-1 py-2 rounded-lg text-[10px] font-medium transition-all ${
                                 selectedFmt === fmt
-                                  ? 'bg-orange-500/15 text-orange-300 border border-orange-500/30'
+                                  ? 'bg-white/[0.10] text-neutral-100 border border-[#434750]'
                                   : 'text-neutral-500 hover:text-neutral-300 bg-white/[0.03] border border-[#2a2a2e]'
                               }`}
                             >
@@ -762,27 +464,13 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
                       </div>
 
                       {/* Opções contextuais */}
-                      {(selectedFmt === 'pdf' || selectedFmt === 'pptx') && (
-                        <div className="space-y-1.5">
-                          <p className="text-[10px] text-neutral-500 uppercase tracking-wide font-medium">Tamanho</p>
-                          <select
-                            value={pageSize}
-                            onChange={(e) => setPageSize(e.target.value as PageSizeOption)}
-                            className="w-full rounded-lg bg-[#0a0a0e] border border-[#2a2a34] px-3 py-2 text-[11px] text-neutral-300 outline-none focus:border-orange-500/40 transition-colors"
-                          >
-                            {PAGE_SIZE_OPTIONS.map(({ value, label }) => (
-                              <option key={value} value={value}>{label}</option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
                       {(selectedFmt === 'png' || selectedFmt === 'jpeg') && (
                         <div className="space-y-1.5">
                           <p className="text-[10px] text-neutral-500 uppercase tracking-wide font-medium">Resolução</p>
                           <select
                             value={resolution}
                             onChange={(e) => setResolution(e.target.value as ResolutionOption)}
-                            className="w-full rounded-lg bg-[#0a0a0e] border border-[#2a2a34] px-3 py-2 text-[11px] text-neutral-300 outline-none focus:border-orange-500/40 transition-colors"
+                            className="w-full rounded-lg bg-[#0a0a0e] border border-[#2a2a34] px-3 py-2 text-[11px] text-neutral-300 outline-none focus:border-neutral-500 transition-colors"
                           >
                             {RESOLUTION_OPTIONS.map(({ value, label }) => (
                               <option key={value} value={value}>{label}</option>
@@ -795,30 +483,58 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
                       <button
                         onClick={() => handleExport(selectedFmt)}
                         disabled={!!loadingFmt}
-                        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-white text-xs font-medium transition-colors disabled:opacity-50"
+                        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-white/[0.08] hover:bg-white/[0.12] text-neutral-100 text-xs font-medium tracking-[0.01em] transition-colors disabled:opacity-50 border border-[#2a2a2e]"
                       >
                         {loadingFmt ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                         Baixar {selectedFmt.toUpperCase()}
                       </button>
                     </div>
                   ) : (
-                    /* ── Design único: lista simples de formatos ── */
-                    <>
-                      <div className="px-3.5 py-2 border-b border-[#1e1e22]">
-                        <p className="text-[10px] text-neutral-500 uppercase tracking-wide">Baixa exatamente o que voce ve</p>
+                    <div className="p-3.5 space-y-3">
+                      <div className="space-y-1.5">
+                        <p className="text-[10px] text-neutral-500 uppercase tracking-wide font-medium">Exportar como</p>
+                        <div className="grid grid-cols-4 gap-1.5">
+                          {EXPORT_BUTTONS.map(({ fmt, label, icon }) => (
+                            <button
+                              key={fmt}
+                              onClick={() => setSelectedFmt(fmt)}
+                              className={`flex flex-col items-center gap-1 py-2 rounded-lg text-[10px] font-medium transition-all ${
+                                selectedFmt === fmt
+                                  ? 'bg-white/[0.10] text-neutral-100 border border-[#434750]'
+                                  : 'text-neutral-500 hover:text-neutral-300 bg-white/[0.03] border border-[#2a2a2e]'
+                              }`}
+                            >
+                              {icon}
+                              {label}
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                      {EXPORT_BUTTONS.map(({ fmt, label, icon }) => (
-                        <button
-                          key={fmt}
-                          onClick={() => handleExport(fmt)}
-                          disabled={!!loadingFmt}
-                          className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-xs text-neutral-300 hover:text-white hover:bg-white/[0.05] transition-colors text-left disabled:opacity-40"
-                        >
-                          {loadingFmt === fmt ? <Loader2 size={14} className="animate-spin" /> : icon}
-                          Baixar como {label}
-                        </button>
-                      ))}
-                    </>
+
+                      {(selectedFmt === 'png' || selectedFmt === 'jpeg') && (
+                        <div className="space-y-1.5">
+                          <p className="text-[10px] text-neutral-500 uppercase tracking-wide font-medium">Resolução</p>
+                          <select
+                            value={resolution}
+                            onChange={(e) => setResolution(e.target.value as ResolutionOption)}
+                            className="w-full rounded-lg bg-[#0a0a0e] border border-[#2a2a34] px-3 py-2 text-[11px] text-neutral-300 outline-none focus:border-neutral-500 transition-colors"
+                          >
+                            {RESOLUTION_OPTIONS.map(({ value, label }) => (
+                              <option key={value} value={value}>{label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      <button
+                        onClick={() => handleExport(selectedFmt)}
+                        disabled={!!loadingFmt}
+                        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-white/[0.08] hover:bg-white/[0.12] text-neutral-100 text-xs font-medium tracking-[0.01em] transition-colors disabled:opacity-50 border border-[#2a2a2e]"
+                      >
+                        {loadingFmt ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                        Baixar {selectedFmt.toUpperCase()}
+                      </button>
+                    </div>
                   )}
                 </div>
               )}
@@ -855,19 +571,28 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
               {isLoading && (
                 <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[#0c0c0f]/80 backdrop-blur-sm">
                   <Loader2 size={28} className="animate-spin text-orange-400 mb-3" />
-                  <p className="text-xs text-neutral-400">Carregando apresentacao...</p>
+                  <p className="text-xs text-neutral-400">Carregando...</p>
                 </div>
               )}
 
               {/* Iframe container */}
-              <div className="flex-1 min-h-0 relative">
-                <iframe
-                  ref={presIframeRef}
-                  srcDoc={injectPresentationNav(currentHtml)}
-                  className="w-full h-full border-0"
-                  sandbox="allow-scripts allow-same-origin"
-                  title="Apresentacao"
-                />
+              <div className="flex-1 min-h-0 relative flex items-center justify-center p-6">
+                {renderFrameShell(
+                  frameKind,
+                  <div
+                    className="w-full max-w-[calc(100vw-440px)] max-h-full"
+                    style={{ aspectRatio: previewAspect }}
+                  >
+                    <iframe
+                      ref={presIframeRef}
+                      srcDoc={injectPresentationNav(normalizedPreviewHtml)}
+                      className="w-full h-full border-0"
+                      sandbox="allow-scripts allow-same-origin"
+                      title="Apresentacao"
+                      onLoad={() => setIsLoading(false)}
+                    />
+                  </div>,
+                )}
               </div>
 
               {/* Slide navigation bar */}
@@ -912,130 +637,33 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
               )}
             </div>
           ) : (
-            /* ── SINGLE DESIGN MODE: Fabric.js canvas + sidebar ── */
+            /* ── SINGLE DESIGN MODE: exact HTML preview + export sidebar ── */
             <>
-              <div ref={containerRef} className="flex-1 min-w-0 checkerboard-bg overflow-hidden relative flex items-center justify-center">
+              <div className="flex-1 min-w-0 bg-[#0a0a0e] overflow-hidden relative flex items-center justify-center">
                 {isLoading && (
                   <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[#0c0c0f]/80 backdrop-blur-sm">
-                    <Loader2 size={28} className="animate-spin text-orange-400 mb-3" />
-                    <p className="text-xs text-neutral-400">Processando design...</p>
-                  </div>
-                )}
-                <canvas ref={canvasElRef} className="shadow-2xl shadow-black/60 rounded" />
-              </div>
-
-              {/* ── Sidebar ──────────────────────────────────────── */}
-              <div className="w-[280px] shrink-0 border-l border-[#1e1e22] bg-[#0e0e12] flex flex-col overflow-y-auto">
-                {selectedState ? (
-                  <div className="p-4 space-y-4 border-b border-[#1a1a1e]">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Type size={13} className="text-orange-400" />
-                        <span className="text-xs font-medium text-neutral-300">Texto selecionado</span>
-                      </div>
-                      <button
-                        onClick={() => { fabricRef.current?.discardActiveObject(); fabricRef.current?.requestRenderAll(); setSelectedState(null); }}
-                        className="p-1 rounded hover:bg-white/5 transition-colors"
-                      >
-                        <X size={12} className="text-neutral-500" />
-                      </button>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] text-neutral-500 font-medium">Conteudo</label>
-                      <textarea
-                        value={selectedState.text}
-                        onChange={(e) => handleTextChange(e.target.value)}
-                        className="w-full h-20 rounded-lg bg-[#0a0a0e] border border-[#2a2a34] px-3 py-2 text-[13px] text-neutral-200 outline-none resize-none focus:border-orange-500/40 transition-colors leading-relaxed"
-                        placeholder="Texto..."
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <label className="text-[11px] text-neutral-500 font-medium">Tamanho</label>
-                        <div className="flex items-center gap-1">
-                          <input
-                            type="number" min={8} max={200}
-                            value={selectedState.fontSize}
-                            onChange={(e) => handleFontSizeChange(Number(e.target.value) || 16)}
-                            className="w-14 bg-[#0a0a0e] border border-[#2a2a34] rounded px-1.5 py-0.5 text-[11px] text-neutral-300 text-center outline-none"
-                          />
-                          <span className="text-[10px] text-neutral-600">px</span>
-                        </div>
-                      </div>
-                      <input
-                        type="range" min="8" max="200"
-                        value={selectedState.fontSize}
-                        onChange={(e) => handleFontSizeChange(Number(e.target.value))}
-                        className="w-full accent-orange-500"
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] text-neutral-500 font-medium">Alinhamento</label>
-                      <div className="flex gap-1">
-                        {([
-                          { value: 'left', icon: <AlignLeft size={14} />, tip: 'Esquerda' },
-                          { value: 'center', icon: <AlignCenter size={14} />, tip: 'Centro' },
-                          { value: 'right', icon: <AlignRight size={14} />, tip: 'Direita' },
-                        ] as const).map(({ value, icon, tip }) => (
-                          <button
-                            key={value}
-                            onClick={() => handleAlignChange(value)}
-                            title={tip}
-                            className={`flex-1 flex items-center justify-center py-2 rounded-lg transition-all ${
-                              selectedState.textAlign === value || (value === 'left' && selectedState.textAlign === 'start')
-                                ? 'bg-orange-500/15 text-orange-300 border border-orange-500/30'
-                                : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.04] border border-transparent'
-                            }`}
-                          >
-                            {icon}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between">
-                      <label className="text-[11px] text-neutral-500 font-medium">Cor do texto</label>
-                      <ColorSwatch value={selectedState.color} onChange={handleColorChange} />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] text-neutral-500 font-medium">Fonte</label>
-                      <select
-                        value={getActiveTextbox()?.fontFamily || ''}
-                        onChange={(e) => handleFontFamilyChange(e.target.value)}
-                        className="w-full rounded-lg bg-[#0a0a0e] border border-[#2a2a34] px-3 py-2 text-xs text-neutral-300 outline-none"
-                      >
-                        {FONT_OPTIONS.map((f) => <option key={f} value={f}>{f}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-4 border-b border-[#1a1a1e]">
-                    <div className="flex flex-col items-center justify-center py-8 text-center">
-                      <div className="w-10 h-10 rounded-xl bg-orange-500/10 flex items-center justify-center mb-3">
-                        <Type size={18} className="text-orange-400/60" />
-                      </div>
-                      <p className="text-xs text-neutral-400 font-medium">Clique em qualquer texto</p>
-                      <p className="text-[11px] text-neutral-600 mt-1 leading-relaxed">
-                        para editar, arrastar, redimensionar<br />ou alterar estilo
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                <div className="p-4 space-y-2.5">
-                  <span className="text-[10px] text-neutral-600 uppercase tracking-wide font-semibold">Como usar</span>
-                  <div className="space-y-1.5 text-[11px] text-neutral-600 leading-relaxed">
-                    <p>Clique num texto para selecionar</p>
-                    <p>Duplo clique para editar inline</p>
-                    <p>Arraste para mover</p>
-                    <p>Puxe os cantos para redimensionar</p>
-                  </div>
+                  <Loader2 size={28} className="animate-spin text-orange-400 mb-3" />
+                  <p className="text-xs text-neutral-400">Renderizando...</p>
                 </div>
+              )}
+                {renderFrameShell(
+                  frameKind,
+                  <div
+                    className="w-full max-w-[calc(100vw-440px)] max-h-full"
+                    style={{ aspectRatio: previewAspect }}
+                  >
+                    <iframe
+                      ref={singleIframeRef}
+                      srcDoc={normalizedPreviewHtml}
+                      className="w-full h-full border-0"
+                      sandbox="allow-scripts allow-same-origin"
+                      title="Design"
+                      onLoad={() => setIsLoading(false)}
+                    />
+                  </div>,
+                )}
               </div>
+
             </>
           )}
         </div>
@@ -1045,17 +673,17 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
           <div className="flex items-center gap-3">
             {isPresentationMode ? (
               <>
-                <span className="text-[11px] text-neutral-500">Apresentacao</span>
-                <span className="text-[11px] text-neutral-700">|</span>
-                <span className="text-[11px] text-neutral-600">Use as setas do teclado para navegar</span>
+                <span className="text-[11px] text-neutral-500">{previewPresetSpec.shortLabel}</span>
               </>
             ) : (
               <>
-                <span className="text-[11px] text-neutral-500">{CANVAS_SIZE} x {CANVAS_SIZE}px</span>
+                <span className="text-[11px] text-neutral-500">{previewPresetSpec.shortLabel}</span>
                 <span className="text-[11px] text-neutral-700">|</span>
-                <span className="text-[11px] text-neutral-600">O que voce ve e exatamente o que sera baixado</span>
+                <span className="text-[11px] text-neutral-600">{previewPresetSpec.width} x {previewPresetSpec.height}px</span>
               </>
             )}
+            <span className="text-[11px] text-neutral-700">|</span>
+            <span className="text-[11px] text-neutral-600">{selectedFmt.toUpperCase()} · {describeResolution(selectedFmt, resolution)}</span>
           </div>
 
           {loadingFmt && (

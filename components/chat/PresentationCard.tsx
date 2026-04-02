@@ -1,5 +1,6 @@
 import React, { useRef } from 'react';
 import { Eye, Loader2, Monitor, Layers } from 'lucide-react';
+import { CANVAS_PRESETS, inferCanvasPreset, normalizeDesignHtml } from '../../lib/designContract';
 
 interface PresentationCardProps {
   html: string;
@@ -24,90 +25,9 @@ function countSlides(html: string): number {
   return slideElements ? slideElements.length : 0;
 }
 
-/** For single designs: force 1:1 square thumbnail */
-function normalizeSquareThumbnail(src: string) {
-  const html = /<!doctype html>/i.test(src) || /<html[\s>]/i.test(src)
-    ? src
-    : `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Design</title></head><body>${src}</body></html>`;
-
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(html, 'text/html');
-
-  if (!doc.head.querySelector('meta[charset]')) {
-    const meta = doc.createElement('meta');
-    meta.setAttribute('charset', 'UTF-8');
-    doc.head.prepend(meta);
-  }
-
-  let style = doc.getElementById('arcco-design-thumb-style');
-  if (!style) {
-    style = doc.createElement('style');
-    style.id = 'arcco-design-thumb-style';
-    doc.head.appendChild(style);
-  }
-
-  style.textContent = `
-    html, body { margin: 0; padding: 0; min-height: 100%; background: transparent; }
-    body {
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0;
-      box-sizing: border-box;
-    }
-    body > * { box-sizing: border-box; }
-    #arcco-design-stage {
-      width: min(100%, 1080px);
-      height: 1080px;
-      overflow: hidden;
-      background: transparent;
-      position: relative;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    #arcco-design-content {
-      width: 100%;
-      height: 100%;
-      padding: 0;
-      box-sizing: border-box;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-    }
-    #arcco-design-content > * { max-width: 100%; max-height: 100%; box-sizing: border-box; margin: 0 auto; }
-  `;
-
-  let stage = doc.getElementById('arcco-design-stage');
-  if (!stage) {
-    stage = doc.createElement('div');
-    stage.id = 'arcco-design-stage';
-    while (doc.body.firstChild) stage.appendChild(doc.body.firstChild);
-    doc.body.appendChild(stage);
-  }
-
-  let content = doc.getElementById('arcco-design-content');
-  if (!content) {
-    content = doc.createElement('div');
-    content.id = 'arcco-design-content';
-    while (stage.firstChild) content.appendChild(stage.firstChild);
-    stage.appendChild(content);
-  }
-
-  Array.from(content.children).forEach((child) => {
-    if (child instanceof HTMLElement) {
-      child.style.maxWidth = '100%';
-      child.style.maxHeight = '100%';
-    }
-  });
-
-  return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
-}
-
 /** For presentations: show only the first slide at 16:9, hide nav controls */
 function normalizePresentationThumbnail(html: string): string {
+  const base = normalizeDesignHtml(html);
   const overrideCSS = `<style id="arcco-pres-thumb">
     /* Hide all slides, then show only the first */
     .slide, .slide-container { display: none !important; }
@@ -125,7 +45,7 @@ function normalizePresentationThumbnail(html: string): string {
   </style>`;
 
   // Remove any JS that could interfere with slide visibility
-  const noJS = html.replace(/<script(?!.*src=["']https?:\/\/cdn)[\s\S]*?<\/script>/gi, '');
+  const noJS = base.replace(/<script(?!.*src=["']https?:\/\/cdn)[\s\S]*?<\/script>/gi, '');
 
   if (noJS.includes('</head>')) {
     return noJS.replace('</head>', overrideCSS + '</head>');
@@ -138,9 +58,11 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
   const title = extractTitle(html);
   const isPresentation = isMultiSlidePresentation(html);
   const slideCount = isPresentation ? countSlides(html) : 0;
+  const preset = inferCanvasPreset(html);
+  const presetSpec = CANVAS_PRESETS[preset];
   const thumbnailHtml = isPresentation
     ? normalizePresentationThumbnail(html)
-    : normalizeSquareThumbnail(html);
+    : normalizeDesignHtml(html, preset);
 
   if (isStreaming) {
     return (
@@ -162,7 +84,13 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
   }
 
   // Presentation: 16:9 card. Single design: square card.
-  const aspectClass = isPresentation ? 'aspect-video' : 'aspect-square';
+  const aspectClass = isPresentation
+    ? 'aspect-video'
+    : presetSpec.width === presetSpec.height
+      ? 'aspect-square'
+      : presetSpec.width > presetSpec.height
+        ? 'aspect-video'
+        : 'aspect-[4/5]';
 
   return (
     <div className="my-3 w-full max-w-sm group">
@@ -195,7 +123,7 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
       <div className="mt-2 min-w-0">
         <p className="text-xs text-neutral-200 truncate">{title}</p>
         <p className="text-[10px] text-neutral-500">
-          {isPresentation ? `Apresentação com ${slideCount} slides` : 'Clique para abrir e editar'}
+          {isPresentation ? `Apresentação com ${slideCount} slides` : presetSpec.label}
         </p>
       </div>
     </div>
