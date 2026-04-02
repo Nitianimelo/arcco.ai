@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: linear-gradient(180deg, #4a0e4e 0%, #121212 50%); color: #fff; padding: 2.4cqw 2cqw; }
+    .header { display: flex; gap: 1.2cqw; align-items: center; margin-bottom: 2cqw; }
+    .cover { width: 8cqw; height: 8cqw; overflow: hidden; box-shadow: 0 .5cqw 1.5cqw rgba(0,0,0,.5); }
+    .cover img { width: 100%; height: 100%; object-fit: cover; }
+    .title { margin: 0; font-size: 1.45cqw; }
+    .track { display: flex; justify-content: space-between; align-items: center; padding: 1cqw 0; border-bottom: 1px solid rgba(255,255,255,.1); }
+    .track:last-child { border-bottom: 0; }
+    .t { font-weight: 700; font-size: 1.05cqw; margin: 0; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div id="arcco-design-content">
+      <div class="header">
+        <div class="cover"><img src="{{ hero_image_url }}" alt="{{ slots.playlist_title }}" /></div>
+        <div>
+          <h1 class="cq-title title" data-role="headline">{{ slots.playlist_title }}</h1>
+          <p class="cq-body" data-role="subheadline">{{ slots.subheadline }}</p>
+        </div>
+      </div>
+      <div class="track"><p class="t">{{ slots.track_1 }}</p></div>
+      <div class="track"><p class="t">{{ slots.track_2 }}</p></div>
+      <div class="track"><p class="t">{{ slots.track_3 }}</p></div>
+    </div>
+  </div>
+</body>
+</html>

@@ -387,6 +387,30 @@ def build_slot_defaults(topic: str, context_data: str, template: dict[str, Any] 
             defaults[slot] = eyebrow
         elif slot == "product_code":
             defaults[slot] = "ARCCO_001"
+        elif slot == "metric_3":
+            defaults[slot] = "15%"
+        elif slot == "big_label":
+            defaults[slot] = eyebrow
+        elif slot == "phase_1":
+            defaults[slot] = chunks[0]
+        elif slot == "phase_2":
+            defaults[slot] = chunks[1]
+        elif slot == "phase_3":
+            defaults[slot] = chunks[2]
+        elif slot == "value_1":
+            defaults[slot] = "60%"
+        elif slot == "value_2":
+            defaults[slot] = "25%"
+        elif slot == "value_3":
+            defaults[slot] = "15%"
+        elif slot == "window_title":
+            defaults[slot] = headline[:48]
+        elif slot == "window_body":
+            defaults[slot] = support[:120]
+        elif slot == "prompt":
+            defaults[slot] = headline[:96]
+        elif slot == "result":
+            defaults[slot] = support[:120]
         elif slot == "playlist_title":
             defaults[slot] = headline[:48]
         elif slot == "track_1":

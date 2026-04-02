@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #fde047; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 2.4cqw; text-align: center; }
+    .blob { position: absolute; width: 30cqw; height: 30cqw; background: #f43f5e; border-radius: 40% 60% 70% 30% / 40% 50% 60% 50%; z-index: 1; }
+    .title { position: relative; z-index: 2; margin: 0; color: #fff; font-size: 3.2cqw; font-family: Georgia, serif; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div class="blob"></div>
+    <div id="arcco-design-content">
+      <h1 class="cq-title title" data-role="headline">{{ slots.headline }}</h1>
+    </div>
+  </div>
+</body>
+</html>

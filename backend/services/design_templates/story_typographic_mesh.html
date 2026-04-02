@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background:
+      radial-gradient(circle at 0% 0%, #ff4b1f, transparent 60%),
+      radial-gradient(circle at 100% 100%, #1fddff, transparent 60%);
+      background-color: #ff9068;
+      color: #fff;
+    }
+    .shell { height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: 2cqw; }
+    .title { margin: 0; font-family: "Space Grotesk", sans-serif; font-size: 7cqw; font-weight: 900; line-height: .82; text-transform: uppercase; mix-blend-mode: overlay; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div id="arcco-design-content" class="shell">
+      <h1 class="cq-title title" data-role="headline">{{ slots.headline }}</h1>
+    </div>
+  </div>
+</body>
+</html>

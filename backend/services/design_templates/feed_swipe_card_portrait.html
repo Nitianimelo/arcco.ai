@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #fce7f3; display: flex; align-items: center; justify-content: center; padding: 2cqw; }
+    .card { width: 90%; height: 80%; background: #fff; border-radius: 2cqw; box-shadow: 0 1.5cqw 3.5cqw rgba(0,0,0,.1); display: flex; flex-direction: column; align-items: center; padding: 2.4cqw 2cqw; text-align: center; }
+    .icon { width: 12cqw; height: 12cqw; background: #dbeafe; border-radius: 999px; margin-bottom: 2cqw; display: flex; align-items: center; justify-content: center; font-size: 4cqw; }
+    .title { margin: 0 0 .4em; font-size: 2.2cqw; }
+    .body { color: #666; }
+    .actions { display: flex; gap: 2cqw; margin-top: auto; }
+    .btn { width: 5cqw; height: 5cqw; border-radius: 999px; display: flex; align-items: center; justify-content: center; box-shadow: 0 .5cqw 1.4cqw rgba(0,0,0,.1); }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div id="arcco-design-content" class="card">
+      <div class="icon">💡</div>
+      <h1 class="cq-title title" data-role="headline">{{ slots.headline }}</h1>
+      <p class="cq-body body" data-role="subheadline">{{ slots.subheadline }}</p>
+      <div class="actions">
+        <div class="btn" style="color:#f43f5e;border:2px solid #fce7f3;">✗</div>
+        <div class="btn" style="color:#10b981;border:2px solid #d1fae5;">♥</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

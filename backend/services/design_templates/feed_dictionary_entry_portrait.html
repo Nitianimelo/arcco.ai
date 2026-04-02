@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #fff; color: #111; padding: 3cqw 2.4cqw; }
+    .title { margin: 0 0 .25em; font-family: Georgia, serif; font-size: 3.1cqw; }
+    .phon { font-family: "Space Mono", monospace; color: #666; margin-bottom: 1.8cqw; font-size: 1cqw; }
+    .rule { border: 0; border-top: 1px solid #ddd; margin: 0 0 1.8cqw; }
+    .body { margin: 0; font-size: 1.4cqw; line-height: 1.45; color: #333; }
+    .type { color: #3b82f6; font-weight: 700; font-style: italic; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-post-portrait">
+    <div id="arcco-design-content">
+      <h1 class="cq-title title" data-role="headline">{{ slots.headline }}</h1>
+      <div class="phon">/{{ slots.eyebrow }}/</div>
+      <hr class="rule" />
+      <p class="cq-body body" data-role="subheadline"><span class="type">[substantivo]</span> {{ slots.subheadline }}</p>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #050505; color: #fff; }
+    .shell { height: 100%; padding: 3.2cqw; display: flex; align-items: center; justify-content: center; }
+    .box { width: 100%; border: .22cqw solid #00ffcc; border-radius: 1.2cqw; padding: 3cqw; box-shadow: 0 0 2.2cqw rgba(0,255,204,.3), inset 0 0 2cqw rgba(0,255,204,.12); }
+    .title { margin: .2em 0; font-family: "Space Grotesk", sans-serif; font-size: 3.6cqw; line-height: .95; color: #00ffcc; text-transform: uppercase; }
+    .body { margin: 0; font-family: monospace; color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div id="arcco-design-content" class="shell">
+      <div class="box">
+        <span class="cq-kicker">{{ slots.badge }}</span>
+        <h1 class="cq-title title" data-role="headline">{{ slots.headline }}</h1>
+        <p class="cq-body body" data-role="subheadline">{{ slots.support_body }}</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

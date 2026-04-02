@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #008080; display: flex; align-items: center; justify-content: center; }
+    .win { width: 88%; background: #c0c0c0; border: 2px solid; border-color: #fff #000 #000 #fff; padding: .3cqw; }
+    .head { background: #000080; color: #fff; padding: .5cqw .7cqw; display: flex; justify-content: space-between; font-family: "Pixelify Sans", monospace; }
+    .body { padding: 2cqw; text-align: center; color: #000; font-family: "Pixelify Sans", monospace; }
+    .btn { display: inline-block; margin-top: 1.2cqw; padding: .4em .8em; border: 2px solid; border-color: #fff #000 #000 #fff; background: #c0c0c0; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div id="arcco-design-content" class="win">
+      <div class="head"><span>{{ slots.window_title }}</span><span>X</span></div>
+      <div class="body">
+        <h1 class="cq-title" data-role="headline">{{ slots.headline }}</h1>
+        <p class="cq-body" data-role="subheadline">{{ slots.window_body }}</p>
+        <div class="btn">{{ slots.cta }}</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

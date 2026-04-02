@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <style>
+    body { margin: 0; background: #111; }
+    .container-base { background: #fafaf9; color: #333; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .venn { position: relative; width: 22cqw; height: 15cqw; }
+    .c { width: 13cqw; height: 13cqw; border-radius: 999px; position: absolute; display: flex; align-items: center; justify-content: center; color: #fff; font-size: .95cqw; font-weight: 700; mix-blend-mode: multiply; text-align: center; padding: 1cqw; box-sizing: border-box; }
+    .l { left: 0; background: #34d399; }
+    .r { right: 0; background: #60a5fa; }
+    .title { margin-top: 3cqw; font-family: "Space Grotesk", sans-serif; font-size: 2.2cqw; }
+  </style>
+</head>
+<body>
+  <div class="container-base format-ig-story">
+    <div class="venn">
+      <div class="c l">{{ slots.card_1 }}</div>
+      <div class="c r">{{ slots.card_2 }}</div>
+    </div>
+    <div id="arcco-design-content">
+      <h1 class="cq-title title" data-role="headline">{{ slots.headline }}</h1>
+    </div>
+  </div>
+</body>
+</html>
