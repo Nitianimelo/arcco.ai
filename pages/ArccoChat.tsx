@@ -258,12 +258,14 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const thoughtsStartTimeRef = useRef<number>(0);
   const [generatedFiles, setGeneratedFiles] = useState<Array<{ filename: string; url: string; type: 'pdf' | 'excel' | 'other' }>>([]);
   const [textDocArtifact, setTextDocArtifact] = useState<{ title: string; content: string } | null>(null);
+  const [designArtifact, setDesignArtifact] = useState<string[] | null>(null);
   const [clarificationQuestions, setClarificationQuestions] = useState<BrowserClarificationPayload | null>(null);
   const [chatThinkingMessage, setChatThinkingMessage] = useState('');
   const [chatThinkingVisible, setChatThinkingVisible] = useState(false);
   const [chatThinkingDeep, setChatThinkingDeep] = useState(false);
   const chatThinkingStartRef = useRef<number>(0);
   const chatThinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastNarrativeThinkingRef = useRef('');
   const [modalPreview, setModalPreview] = useState<{ type: 'text_doc' | 'pdf' | 'excel' | 'other'; title: string; content?: string; url?: string } | null>(null);
   const [designPreview, setDesignPreview] = useState<{ designs: string[]; initialIndex: number } | null>(null);
   const [showAddMenu, setShowAddMenu] = useState(false);
@@ -299,6 +301,66 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  const pushNarrativeThinking = (message: string) => {
+    const text = message.trim();
+    if (!text || text === lastNarrativeThinkingRef.current) return;
+    lastNarrativeThinkingRef.current = text;
+    setChatThinkingMessage(text);
+    chatThinkingStartRef.current = Date.now();
+    if (chatThinkingTimerRef.current) clearTimeout(chatThinkingTimerRef.current);
+    setChatThinkingVisible(true);
+  };
+
+  const clearNarrativeThinking = () => {
+    lastNarrativeThinkingRef.current = '';
+    setChatThinkingMessage('');
+    setChatThinkingVisible(false);
+    setChatThinkingDeep(false);
+    if (chatThinkingTimerRef.current) {
+      clearTimeout(chatThinkingTimerRef.current);
+      chatThinkingTimerRef.current = null;
+    }
+  };
+
+  const normalizeThoughtForChat = (raw: string): string | null => {
+    const text = raw.trim().replace(/\s+/g, ' ');
+    if (!text) return null;
+    if (text.length <= 140) return text;
+
+    const short = text
+      .replace(/^(vou|estou|agora vou|primeiro vou)\s+/i, (match) => match.charAt(0).toUpperCase() + match.slice(1))
+      .slice(0, 157)
+      .trim();
+    return `${short}...`;
+  };
+
+  const narrativeThinkingFromBrowserAction = (data: { status?: string; url?: string; title?: string }) => {
+    const host = (() => {
+      try {
+        return data.url ? new URL(data.url).hostname.replace(/^www\./, '') : '';
+      } catch {
+        return data.url || '';
+      }
+    })();
+
+    switch (data.status) {
+      case 'navigating':
+        return host ? `Vou abrir ${host} e entender como a página está estruturada.` : 'Vou abrir o site e verificar a estrutura da página.';
+      case 'reading':
+        return data.title
+          ? `Estou analisando a página "${data.title}" para extrair o que importa.`
+          : 'Estou lendo a página e separando o que é relevante.';
+      case 'acting':
+        return 'Estou tentando interagir com a página para avançar na tarefa.';
+      case 'awaiting_user':
+        return 'Encontrei um bloqueio visual e preciso da sua ajuda para continuar.';
+      case 'error':
+        return 'A navegação falhou e estou tentando contornar isso.';
+      default:
+        return null;
+    }
+  };
 
   const openEditModal = () => {
     if (!project) return;
@@ -934,16 +996,14 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     setGeneratedFiles([]);
     setBrowserAction(null);
     setTextDocArtifact(null);
+    setDesignArtifact(null);
     setClarificationQuestions(null);
     setSpyPagesResult(null);
+    clearNarrativeThinking();
     if (!isAgentMode) {
       setIsTerminalOpen(false);
       setTerminalContent('');
-      setChatThinkingMessage('');
-      setChatThinkingDeep(false);
-      if (chatThinkingTimerRef.current) clearTimeout(chatThinkingTimerRef.current);
       chatThinkingStartRef.current = 0;
-      setChatThinkingVisible(false);
     }
     setIsThoughtsExpanded(true);
     setElapsedSeconds(0);
@@ -1030,6 +1090,16 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             return;
           }
 
+          if (type === 'design_artifact') {
+            try {
+              const payload = JSON.parse(content);
+              if (Array.isArray(payload?.designs) && payload.designs.length > 0) {
+                setDesignArtifact(payload.designs);
+              }
+            } catch { /* ignore parse errors */ }
+            return;
+          }
+
           if (type === 'clarification') {
             try {
               const questions = JSON.parse(content);
@@ -1051,6 +1121,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   actionLabel: payload.action_label,
                   resumeToken: payload.resume_token,
                 });
+                pushNarrativeThinking(payload.message || 'Encontrei um bloqueio visual e preciso da sua ajuda para continuar.');
               }
             } catch { /* ignore parse errors */ }
             return;
@@ -1058,7 +1129,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
           // Escalada para modelo especialista — muda animação de thinking sutilmente
           if (type === 'thinking_upgrade') {
-            setChatThinkingMessage('Elaborando a resposta...');
+            pushNarrativeThinking('Elaborando a resposta...');
             setChatThinkingDeep(true);
             return;
           }
@@ -1067,10 +1138,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
           if (type === 'pre_action') {
             const text = content.trim();
             if (text) {
-              setChatThinkingMessage(text);
-              chatThinkingStartRef.current = Date.now();
-              if (chatThinkingTimerRef.current) clearTimeout(chatThinkingTimerRef.current);
-              setChatThinkingVisible(true);
+              pushNarrativeThinking(text);
             }
             return;
           }
@@ -1085,6 +1153,10 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 );
                 return [...updated, { label: thought, status: 'running', isThought: true }];
               });
+              const narrativeThought = normalizeThoughtForChat(thought);
+              if (narrativeThought) {
+                pushNarrativeThinking(narrativeThought);
+              }
             }
             return;
           }
@@ -1094,6 +1166,10 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             try {
               const data = JSON.parse(content);
               setBrowserAction(data);
+              const narrativeThought = narrativeThinkingFromBrowserAction(data);
+              if (narrativeThought) {
+                pushNarrativeThinking(narrativeThought);
+              }
             } catch { /* ignore parse errors */ }
             return;
           }
@@ -1147,6 +1223,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
           if (type === 'chunk') {
             if (!hasStartedTalking) {
               hasStartedTalking = true;
+              clearNarrativeThinking();
               // Marca o último step como concluído e recolhe o painel com micro-delay
               setAgentThoughts(prev =>
                 prev.map(s => s.status === 'running' ? { ...s, status: 'done' as const } : s)
@@ -1214,9 +1291,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
       setIsLoading(false);
       abortControllerRef.current = null;
       // Garante limpeza do thinking panel em qualquer caso (erro, abort, fim normal)
-      if (chatThinkingTimerRef.current) clearTimeout(chatThinkingTimerRef.current);
-      setChatThinkingVisible(false);
-      setChatThinkingDeep(false);
+      clearNarrativeThinking();
     }
   };
 
@@ -1291,6 +1366,21 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
         return <DesignGallery designs={designs} isStreaming={isLoading} onOpenPreview={openDesignByIndex} />;
       }
       return <PresentationCard html={designs[0] || trimmedContent} isStreaming={isLoading} onOpenPreview={openSingleDesign} />;
+    }
+
+    const fencedDesignMatch = trimmedContent.match(/^```(?:html)?\s*([\s\S]*?)\s*```$/i);
+    if (fencedDesignMatch) {
+      const html = fencedDesignMatch[1].trim();
+      if (html.startsWith('<!DOCTYPE') || html.toLowerCase().startsWith('<html')) {
+        const DESIGN_SEPARATOR = '<!-- ARCCO_DESIGN_SEPARATOR -->';
+        const designs = html.split(DESIGN_SEPARATOR).map(d => d.trim()).filter(Boolean);
+        const openSingleDesign = () => setDesignPreview({ designs, initialIndex: 0 });
+        const openDesignByIndex = (index: number) => setDesignPreview({ designs, initialIndex: index });
+        if (designs.length > 1) {
+          return <DesignGallery designs={designs} isStreaming={isLoading} onOpenPreview={openDesignByIndex} />;
+        }
+        return <PresentationCard html={designs[0] || html} isStreaming={isLoading} onOpenPreview={openSingleDesign} />;
+      }
     }
 
     // Matches closed OR unclosed code blocks (until end of string) for streaming safety
@@ -1705,6 +1795,25 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     );
   };
 
+  const renderNarrativeThinkingBubble = () => {
+    if (!chatThinkingVisible || !chatThinkingMessage) return null;
+
+    return (
+      <div className="flex items-start gap-3 animate-in fade-in duration-300">
+        <div className="flex-shrink-0 pt-0.5">
+          <img
+            src={arccoEmblemUrl}
+            alt="Arcco"
+            className={`w-8 h-8 md:w-[50px] md:h-[50px] object-contain opacity-75 ${chatThinkingDeep ? 'animate-pulse' : 'animate-pulse-soft'}`}
+          />
+        </div>
+        <div className="max-w-[95%] sm:max-w-[85%] md:max-w-[80%] rounded-2xl px-5 py-4 bg-transparent text-neutral-300">
+          <span className="text-[15px] leading-7 text-neutral-400">{chatThinkingMessage}</span>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-row h-full w-full overflow-hidden" style={{ backgroundColor: 'var(--bg-base)' }}>
       <div className="flex flex-col h-full bg-transparent text-white relative w-full">
@@ -1941,6 +2050,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                       return (
                         <React.Fragment key={msg.id}>
                           {renderAgentActivityPanel()}
+                          {renderNarrativeThinkingBubble()}
                         </React.Fragment>
                       );
                     }
@@ -2048,6 +2158,24 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                       content={textDocArtifact.content}
                       onOpenPreview={(title, content) => setModalPreview({ type: 'text_doc', title, content })}
                     />
+                  </div>
+                )}
+
+                {designArtifact && designArtifact.length > 0 && !isLoading && (
+                  <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%]">
+                    {designArtifact.length > 1 ? (
+                      <DesignGallery
+                        designs={designArtifact}
+                        isStreaming={false}
+                        onOpenPreview={(index) => setDesignPreview({ designs: designArtifact, initialIndex: index })}
+                      />
+                    ) : (
+                      <PresentationCard
+                        html={designArtifact[0]}
+                        isStreaming={false}
+                        onOpenPreview={() => setDesignPreview({ designs: designArtifact, initialIndex: 0 })}
+                      />
+                    )}
                   </div>
                 )}
 

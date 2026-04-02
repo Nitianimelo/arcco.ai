@@ -402,6 +402,20 @@ def _looks_like_design_html(content: str) -> bool:
     return trimmed.startswith("<!DOCTYPE") or trimmed.lower().startswith("<html")
 
 
+def _extract_design_html(content: str) -> str | None:
+    trimmed = (content or "").strip()
+    if not trimmed:
+        return None
+    if _looks_like_design_html(trimmed):
+        return trimmed
+    fenced_match = re.match(r"```(?:html)?\s*([\s\S]*?)\s*```$", trimmed, re.IGNORECASE)
+    if fenced_match:
+        inner = fenced_match.group(1).strip()
+        if _looks_like_design_html(inner):
+            return inner
+    return None
+
+
 _VISUAL_SKILL_BLOCK_RE = re.compile(
     r"\[Passo \d+ - (?P<route>slide_generator|static_design_generator)\]: (?P<content>.*?)(?=\n\[Passo \d+ - |\Z)",
     re.DOTALL,
@@ -420,10 +434,11 @@ def _extract_visual_context_for_design(accumulated_context: str) -> str:
 
 
 async def _emit_design_artifact(content: str) -> AsyncGenerator[str, None]:
-    if not _looks_like_design_html(content):
+    html = _extract_design_html(content)
+    if not html:
         return
 
-    designs = [part.strip() for part in content.split("<!-- ARCCO_DESIGN_SEPARATOR -->") if part.strip()]
+    designs = [part.strip() for part in html.split("<!-- ARCCO_DESIGN_SEPARATOR -->") if part.strip()]
     if not designs:
         return
 
@@ -1744,6 +1759,35 @@ async def orchestrate_and_stream(
                                         doc_content = doc_match.group(2).strip()
                                         yield sse("text_doc", json.dumps({"title": doc_title, "content": doc_content}))
                                         final_result = _DOC_TAG_RE.sub(doc_content, final_result)
+                                elif route == "design_generator":
+                                    design_html = _extract_design_html(final_result)
+                                    if design_html:
+                                        yield sse("design_artifact", json.dumps({
+                                            "designs": [
+                                                part.strip() for part in design_html.split("<!-- ARCCO_DESIGN_SEPARATOR -->") if part.strip()
+                                            ]
+                                        }))
+                                        if execution_logger:
+                                            await execution_logger.finish_agent(
+                                                tool_agent_id,
+                                                status="completed",
+                                                output_payload={"preview": design_html[:2000], "artifact_only": True},
+                                            )
+                                        remaining_steps = [s.step for s in plan_output.steps if s.step > step.step]
+                                        if execution_logger:
+                                            await execution_logger.log_event(
+                                                execution_id,
+                                                event_type="pipeline_terminated",
+                                                message=f"Pipeline encerrado no step {step.step}/{len(plan_output.steps)} ({route}, terminal artifact).",
+                                                raw_payload={
+                                                    "terminal_step": step.step,
+                                                    "terminal_route": route,
+                                                    "skipped_steps": remaining_steps,
+                                                    "accumulated_context_chars": len(accumulated_context),
+                                                    "artifact_only": True,
+                                                },
+                                            )
+                                        return
 
                                 chunk_size = 40
                                 for i in range(0, len(final_result), chunk_size):
@@ -2604,24 +2648,27 @@ async def orchestrate_and_stream(
                         logger.warning(f"[ORCHESTRATOR] Especialista '{route}' retornou vazio")
 
                     if route == "design_generator":
-                        if _looks_like_design_html(specialist_result):
+                        design_html = _extract_design_html(specialist_result)
+                        if design_html:
                             if execution_logger:
                                 await execution_logger.log_event(
                                     execution_id,
                                     execution_agent_id=tool_agent_id,
                                     event_type="terminal_result",
                                     message="Resultado visual convertido em terminal por design_generator",
-                                    raw_payload={"preview": specialist_result[:2000], "forced_terminal": True},
+                                    raw_payload={"preview": design_html[:2000], "forced_terminal": True, "artifact_only": True},
                                 )
                                 await execution_logger.finish_agent(
                                     tool_agent_id,
                                     status="completed",
-                                    output_payload={"preview": specialist_result[:2000], "forced_terminal": True},
+                                    output_payload={"preview": design_html[:2000], "forced_terminal": True, "artifact_only": True},
                                 )
 
-                            chunk_size = 40
-                            for i in range(0, len(specialist_result), chunk_size):
-                                yield sse("chunk", specialist_result[i:i + chunk_size])
+                            yield sse("design_artifact", json.dumps({
+                                "designs": [
+                                    part.strip() for part in design_html.split("<!-- ARCCO_DESIGN_SEPARATOR -->") if part.strip()
+                                ]
+                            }))
                             return
 
                     # ANTI-LEAK: Para rotas de arquivo, enviar APENAS o link pro Supervisor
