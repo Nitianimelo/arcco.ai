@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Lock, Mail, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { userService } from '../lib/supabase';
-import DotGridBackground from '../components/ui/DotGridBackground';
+import { DottedSurface } from '../components/ui/dotted-surface';
 
 interface LoginPageProps {
   onLogin: (userName: string, userEmail: string) => void;
@@ -69,10 +69,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToRegister })
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden" style={{ backgroundColor: 'var(--bg-base)' }}>
-      <DotGridBackground />
+      <DottedSurface />
+      <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(circle_at_top,rgba(99,102,241,0.14),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(139,92,246,0.10),transparent_32%)]" />
 
       {/* Login Card */}
-      <div className="relative w-full max-w-md">
+      <div className="relative z-10 w-full max-w-md">
         {/* Logo/Brand */}
         <div className="text-center mb-8 animate-fade-in">
           <div className="inline-flex items-center justify-center">
@@ -85,7 +86,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToRegister })
         </div>
 
         {/* Login Form */}
-        <div className="bg-[#0F0F0F] border border-[#262626] rounded-2xl p-8 shadow-2xl backdrop-blur-xl animate-fade-in">
+        <div className="bg-[#0F0F0F]/90 border border-[#262626] rounded-2xl p-8 shadow-2xl shadow-black/40 backdrop-blur-xl animate-fade-in">
           <div className="mb-6">
             <h2 className="text-2xl font-bold text-white mb-1">Entrar</h2>
             <p className="text-neutral-400 text-sm">

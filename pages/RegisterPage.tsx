@@ -12,7 +12,7 @@ import {
   EyeOff
 } from 'lucide-react';
 import { userService } from '../lib/supabase';
-import DotGridBackground from '../components/ui/DotGridBackground';
+import { DottedSurface } from '../components/ui/dotted-surface';
 
 interface RegisterPageProps {
   onRegister: (userName: string, userEmail: string) => void;
@@ -305,11 +305,12 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegister, onBackTo
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden" style={{ backgroundColor: 'var(--bg-base)' }}>
-      <DotGridBackground />
+      <DottedSurface />
+      <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(circle_at_top,rgba(99,102,241,0.14),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(139,92,246,0.10),transparent_32%)]" />
 
       {/* Grid */}
       <div
-        className="absolute inset-0 opacity-[0.015]"
+        className="absolute inset-0 z-0 opacity-[0.015]"
         style={{
           backgroundImage: `
             linear-gradient(to right, #fff 1px, transparent 1px),
@@ -320,18 +321,18 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegister, onBackTo
       />
 
       {/* Card */}
-      <div className="relative w-full max-w-md">
+      <div className="relative z-10 w-full max-w-[28rem]">
         {/* Logo */}
-        <div className="text-center mb-8">
+        <div className="text-center mb-7">
           <img
             src="https://qscezcbpwvnkqoevulbw.supabase.co/storage/v1/object/public/Chipro%20calculadora/arcco%20(1).png"
             alt="Arcco"
-            className="h-[100px] w-auto object-contain mx-auto drop-shadow-[0_0_40px_rgba(99,102,241,0.3)]"
+            className="h-[92px] w-auto object-contain mx-auto drop-shadow-[0_0_40px_rgba(99,102,241,0.3)]"
           />
         </div>
 
         {/* Card */}
-        <div className="bg-[#0F0F0F] border border-[#262626] rounded-2xl p-8 shadow-2xl backdrop-blur-xl">
+        <div className="bg-[#0F0F0F]/90 border border-[#262626] rounded-2xl p-7 shadow-2xl shadow-black/40 backdrop-blur-xl">
           {/* Back Button */}
           {step === 'form' && (
             <button
