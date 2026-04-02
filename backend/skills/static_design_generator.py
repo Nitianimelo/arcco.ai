@@ -24,6 +24,7 @@ from backend.core.llm import call_openrouter
 from backend.agents import registry
 from backend.services.design_template_registry import (
     build_slot_defaults,
+    build_guided_design_contract,
     choose_design_route,
     infer_template_family,
 )
@@ -96,6 +97,10 @@ class StaticDesignSpec(BaseModel):
     image_query: Optional[str] = Field(default=None, description="Query de imagem sugerida para preencher o template.")
     image_url: Optional[str] = Field(default=None, description="URL pronta de imagem para o template, se disponível.")
     slot_updates: dict[str, str] = Field(default_factory=dict, description="Mapa semântico de slots para preenchimento do template.")
+    style_overrides: dict[str, str] = Field(default_factory=dict, description="Overrides de estilo permitidos sobre o template base.")
+    allowed_edits: List[str] = Field(default_factory=list, description="Áreas que podem ser alteradas no modo guided.")
+    optional_blocks: List[str] = Field(default_factory=list, description="Blocos opcionais que podem ser ligados ou omitidos.")
+    locked_regions: List[str] = Field(default_factory=list, description="Regiões estruturais que não devem ser quebradas.")
 
 
 def _default_image_query(topic: str, context_data: str, template: dict | None) -> str:
@@ -127,6 +132,7 @@ def _build_fallback_spec(topic: str, format_hint: str, context_data: str) -> Sta
         if template and template.get("requires_image")
         else None
     )
+    guided_contract = build_guided_design_contract(topic, context_data, template, render_mode)
     return StaticDesignSpec(
         title=title[:90],
         format=((template or {}).get("format") or (format_hint or "1080x1080")),
@@ -153,6 +159,10 @@ def _build_fallback_spec(topic: str, format_hint: str, context_data: str) -> Sta
         image_query=(image_query if image_url else None),
         image_url=image_url,
         slot_updates=build_slot_defaults(topic, context_data, template),
+        style_overrides=guided_contract["style_overrides"],
+        allowed_edits=guided_contract["allowed_edits"],
+        optional_blocks=guided_contract["optional_blocks"],
+        locked_regions=guided_contract["locked_regions"],
     )
 
 
@@ -168,6 +178,7 @@ REGRAS:
 - Não escreva HTML. Seu trabalho é devolver o briefing visual estruturado em JSON.
 - Sempre prefira um template determinístico quando houver catálogo disponível para a família correta: story, feed, a4 ou slide.
 - Devolva template_family, template_id, template_label, canvas_preset e slot_updates semânticos.
+- Quando render_mode for guided, devolva também style_overrides, allowed_edits, optional_blocks e locked_regions.
 - Quando a composição pedir fotografia, devolva image_query e image_url do Unsplash.
 - Se houver template determinístico indicado, respeite sua lógica visual em vez de inventar um layout totalmente novo.
 
@@ -210,6 +221,7 @@ async def execute(args: dict) -> str:
             f"- render_mode recomendado: {render_mode}\n"
             f"- template_score: {selection.get('score', -1)}\n"
             f"- slot_updates base: {json.dumps(build_slot_defaults(topic, context_data, template), ensure_ascii=False)}\n"
+            f"- guided_contract base: {json.dumps(build_guided_design_contract(topic, context_data, template, render_mode), ensure_ascii=False)}\n"
             f"- use fotografia do Unsplash quando fizer sentido com a query: {image_query}\n"
             "- se usar imagem, devolva também image_url otimizada para o formato do template.\n"
         )
@@ -271,6 +283,15 @@ async def execute(args: dict) -> str:
                 spec.format = str(template.get("format", format_hint or "1080x1080"))
             if not spec.slot_updates:
                 spec.slot_updates = build_slot_defaults(topic, context_data, template)
+            guided_contract = build_guided_design_contract(topic, context_data, template, render_mode)
+            if not spec.style_overrides:
+                spec.style_overrides = guided_contract["style_overrides"]
+            if not spec.allowed_edits:
+                spec.allowed_edits = guided_contract["allowed_edits"]
+            if not spec.optional_blocks:
+                spec.optional_blocks = guided_contract["optional_blocks"]
+            if not spec.locked_regions:
+                spec.locked_regions = guided_contract["locked_regions"]
         else:
             spec.template_family = None
             spec.template_id = None

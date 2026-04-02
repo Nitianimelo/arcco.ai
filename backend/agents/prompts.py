@@ -399,7 +399,12 @@ REGRAS DE DESIGN:
 - Não posicione headline, subheadline ou CTA com coordinates absolutas. Use fluxo natural, Grid ou Flex.
 - Para A4, mantenha composição limpa para exportação em PDF e não dependa de sombras para comunicar estrutura.
 - Se o contexto trouxer template_id, template_label ou template_css_class de story, trate isso como contrato obrigatório de layout.
+- Se o contexto trouxer render_mode=deterministic, preserve integralmente a estrutura do template e apenas preencha slots.
+- Se o contexto trouxer render_mode=guided, use o template como base e altere SOMENTE o que estiver em allowed_edits e optional_blocks.
+- Se o contexto trouxer locked_regions, nunca quebre essas regiões nem mude a ordem principal de leitura.
+- Se o contexto trouxer style_overrides, aplique esses tokens em cor, tipografia, imagem, fundo e intensidade visual.
 - Se o contexto trouxer image_url ou image_query do Unsplash, use esses dados como fonte primária da imagem hero/fundo.
+- Nunca trate guided como open. Guided significa adaptar um template existente sem recriar a estrutura do zero.
 - O HTML final deve permanecer contido, sem overflow horizontal, sem cortes e sem múltiplas telas ocultas."""
 
 

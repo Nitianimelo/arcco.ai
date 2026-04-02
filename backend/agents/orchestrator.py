@@ -2691,6 +2691,18 @@ async def orchestrate_and_stream(
                         step_message = "Construindo design editável e preparando preview..."
                         message_context = _extract_template_payload_from_messages(recent_context) or _extract_template_payload_from_any_messages(current_messages)
                         local_rendered_design = _render_local_design_if_possible(message_context)
+                        guided_context = ""
+                        if message_context:
+                            try:
+                                from backend.services.design_template_renderer import parse_template_payload
+                                parsed_payload = parse_template_payload(message_context) or {}
+                                if parsed_payload:
+                                    guided_context = (
+                                        "\nCONTRATO VISUAL ESTRUTURADO:\n"
+                                        f"{json.dumps(parsed_payload, ensure_ascii=False)}\n"
+                                    )
+                            except Exception:
+                                logger.exception("[ORCHESTRATOR] Falha ao anexar contrato visual ao design_generator.")
                         content = (
                             f"Título sugerido: {func_args.get('title_hint', '')}\n"
                             "Instruções: Gere por padrão uma peça quadrada 1:1, alinhada, centralizada, "
@@ -2699,6 +2711,7 @@ async def orchestrate_and_stream(
                             f"{func_args.get('instructions', '')}\n"
                             f"Contexto: {func_args.get('content_brief', '')}\n"
                             f"Direção visual: {func_args.get('design_direction', '')}"
+                            f"{guided_context}"
                         )
                     else:
                         step_message = "Processando..."

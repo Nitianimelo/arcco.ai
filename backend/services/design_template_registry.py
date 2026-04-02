@@ -282,6 +282,91 @@ def _topic_words(topic: str, fallback: str = "Arcco") -> list[str]:
     return words or [fallback]
 
 
+def build_guided_design_contract(
+    topic: str,
+    context_data: str,
+    template: dict[str, Any] | None,
+    render_mode: str = "guided",
+) -> dict[str, Any]:
+    family = str((template or {}).get("family") or "").lower()
+    category = str((template or {}).get("category") or "").lower()
+    haystack = f"{topic} {context_data}".lower()
+
+    palette = "neutral premium"
+    if any(token in haystack for token in ("natal", "christmas")):
+        palette = "vermelho profundo, verde musgo, dourado suave"
+    elif any(token in haystack for token in ("pascoa", "páscoa", "chocolate")):
+        palette = "marrom cacau, creme, dourado quente"
+    elif any(token in haystack for token in ("tech", "ia", "saas", "software", "dev")):
+        palette = "grafite, azul elétrico, ciano frio"
+    elif any(token in haystack for token in ("luxo", "premium", "elegante")):
+        palette = "preto, champagne, dourado metálico"
+    elif any(token in haystack for token in ("dia dos pais", "pai")):
+        palette = "azul marinho, cinza chumbo, âmbar discreto"
+    elif any(token in haystack for token in ("infantil", "creche", "kids")):
+        palette = "amarelo, azul céu, coral vibrante"
+
+    typography = "sans editorial forte"
+    if category in {"editorial", "quote", "luxury"}:
+        typography = "serif editorial com apoio limpo"
+    elif category in {"technology", "diagram", "data"}:
+        typography = "sans geométrica com apoio mono"
+    elif category in {"retro", "humor", "graphic"}:
+        typography = "display expressiva com apoio simples"
+
+    image_treatment = "clean crop"
+    if category in {"technology", "data"}:
+        image_treatment = "high contrast tech"
+    elif category in {"editorial", "luxury"}:
+        image_treatment = "soft editorial"
+    elif category in {"collage", "retro"}:
+        image_treatment = "grain or analog texture"
+
+    optional_blocks = ["badge", "support caption", "micro cta"]
+    if family == "slide":
+        optional_blocks = ["section divider", "metric chip", "footer note"]
+    elif category in {"product", "social-proof"}:
+        optional_blocks = ["price chip", "trust badge", "secondary cta"]
+    elif category in {"educational", "diagram", "data"}:
+        optional_blocks = ["legend", "step labels", "supporting note"]
+
+    allowed_edits = [
+        "copy",
+        "color tokens",
+        "image treatment",
+        "cta text",
+        "badge text",
+        "ornamental intensity",
+    ]
+    if render_mode == "guided":
+        allowed_edits.extend(["background treatment", "font mood", "optional blocks"])
+
+    locked_regions = [
+        "canvas ratio",
+        "base grid",
+        "safe margins",
+        "headline zone",
+        "cta zone",
+    ]
+    if family == "slide":
+        locked_regions.extend(["slide count", "slide wrapper structure"])
+    if family in {"story", "feed"}:
+        locked_regions.append("primary reading order")
+
+    return {
+        "style_overrides": {
+            "palette_hint": palette,
+            "font_mode": typography,
+            "image_treatment": image_treatment,
+            "background_treatment": "refine, do not replace structure",
+            "mood": category or "balanced",
+        },
+        "allowed_edits": allowed_edits,
+        "optional_blocks": optional_blocks,
+        "locked_regions": locked_regions,
+    }
+
+
 def build_slot_defaults(topic: str, context_data: str, template: dict[str, Any] | None) -> dict[str, str]:
     slots = list((template or {}).get("slots", []))
     headline = _infer_headline(topic, context_data)

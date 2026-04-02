@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from backend.core.llm import call_openrouter
 from backend.agents import registry
-from backend.services.design_template_registry import build_slot_defaults, choose_design_route
+from backend.services.design_template_registry import build_guided_design_contract, build_slot_defaults, choose_design_route
 
 logger = logging.getLogger(__name__)
 _SLIDE_LLM_TIMEOUT_SECONDS = 28.0
@@ -94,6 +94,10 @@ class SlideDeck(BaseModel):
     render_mode: Optional[Literal["deterministic", "guided", "open"]] = Field(default=None, description="Estratégia de renderização do deck.")
     template_score: Optional[int] = Field(default=None, description="Score de aderência do template selecionado.")
     slot_updates: dict[str, str] = Field(default_factory=dict, description="Slots semânticos globais do deck/template.")
+    style_overrides: dict[str, str] = Field(default_factory=dict, description="Overrides de estilo permitidos sobre o template base.")
+    allowed_edits: List[str] = Field(default_factory=list, description="Áreas que podem ser alteradas no modo guided.")
+    optional_blocks: List[str] = Field(default_factory=list, description="Blocos opcionais que podem ser ligados ou omitidos.")
+    locked_regions: List[str] = Field(default_factory=list, description="Regiões estruturais que não devem ser quebradas.")
     slides: List[Slide] = Field(
         description="Lista de slides com a narrativa completa. Para carrossel de Instagram, normalmente 3-8 slides. Para apresentações, 6-14 slides."
     )
@@ -135,6 +139,7 @@ def _build_fallback_deck(topic: str, context_data: str) -> SlideDeck:
         "Feche com consequência, próximo passo ou chamada para ação.",
     ]
     short_topic = _clean_line(topic)[:72] or "Apresentação"
+    guided_contract = build_guided_design_contract(topic, context_data, template, str(selection["mode"]))
     return SlideDeck(
         title=short_topic,
         template_family="slide" if template else None,
@@ -144,6 +149,10 @@ def _build_fallback_deck(topic: str, context_data: str) -> SlideDeck:
         render_mode=str(selection["mode"]),
         template_score=int(selection.get("score", -1) or 0),
         slot_updates=build_slot_defaults(topic, context_data, template),
+        style_overrides=guided_contract["style_overrides"],
+        allowed_edits=guided_contract["allowed_edits"],
+        optional_blocks=guided_contract["optional_blocks"],
+        locked_regions=guided_contract["locked_regions"],
         slides=[
             Slide(
                 layout="title_and_subtitle",
@@ -197,6 +206,7 @@ REGRAS DE COPY:
 - Speaker notes: roteiro completo, tom conversacional, inclui transição para próximo slide
 - Prefira template determinístico da família slide quando houver catálogo disponível.
 - Retorne template_family, template_id, template_label, canvas_preset e slot_updates globais do deck.
+- Quando render_mode for guided, retorne também style_overrides, allowed_edits, optional_blocks e locked_regions.
 
 Retorne ESTRITAMENTE o JSON válido. Sem markdown, sem explicações fora do JSON."""
 
@@ -238,6 +248,7 @@ async def execute(args: dict) -> str:
             f"- template_score: {selection.get('score', -1)}\n"
             f"- slots: {', '.join(template.get('slots', []))}\n"
             f"- slot_updates base: {json.dumps(build_slot_defaults(topic, context_data, template), ensure_ascii=False)}\n"
+            f"- guided_contract base: {json.dumps(build_guided_design_contract(topic, context_data, template, str(selection.get('mode'))), ensure_ascii=False)}\n"
         )
     else:
         user_content += (
@@ -290,6 +301,15 @@ async def execute(args: dict) -> str:
                 deck.canvas_preset = str(template.get("canvas_preset", ""))
             if not deck.slot_updates:
                 deck.slot_updates = build_slot_defaults(topic, context_data, template)
+            guided_contract = build_guided_design_contract(topic, context_data, template, str(selection["mode"]))
+            if not deck.style_overrides:
+                deck.style_overrides = guided_contract["style_overrides"]
+            if not deck.allowed_edits:
+                deck.allowed_edits = guided_contract["allowed_edits"]
+            if not deck.optional_blocks:
+                deck.optional_blocks = guided_contract["optional_blocks"]
+            if not deck.locked_regions:
+                deck.locked_regions = guided_contract["locked_regions"]
         else:
             deck.template_family = None
             deck.template_id = None
