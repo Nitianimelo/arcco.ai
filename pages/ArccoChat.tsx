@@ -17,7 +17,7 @@ import DesignGallery from '../components/chat/DesignGallery';
 import DocumentPreviewModal from '../components/chat/DocumentPreviewModal';
 import DesignPreviewModal from '../components/chat/DesignPreviewModal';
 import { ProjectEditModal } from '../components/chat/ProjectEditModal';
-import DotGridBackground from '../components/ui/DotGridBackground';
+import { GridPattern } from '../components/ui/grid-pattern';
 import { useToast } from '../components/Toast';
 // AgentTerminal removido — steps agora são inline
 import { ChatSession, Message } from '../lib/chatStorage';
@@ -1836,8 +1836,6 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   return (
     <div className="flex flex-row h-full w-full overflow-hidden" style={{ backgroundColor: 'var(--bg-base)' }}>
       <div className="flex flex-col h-full bg-transparent text-white relative w-full">
-        <DotGridBackground />
-
         {/* Header */}
         <div className="h-14 md:h-16 border-b border-[#222] flex items-center pl-14 md:pl-6 pr-3 md:pr-6 bg-[#0a0a0a]/80 backdrop-blur-md relative z-20 transition-opacity duration-500">
 
@@ -1997,9 +1995,27 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
           {messages.length === 0 ? (
             // GREETING STATE
-            <div className="h-full flex flex-col items-center justify-center p-4 -mt-16">
+            <div className="h-full flex flex-col items-center justify-center p-4 -mt-16 relative overflow-hidden">
+              <div className="pointer-events-none absolute inset-0 z-0">
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(99,102,241,0.14),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(139,92,246,0.08),transparent_30%)]" />
+                <GridPattern
+                  width={36}
+                  height={36}
+                  x={-1}
+                  y={-1}
+                  squares={[
+                    [5, 4],
+                    [6, 8],
+                    [10, 5],
+                    [13, 9],
+                    [9, 12],
+                    [15, 6],
+                  ]}
+                  className="[mask-image:radial-gradient(520px_circle_at_center,white,transparent)] fill-indigo-400/10 stroke-white/8"
+                />
+              </div>
 
-              <div className="flex flex-col items-center text-center mb-10">
+              <div className="relative z-10 flex flex-col items-center text-center mb-10">
 
                 {/* Greeting */}
                 {project ? (
@@ -2040,9 +2056,11 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 )}
               </div>
 
-              {renderInputArea('centered')}
+              <div className="relative z-10">
+                {renderInputArea('centered')}
+              </div>
 
-              <div className="flex flex-wrap gap-2 justify-center max-w-2xl mt-8 opacity-60 hover:opacity-100 transition-opacity">
+              <div className="relative z-10 flex flex-wrap gap-2 justify-center max-w-2xl mt-8 opacity-60 hover:opacity-100 transition-opacity">
                 {suggestionHints.map(hint => (
                   <button
                     key={hint}

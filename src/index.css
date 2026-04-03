@@ -2,41 +2,17 @@
 
 /* ── Themes ───────────────────────────────────────────────────────── */
 :root,
-[data-theme="dark"] {
-  --bg-base: #050505;
-  --bg-sidebar: #111113;
-  --bg-elevated: #161618;
-  --dot-color: rgba(255, 255, 255, 0.07);
-  --glow-primary: rgba(99, 102, 241, 0.18);
-  --glow-secondary: rgba(139, 92, 246, 0.09);
-}
-
-[data-theme="dim"] {
-  --bg-base: #0a0f1c;
-  --bg-sidebar: #0d1526;
-  --bg-elevated: #111e35;
-  --dot-color: rgba(160, 185, 255, 0.08);
-  --glow-primary: rgba(99, 102, 241, 0.15);
-  --glow-secondary: rgba(139, 92, 246, 0.08);
-}
-
+[data-theme="dark"],
+[data-theme="ghost"],
+[data-theme="dim"],
 [data-theme="midnight"] {
-  --bg-base: #000000;
-  --bg-sidebar: #080808;
-  --bg-elevated: #0d0d0d;
-  --dot-color: rgba(255, 255, 255, 0.09);
-  --glow-primary: rgba(99, 102, 241, 0.20);
-  --glow-secondary: rgba(139, 92, 246, 0.10);
-}
-
-/* Ghost — dark flat sem nenhuma decoração (grid ou glow) */
-[data-theme="ghost"] {
   --bg-base: #0c0c0c;
   --bg-sidebar: #111111;
   --bg-elevated: #161616;
   --dot-color: transparent;
-  --glow-primary: transparent;
-  --glow-secondary: transparent;
+  --glow-primary: rgba(99, 102, 241, 0.06);
+  --glow-secondary: rgba(139, 92, 246, 0.04);
+  color-scheme: dark;
 }
 
 /* Light — clean claro */

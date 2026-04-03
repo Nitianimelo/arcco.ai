@@ -13,10 +13,14 @@ import { preferencesApi } from '../lib/preferencesApi';
 
 // ── Theme Picker ──────────────────────────────────────────────────
 const themes = [
-  { id: 'dark',  label: 'Dark',  desc: 'Padrão',      bg: '#050505', line: 'rgba(255,255,255,0.07)' },
-  { id: 'ghost', label: 'Ghost', desc: 'Flat dark',   bg: '#0c0c0c', line: 'transparent' },
+  { id: 'dark',  label: 'Dark',  desc: 'Dark clean',  bg: '#0c0c0c', line: 'transparent' },
   { id: 'light', label: 'Light', desc: 'Clean claro', bg: '#ededef', line: 'transparent' },
 ];
+
+const normalizeTheme = (value?: string | null) => {
+  if (value === 'light') return 'light';
+  return 'dark';
+};
 
 const ThemePicker: React.FC<{ current: string; onChange: (id: string) => void }> = ({ current, onChange }) => {
   const apply = (id: string) => {
@@ -28,7 +32,7 @@ const ThemePicker: React.FC<{ current: string; onChange: (id: string) => void }>
   return (
     <div>
       <label className="block text-xs text-neutral-500 mb-2 font-medium uppercase tracking-wider">Tema da interface</label>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         {themes.map(t => (
           <button
             key={t.id}
@@ -93,7 +97,7 @@ const Toggle: React.FC<{ value: boolean; onChange: (v: boolean) => void }> = ({ 
 
 // ── Tab: Personalização ────────────────────────────────────────────
 const PersonalizacaoTab: React.FC<{ userName: string; userId: string; onDisplayNameChange?: (displayName: string | null) => void }> = ({ userName, userId, onDisplayNameChange }) => {
-  const [theme, setTheme] = useState(() => localStorage.getItem('arcco_theme') || 'dark');
+  const [theme, setTheme] = useState(() => normalizeTheme(localStorage.getItem('arcco_theme')));
   const [displayName, setDisplayName] = useState(userName);
   const [customInstructions, setCustomInstructions] = useState('');
   const [logoUrl, setLogoUrl] = useState('');
@@ -106,7 +110,7 @@ const PersonalizacaoTab: React.FC<{ userName: string; userId: string; onDisplayN
   useEffect(() => {
     if (!userId) { setLoading(false); return; }
     preferencesApi.get(userId).then(prefs => {
-      if (prefs.theme)               setTheme(prefs.theme);
+      if (prefs.theme)               setTheme(normalizeTheme(prefs.theme));
       if (prefs.display_name)        setDisplayName(prefs.display_name);
       if (prefs.custom_instructions) setCustomInstructions(prefs.custom_instructions);
       if (prefs.logo_url)            setLogoUrl(prefs.logo_url);

@@ -2,7 +2,9 @@ import React from 'react';
 import './src/index.css';
 
 // Apply saved theme before React renders (avoids flash)
-const savedTheme = localStorage.getItem('arcco_theme') || 'dark';
+const normalizeTheme = (value: string | null) => (value === 'light' ? 'light' : 'dark');
+const savedTheme = normalizeTheme(localStorage.getItem('arcco_theme'));
+localStorage.setItem('arcco_theme', savedTheme);
 document.documentElement.setAttribute('data-theme', savedTheme);
 
 import ReactDOM from 'react-dom/client';
