@@ -1477,7 +1477,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   };
 
   const renderInputArea = (variant: 'centered' | 'bottom') => (
-    <div className={`relative group w-full ${variant === 'centered' ? 'max-w-3xl px-3 md:px-0' : 'max-w-4xl mx-auto px-2 md:px-0'}`}>
+    <div className={`relative group ${variant === 'centered' ? 'mx-auto w-[min(92vw,1120px)] max-w-none px-2 md:px-6' : 'w-full max-w-4xl mx-auto px-2 md:px-0'}`}>
 
       {/* Spy Pages — card de entrada de URLs, aparece acima do input */}
       {spyPagesActive && !isLoading && (
@@ -2056,7 +2056,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 )}
               </div>
 
-              <div className="relative z-10">
+              <div className="relative z-10 w-full flex justify-center">
                 {renderInputArea('centered')}
               </div>
 
