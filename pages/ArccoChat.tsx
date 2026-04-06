@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Send, Loader2, Sparkles, Save, FileText, Download, ChevronDown, Paperclip, HardDrive, FileSpreadsheet, Eye, Square, Plus, Link, Folder, Pencil, Trash2, Upload, X, Check, AlertTriangle, Wrench, Globe, Monitor } from 'lucide-react';
 import SpyPagesInputCard from '../components/chat/SpyPagesInputCard';
 import SpyPagesResultCard, { SpyPagesSite } from '../components/chat/SpyPagesResultCard';
@@ -326,6 +326,15 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
       chatThinkingTimerRef.current = null;
     }
   };
+
+  const finalizeAgentExecutionUi = useCallback((collapseDelay = 300) => {
+    setIsLoading(false);
+    setAgentThoughts(prev =>
+      prev.map(s => (s.status === 'running' ? { ...s, status: 'done' as const } : s))
+    );
+    clearNarrativeThinking();
+    window.setTimeout(() => setIsThoughtsExpanded(false), collapseDelay);
+  }, [clearNarrativeThinking]);
 
   const normalizeThoughtForChat = (raw: string): string | null => {
     const text = raw.trim().replace(/\s+/g, ' ');
@@ -1089,6 +1098,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
               const doc = JSON.parse(content);
               if (doc.title && doc.content) {
                 setTextDocArtifact({ title: doc.title, content: doc.content });
+                finalizeAgentExecutionUi();
               }
             } catch { /* ignore parse errors */ }
             return;
@@ -1102,6 +1112,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 setMessages(prev => prev.map(msg =>
                   msg.id === assistantMsgId ? { ...msg, content: DESIGN_ARTIFACT_SENTINEL } : msg
                 ));
+                finalizeAgentExecutionUi();
               }
             } catch { /* ignore parse errors */ }
             return;
@@ -1117,6 +1128,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   questions,
                   originalPrompt: latestUserPrompt || clarificationBasePromptRef.current || undefined,
                 });
+                finalizeAgentExecutionUi(0);
               }
             } catch { /* ignore parse errors */ }
             return;
@@ -1137,6 +1149,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   originalPrompt: latestUserPrompt || clarificationBasePromptRef.current || undefined,
                 });
                 pushNarrativeThinking(payload.message || 'Encontrei um bloqueio visual e preciso da sua ajuda para continuar.');
+                finalizeAgentExecutionUi(0);
               }
             } catch { /* ignore parse errors */ }
             return;
@@ -1477,7 +1490,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   };
 
   const renderInputArea = (variant: 'centered' | 'bottom') => (
-    <div className={`relative group ${variant === 'centered' ? 'mx-auto w-[min(92vw,1120px)] max-w-none px-2 md:px-6' : 'w-full max-w-4xl mx-auto px-2 md:px-0'}`}>
+    <div className={`relative group ${variant === 'centered' ? 'mx-auto w-[min(88vw,980px)] max-w-none px-2 md:px-6' : 'w-full max-w-4xl mx-auto px-2 md:px-0'}`}>
 
       {/* Spy Pages — card de entrada de URLs, aparece acima do input */}
       {spyPagesActive && !isLoading && (
