@@ -36,9 +36,8 @@ class AgentConfig:
     supabase_key: str = ""
     supabase_storage_bucket: str = "chat-uploads"
 
-    # Browser Agent (Browserbase)
-    browserbase_api_key: str = ""
-    browserbase_project_id: str = ""
+    # Browser Agent (Steel)
+    steel_api_key: str = ""
     e2b_api_key: str = ""
 
     # Apify (SimilarWeb Scraper)
@@ -96,8 +95,10 @@ class AgentConfig:
             or os.getenv("VITE_SUPABASE_ANON_KEY", "")
         )
         self.supabase_storage_bucket = os.getenv("SUPABASE_STORAGE_BUCKET", self.supabase_storage_bucket)
-        self.browserbase_api_key = os.getenv("BROWSERBASE_API_KEY", "")
-        self.browserbase_project_id = os.getenv("BROWSERBASE_PROJECT_ID", "")
+        self.steel_api_key = (
+            os.getenv("STEEL_API_KEY", "")
+            or os.getenv("BROWSERBASE_API_KEY", "")
+        )
         self.e2b_api_key = os.getenv("E2B_API_KEY", self.e2b_api_key)
         self.apify_api_key = os.getenv("APIFY_API_KEY", self.apify_api_key)
         self.enable_caching = os.getenv("AGENT_CACHE", "true").lower() == "true"
@@ -127,13 +128,12 @@ class AgentConfig:
 
         needs_openrouter = not self.openrouter_api_key
         needs_anthropic = not self.api_key
-        needs_browserbase = not self.browserbase_api_key
-        needs_browserbase_project = not self.browserbase_project_id
+        needs_steel = not self.steel_api_key
         needs_e2b = not self.e2b_api_key
         needs_apify = not self.apify_api_key
 
         if not (needs_openrouter or needs_anthropic
-                or needs_browserbase or needs_browserbase_project
+                or needs_steel
                 or needs_e2b or needs_apify):
             logger.info("[CONFIG] All API keys loaded from environment variables.")
             return
@@ -160,7 +160,11 @@ class AgentConfig:
 
             if rows:
                 # Map provider -> api_key
-                key_map = {row["provider"]: row["api_key"] for row in rows if row.get("api_key")}
+                key_map = {
+                    str(row.get("provider") or "").strip().lower(): row["api_key"]
+                    for row in rows
+                    if row.get("api_key") and row.get("provider")
+                }
                 logger.info("[CONFIG] Loaded API providers from Supabase: %s", sorted(key_map.keys()))
 
                 if needs_openrouter and key_map.get("openrouter"):
@@ -171,13 +175,10 @@ class AgentConfig:
                     self.api_key = key_map["anthropic"]
                     logger.info("[CONFIG] Anthropic API key loaded from Supabase.")
 
-                if needs_browserbase and key_map.get("browserbase"):
-                    self.browserbase_api_key = key_map["browserbase"]
-                    logger.info("[CONFIG] Browserbase API key loaded from Supabase.")
-
-                if needs_browserbase_project and key_map.get("browserbase_project_id"):
-                    self.browserbase_project_id = key_map["browserbase_project_id"]
-                    logger.info("[CONFIG] Browserbase Project ID loaded from Supabase.")
+                steel_key = key_map.get("steel") or key_map.get("browserbase")
+                if needs_steel and steel_key:
+                    self.steel_api_key = steel_key
+                    logger.info("[CONFIG] Steel API key loaded from Supabase.")
 
                 e2b_key = key_map.get("e2b") or key_map.get("e2b_api_key")
                 if needs_e2b and e2b_key:
@@ -193,17 +194,13 @@ class AgentConfig:
             else:
                 logger.info("[CONFIG] API keys ready (env + Supabase fallback).")
 
-            # Verificação explícita do Browserbase
-            if not self.browserbase_api_key:
+            # Verificação explícita do Steel
+            if not self.steel_api_key:
                 logger.warning(
-                    "[CONFIG] BROWSERBASE_API_KEY não configurada. Browser Agent ficará indisponível."
+                    "[CONFIG] STEEL_API_KEY não configurada. Browser Agent ficará indisponível."
                 )
-            if not self.browserbase_project_id:
-                logger.warning(
-                    "[CONFIG] BROWSERBASE_PROJECT_ID não configurado. Browser Agent ficará indisponível."
-                )
-            if self.browserbase_api_key and self.browserbase_project_id:
-                logger.info("[CONFIG] Browserbase credentials loaded.")
+            else:
+                logger.info("[CONFIG] Steel credentials loaded.")
             if not self.e2b_api_key:
                 logger.warning(
                     "[CONFIG] E2B_API_KEY não configurada. Execução Python via E2B ficará indisponível."

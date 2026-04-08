@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Painel Administrativo â€” /admin
  *
  * ACESSO: URL direta /admin (bypass do auth normal, ver App.tsx â†’ isAdminRoute)
@@ -173,6 +173,90 @@ function fmtPrice(v: number) {
   return `$${v.toFixed(4)}`;
 }
 
+function buildExecutionExport(detail: any, mode: 'full' | 'ai' = 'full') {
+  const execution = detail?.execution || null;
+  const agents = detail?.agents || [];
+  const logs = detail?.logs || [];
+
+  const summary = {
+    agent_count: agents.length,
+    log_count: logs.length,
+    failed_agents: agents.filter((agent: any) => agent.status === 'failed').length,
+    error_events: logs.filter((log: any) => log.level === 'error').length,
+  };
+
+  if (mode === 'ai') {
+    return {
+      execution: {
+        id: execution?.id,
+        status: execution?.status,
+        request_text: execution?.request_text,
+        request_source: execution?.request_source,
+        supervisor_agent: execution?.supervisor_agent,
+        started_at: execution?.started_at,
+        finished_at: execution?.finished_at,
+        duration_ms: execution?.duration_ms,
+        final_error: execution?.final_error,
+        metadata: execution?.metadata || {},
+      },
+      summary,
+      agents: agents.map((agent: any) => ({
+        id: agent.id,
+        agent_key: agent.agent_key,
+        agent_name: agent.agent_name,
+        role: agent.role,
+        route: agent.route,
+        model: agent.model,
+        status: agent.status,
+        duration_ms: agent.duration_ms,
+        error_text: agent.error_text,
+        input_payload: agent.input_payload,
+        output_payload: agent.output_payload,
+        metadata: agent.metadata,
+      })),
+      logs: logs.map((log: any) => ({
+        id: log.id,
+        created_at: log.created_at,
+        level: log.level,
+        event_type: log.event_type,
+        execution_agent_id: log.execution_agent_id,
+        message: log.message,
+        tool_name: log.tool_name,
+        tool_args: log.tool_args,
+        tool_result: log.tool_result,
+        raw_payload: log.raw_payload,
+      })),
+    };
+  }
+
+  return {
+    exported_at: new Date().toISOString(),
+    summary,
+    detail,
+  };
+}
+
+async function copyTextWithFallback(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+  }
+}
+
+function extractCapabilityResult(payload: any) {
+  return payload?.capability_result || payload?.dispatch_result || null;
+}
+
 
 // â”€â”€ Componente: Dropdown de modelo pesquisÃ¡vel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 /**
@@ -310,6 +394,7 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, models, loadingModels, onS
   const runtimeKeys = agent.runtime_keys || [agent.id];
 
   const selectedModel = models.find(m => m.id === model);
+  const isCustomModel = Boolean(model) && !selectedModel;
 
   useEffect(() => {
     setName(agent.name);
@@ -455,6 +540,18 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, models, loadingModels, onS
               loadingModels={loadingModels}
               onChange={setModel}
             />
+            <div className="mt-2">
+              <label className="block text-[11px] text-neutral-600 mb-1">Ou informe manualmente o ID do modelo</label>
+              <input
+                value={model}
+                onChange={e => setModel(e.target.value)}
+                placeholder="ex: openai/gpt-4.1 ou anthropic/claude-sonnet-4"
+                className="w-full bg-[#1a1a1a] border border-neutral-800 text-white text-xs rounded-lg px-3 py-2 outline-none focus:border-indigo-500/50 transition-colors"
+              />
+              {isCustomModel && (
+                <p className="mt-1 text-[11px] text-amber-400">Modelo manual não encontrado na lista carregada, mas será salvo normalmente se o provider aceitar esse ID.</p>
+              )}
+            </div>
           </div>
 
           {/* System Prompt â€” textarea monoespaÃ§ada, redimensionÃ¡vel */}
@@ -1106,132 +1203,26 @@ export const AdminPage: React.FC = () => {
     await fetchData();
   };
 
-  const copyExecutionLogs = async (detail: any) => {
+  const copyExecutionLogs = async (detail: any, mode: 'full' | 'ai' = 'full') => {
     const execution = detail?.execution || null;
-    const agents = detail?.agents || [];
-    const logs = detail?.logs || [];
+    const exportPayload = buildExecutionExport(detail, mode);
+    const text = JSON.stringify(exportPayload, null, 2);
+    await copyTextWithFallback(text);
 
-    const condensed = {
-      execution: {
-        id: execution?.id,
-        status: execution?.status,
-        request_text: execution?.request_text,
-        request_source: execution?.request_source,
-        supervisor_agent: execution?.supervisor_agent,
-        started_at: execution?.started_at,
-        finished_at: execution?.finished_at,
-        duration_ms: execution?.duration_ms,
-        final_error: execution?.final_error,
-        metadata: execution?.metadata || {},
-      },
-      summary: {
-        agent_count: agents.length,
-        log_count: logs.length,
-        failed_agents: agents.filter((agent: any) => agent.status === 'failed').length,
-        error_events: logs.filter((log: any) => log.level === 'error').length,
-      },
-      agents: agents.map((agent: any) => ({
-        id: agent.id,
-        agent_key: agent.agent_key,
-        agent_name: agent.agent_name,
-        role: agent.role,
-        route: agent.route,
-        model: agent.model,
-        status: agent.status,
-        duration_ms: agent.duration_ms,
-        error_text: agent.error_text,
-        input_payload: agent.input_payload,
-        output_payload: agent.output_payload,
-        metadata: agent.metadata,
-      })),
-      logs: logs.map((log: any) => ({
-        id: log.id,
-        created_at: log.created_at,
-        level: log.level,
-        event_type: log.event_type,
-        execution_agent_id: log.execution_agent_id,
-        message: log.message,
-        tool_name: log.tool_name,
-        tool_args: log.tool_args,
-        tool_result: log.tool_result,
-        raw_payload: log.raw_payload,
-      })),
-    };
-
-    const text = JSON.stringify(condensed, null, 2);
-
-    // navigator.clipboard requer HTTPS (secure context) — fallback para HTTP via execCommand
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      const textarea = document.createElement('textarea');
-      textarea.value = text;
-      textarea.style.position = 'fixed';
-      textarea.style.top = '-9999px';
-      textarea.style.left = '-9999px';
-      document.body.appendChild(textarea);
-      textarea.focus();
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-    }
-
-    setCopiedExecutionId(execution?.id || 'copied');
-    window.setTimeout(() => setCopiedExecutionId((current) => (current === (execution?.id || 'copied') ? null : current)), 2000);
+    const key = `${execution?.id || 'copied'}:${mode}`;
+    setCopiedExecutionId(key);
+    window.setTimeout(() => setCopiedExecutionId((current) => (current === key ? null : current)), 2000);
   };
 
   /** Baixa os logs de execução como arquivo JSON */
-  const downloadExecutionLogs = (detail: any) => {
+  const downloadExecutionLogs = (detail: any, mode: 'full' | 'ai' = 'full') => {
     const execution = detail?.execution || null;
-    const agents = detail?.agents || [];
-    const logs = detail?.logs || [];
-
-    const condensed = {
-      execution: {
-        id: execution?.id,
-        status: execution?.status,
-        request_text: execution?.request_text,
-        started_at: execution?.started_at,
-        finished_at: execution?.finished_at,
-        duration_ms: execution?.duration_ms,
-        final_error: execution?.final_error,
-        metadata: execution?.metadata || {},
-      },
-      summary: {
-        agent_count: agents.length,
-        log_count: logs.length,
-        failed_agents: agents.filter((a: any) => a.status === 'failed').length,
-        error_events: logs.filter((l: any) => l.level === 'error').length,
-      },
-      agents: agents.map((agent: any) => ({
-        id: agent.id,
-        agent_key: agent.agent_key,
-        agent_name: agent.agent_name,
-        model: agent.model,
-        status: agent.status,
-        duration_ms: agent.duration_ms,
-        error_text: agent.error_text,
-        input_payload: agent.input_payload,
-        output_payload: agent.output_payload,
-      })),
-      logs: logs.map((log: any) => ({
-        id: log.id,
-        created_at: log.created_at,
-        level: log.level,
-        event_type: log.event_type,
-        message: log.message,
-        tool_name: log.tool_name,
-        tool_args: log.tool_args,
-        tool_result: log.tool_result,
-        raw_payload: log.raw_payload,
-      })),
-    };
-
-    const blob = new Blob([JSON.stringify(condensed, null, 2)], { type: 'application/json' });
+    const exportPayload = buildExecutionExport(detail, mode);
+    const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `arcco-log-${execution?.id?.slice(0, 8) || 'exec'}.json`;
+    a.download = `arcco-log-${mode}-${execution?.id?.slice(0, 8) || 'exec'}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1986,21 +1977,28 @@ export const AdminPage: React.FC = () => {
                     <div className="bg-[#141414] border border-neutral-900 rounded-xl p-4">
                       <div className="flex items-center justify-between gap-3 mb-2">
                         <div className="text-sm font-semibold text-white">Execução principal</div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap justify-end">
                           <button
-                            onClick={() => copyExecutionLogs(executionDetail)}
+                            onClick={() => copyExecutionLogs(executionDetail, 'full')}
                             className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 text-xs transition-colors border border-indigo-500/20"
                           >
                             <FileText size={12} />
-                            {copiedExecutionId === executionDetail.execution?.id ? 'Copiado!' : 'Copiar'}
+                            {copiedExecutionId === `${executionDetail.execution?.id}:full` ? 'Copiado!' : 'Copiar JSON completo'}
                           </button>
                           <button
-                            onClick={() => downloadExecutionLogs(executionDetail)}
+                            onClick={() => copyExecutionLogs(executionDetail, 'ai')}
+                            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-fuchsia-500/15 hover:bg-fuchsia-500/25 text-fuchsia-300 text-xs transition-colors border border-fuchsia-500/20"
+                          >
+                            <Brain size={12} />
+                            {copiedExecutionId === `${executionDetail.execution?.id}:ai` ? 'Copiado!' : 'Copiar pacote IA'}
+                          </button>
+                          <button
+                            onClick={() => downloadExecutionLogs(executionDetail, 'full')}
                             className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 text-xs transition-colors border border-emerald-500/20"
                             title="Baixar como .json (funciona sem HTTPS)"
                           >
                             <Download size={12} />
-                            {downloadedExecutionId === executionDetail.execution?.id ? 'Baixado!' : 'Baixar .json'}
+                            {downloadedExecutionId === executionDetail.execution?.id ? 'Baixado!' : 'Baixar JSON completo'}
                           </button>
                         </div>
                       </div>
@@ -2012,10 +2010,26 @@ export const AdminPage: React.FC = () => {
                         <div className="md:col-span-2"><span className="text-neutral-500">Pedido:</span> <span className="text-neutral-200">{executionDetail.execution?.request_text}</span></div>
                         <div><span className="text-neutral-500">Agentes:</span> <span className="text-neutral-200">{executionDetail.agents?.length || 0}</span></div>
                         <div><span className="text-neutral-500">Eventos:</span> <span className="text-neutral-200">{executionDetail.logs?.length || 0}</span></div>
+                        {executionDetail.execution?.metadata?.architecture_version && (
+                          <div><span className="text-neutral-500">Arquitetura:</span> <span className="text-neutral-200">{executionDetail.execution.metadata.architecture_version}</span></div>
+                        )}
+                        {executionDetail.execution?.metadata?.state && (
+                          <div><span className="text-neutral-500">Estado:</span> <span className="text-neutral-200">{executionDetail.execution.metadata.state}</span></div>
+                        )}
                         {executionDetail.execution?.final_error && (
                           <div className="md:col-span-2 text-red-400"><span className="text-neutral-500">Erro final:</span> {executionDetail.execution.final_error}</div>
                         )}
                       </div>
+                      {executionDetail.execution?.metadata && (
+                        <details className="mt-4">
+                          <summary className="text-xs text-indigo-300 cursor-pointer">Ver metadata consolidada da execução</summary>
+                          <pre className="mt-2 text-[10px] text-neutral-300 bg-[#0b0b0b] border border-neutral-900 rounded-lg p-3 overflow-auto">{JSON.stringify(executionDetail.execution.metadata, null, 2)}</pre>
+                        </details>
+                      )}
+                      <details className="mt-4">
+                        <summary className="text-xs text-fuchsia-300 cursor-pointer">Ver JSON completo da execução</summary>
+                        <pre className="mt-2 text-[10px] text-neutral-300 bg-[#0b0b0b] border border-neutral-900 rounded-lg p-3 overflow-auto">{JSON.stringify(buildExecutionExport(executionDetail, 'full'), null, 2)}</pre>
+                      </details>
                     </div>
 
                     <div className="bg-[#141414] border border-neutral-900 rounded-xl p-4">
@@ -2034,9 +2048,22 @@ export const AdminPage: React.FC = () => {
                               <div>Duração: {agent.duration_ms || 0} ms</div>
                             </div>
                             {agent.error_text && <div className="mt-2 text-xs text-red-400">{agent.error_text}</div>}
+                            {extractCapabilityResult(agent.output_payload) && (
+                              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                                <div><span className="text-neutral-500">Capability:</span> <span className="text-neutral-200">{extractCapabilityResult(agent.output_payload).capability_id || '—'}</span></div>
+                                <div><span className="text-neutral-500">Output:</span> <span className="text-neutral-200">{extractCapabilityResult(agent.output_payload).output_type || '—'}</span></div>
+                                <div><span className="text-neutral-500">Status:</span> <span className="text-neutral-200">{extractCapabilityResult(agent.output_payload).status || '—'}</span></div>
+                                <div><span className="text-neutral-500">Artifacts:</span> <span className="text-neutral-200">{extractCapabilityResult(agent.output_payload).artifacts?.length || 0}</span></div>
+                              </div>
+                            )}
                             <details className="mt-3">
                               <summary className="text-xs text-indigo-300 cursor-pointer">Ver payloads</summary>
-                              <pre className="mt-2 text-[10px] text-neutral-300 bg-[#0b0b0b] border border-neutral-900 rounded-lg p-3 overflow-auto">{JSON.stringify({ input: agent.input_payload, output: agent.output_payload }, null, 2)}</pre>
+                              <pre className="mt-2 text-[10px] text-neutral-300 bg-[#0b0b0b] border border-neutral-900 rounded-lg p-3 overflow-auto">{JSON.stringify({
+                                input: agent.input_payload,
+                                output: agent.output_payload,
+                                capability_result: extractCapabilityResult(agent.output_payload),
+                                metadata: agent.metadata,
+                              }, null, 2)}</pre>
                             </details>
                           </div>
                         ))}
@@ -2054,6 +2081,14 @@ export const AdminPage: React.FC = () => {
                             </div>
                             {log.message && <div className="text-xs text-neutral-300 mb-2">{log.message}</div>}
                             <div className="text-[10px] text-neutral-500">Agent: {log.execution_agent_id || '—'} • Level: {log.level}</div>
+                            {extractCapabilityResult(log.raw_payload) && (
+                              <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                                <div><span className="text-neutral-500">Capability:</span> <span className="text-neutral-200">{extractCapabilityResult(log.raw_payload).capability_id || '—'}</span></div>
+                                <div><span className="text-neutral-500">Output:</span> <span className="text-neutral-200">{extractCapabilityResult(log.raw_payload).output_type || '—'}</span></div>
+                                <div><span className="text-neutral-500">Status:</span> <span className="text-neutral-200">{extractCapabilityResult(log.raw_payload).status || '—'}</span></div>
+                                <div><span className="text-neutral-500">Artifacts:</span> <span className="text-neutral-200">{extractCapabilityResult(log.raw_payload).artifacts?.length || 0}</span></div>
+                              </div>
+                            )}
                             {(log.tool_name || log.tool_args || log.tool_result || log.raw_payload) && (
                               <details className="mt-2">
                                 <summary className="text-[10px] text-indigo-300 cursor-pointer">Ver detalhes do log</summary>
@@ -2061,6 +2096,7 @@ export const AdminPage: React.FC = () => {
                                   tool_name: log.tool_name,
                                   tool_args: log.tool_args,
                                   tool_result: log.tool_result,
+                                  capability_result: extractCapabilityResult(log.raw_payload),
                                   raw_payload: log.raw_payload,
                                 }, null, 2)}</pre>
                               </details>

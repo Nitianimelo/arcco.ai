@@ -201,6 +201,23 @@ function buildAdaptiveScaffold(content: ScaffoldContent, preset: CanvasPreset): 
   `.trim();
 }
 
+function wrapExistingBodyInStage(doc: Document, preset: CanvasPreset): void {
+  const stage = doc.createElement('div');
+  stage.id = 'arcco-design-stage';
+  stage.className = `container-base ${CANVAS_PRESETS[preset].formatClass}`;
+  stage.setAttribute('data-arcco-safe-block', 'true');
+  stage.setAttribute('data-arcco-preserve', 'true');
+
+  const content = doc.createElement('div');
+  content.id = 'arcco-design-content';
+  content.className = 'preserved-design-content';
+  content.innerHTML = doc.body.innerHTML;
+
+  stage.appendChild(content);
+  doc.body.innerHTML = '';
+  doc.body.appendChild(stage);
+}
+
 export function isMultiSlideDesign(html: string): boolean {
   const normalized = stripHtmlFences(html);
   const slideElements = normalized.match(/<(?:section|div)[^>]*class="[^"]*\bslide\b[^"]*"/gi);
@@ -518,6 +535,19 @@ function buildContractStyle(preset: CanvasPreset): string {
         overflow: hidden;
         transform-origin: center center;
       }
+      .preserved-design-content {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      .preserved-design-content > * {
+        max-width: 100%;
+      }
+      [data-arcco-preserve="true"] > .preserved-design-content > *:only-child {
+        width: 100%;
+        height: 100%;
+      }
       img, svg, canvas, video {
         max-width: 100%;
         max-height: 100%;
@@ -642,6 +672,36 @@ function buildContractScript(): string {
           }
         }
 
+        function getCanvasDimensions(root) {
+          var computed = window.getComputedStyle(root);
+          var cssWidth = parseFloat(computed.width || '0');
+          var cssHeight = parseFloat(computed.height || '0');
+          var attrWidth = parseFloat(root.getAttribute('data-arcco-canvas-width') || '0');
+          var attrHeight = parseFloat(root.getAttribute('data-arcco-canvas-height') || '0');
+          return {
+            width: attrWidth || cssWidth || root.offsetWidth || 1,
+            height: attrHeight || cssHeight || root.offsetHeight || 1,
+          };
+        }
+
+        function fitRootToViewport(root) {
+          var dims = getCanvasDimensions(root);
+          var viewportWidth = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+          var viewportHeight = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+          var pad = 12;
+          var availableWidth = Math.max(1, viewportWidth - pad * 2);
+          var availableHeight = Math.max(1, viewportHeight - pad * 2);
+          var scale = Math.min(availableWidth / dims.width, availableHeight / dims.height, 1);
+
+          root.style.position = 'absolute';
+          root.style.left = '50%';
+          root.style.top = '50%';
+          root.style.margin = '0';
+          root.style.transformOrigin = 'center center';
+          root.style.transform = 'translate(-50%, -50%) scale(' + scale.toFixed(4) + ')';
+          root.style.willChange = 'transform';
+        }
+
         function runPreflight() {
           const roots = Array.from(document.querySelectorAll('#arcco-design-stage, .slide, .slide-container'));
           const candidates = Array.from(document.querySelectorAll(
@@ -661,9 +721,11 @@ function buildContractScript(): string {
             localCandidates.forEach(function (node) { fitText(node, root.getBoundingClientRect()); });
             if (rootOverflows(root)) scaleRootContent(root);
             root.style.overflow = 'hidden';
+            fitRootToViewport(root);
           });
           document.documentElement.style.overflow = 'hidden';
           document.body.style.overflow = 'hidden';
+          document.body.style.position = 'relative';
         }
 
         if (document.readyState === 'complete') {
@@ -671,6 +733,7 @@ function buildContractScript(): string {
         } else {
           window.addEventListener('load', function () { setTimeout(runPreflight, 120); });
         }
+        window.addEventListener('resize', function () { setTimeout(runPreflight, 16); });
       })();
     </script>
   `;
@@ -698,8 +761,7 @@ export function normalizeDesignHtml(html: string, overridePreset?: CanvasPreset)
   doc.body.setAttribute('data-arcco-mode', isSlides ? 'slides' : 'single');
 
   if (!isSlides && !doc.querySelector('.container-base')) {
-    const scaffold = extractScaffoldContent(doc, preset);
-    doc.body.innerHTML = buildAdaptiveScaffold(scaffold, preset);
+    wrapExistingBodyInStage(doc, preset);
   } else if (!isSlides) {
     const stage = doc.querySelector<HTMLElement>('.container-base');
     if (stage && !stage.className.includes(CANVAS_PRESETS[preset].formatClass)) {

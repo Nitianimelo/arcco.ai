@@ -68,36 +68,36 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToRegister })
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden" style={{ backgroundColor: 'var(--bg-base)' }}>
+    <div className="min-h-screen flex items-center justify-center p-4 max-sm:p-3 relative overflow-hidden" style={{ backgroundColor: 'var(--bg-base)' }}>
       <DottedSurface />
       <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(circle_at_top,rgba(99,102,241,0.14),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(139,92,246,0.10),transparent_32%)]" />
 
       {/* Login Card */}
-      <div className="relative z-10 w-full max-w-md">
+      <div className="relative z-10 w-full max-w-md max-sm:max-w-[15.5rem]">
         {/* Logo/Brand */}
-        <div className="text-center mb-8 animate-fade-in">
+        <div className="text-center mb-8 max-sm:mb-5 animate-fade-in">
           <div className="inline-flex items-center justify-center">
             <img
               src="https://qscezcbpwvnkqoevulbw.supabase.co/storage/v1/object/public/Chipro%20calculadora/arcco%20(1).png"
               alt="Arcco"
-              className="h-[120px] w-auto object-contain drop-shadow-[0_0_40px_rgba(99,102,241,0.3)]"
+              className="h-[120px] max-sm:h-[82px] w-auto object-contain drop-shadow-[0_0_40px_rgba(99,102,241,0.3)]"
             />
           </div>
         </div>
 
         {/* Login Form */}
-        <div className="bg-[#0F0F0F]/90 border border-[#262626] rounded-2xl p-8 shadow-2xl shadow-black/40 backdrop-blur-xl animate-fade-in">
-          <div className="mb-6">
-            <h2 className="text-2xl font-bold text-white mb-1">Entrar</h2>
-            <p className="text-neutral-400 text-sm">
+        <div className="bg-[#0F0F0F]/90 border border-[#262626] rounded-2xl p-8 max-sm:p-6 shadow-2xl shadow-black/40 backdrop-blur-xl animate-fade-in">
+          <div className="mb-6 max-sm:mb-4">
+            <h2 className="text-2xl max-sm:text-xl font-bold text-white mb-1">Entrar</h2>
+            <p className="text-neutral-400 text-sm max-sm:text-xs">
               Acesse sua conta para continuar
             </p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form onSubmit={handleSubmit} className="space-y-5 max-sm:space-y-4">
             {/* Email */}
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-neutral-300 mb-2">
+              <label htmlFor="email" className="block text-sm max-sm:text-xs font-medium text-neutral-300 mb-2 max-sm:mb-1.5">
                 E-mail
               </label>
               <div className="relative">
@@ -109,7 +109,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToRegister })
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-[#141414] border border-[#262626] rounded-xl pl-10 pr-4 py-3 text-white placeholder-neutral-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+                  className="w-full bg-[#141414] border border-[#262626] rounded-xl pl-10 pr-4 py-3 max-sm:py-2.5 max-sm:text-sm text-white placeholder-neutral-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
                   placeholder="seu@email.com"
                   disabled={isLoading}
                   autoComplete="email"
@@ -119,7 +119,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToRegister })
 
             {/* Password */}
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-neutral-300 mb-2">
+              <label htmlFor="password" className="block text-sm max-sm:text-xs font-medium text-neutral-300 mb-2 max-sm:mb-1.5">
                 Senha
               </label>
               <div className="relative">
@@ -131,7 +131,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToRegister })
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full bg-[#141414] border border-[#262626] rounded-xl pl-10 pr-12 py-3 text-white placeholder-neutral-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
+                  className="w-full bg-[#141414] border border-[#262626] rounded-xl pl-10 pr-12 py-3 max-sm:py-2.5 max-sm:text-sm text-white placeholder-neutral-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all"
                   placeholder="Digite sua senha"
                   disabled={isLoading}
                   autoComplete="current-password"
@@ -144,10 +144,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToRegister })
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
-              <div className="flex justify-end mt-1.5">
+              <div className="flex justify-end mt-1.5 max-sm:mt-1">
                 <button
                   type="button"
-                  className="text-xs text-neutral-500 hover:text-indigo-400 transition-colors"
+                  className="text-xs max-sm:text-[11px] text-neutral-500 hover:text-indigo-400 transition-colors"
                 >
                   Esqueceu sua senha?
                 </button>
@@ -166,7 +166,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToRegister })
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-900 disabled:cursor-not-allowed text-white font-semibold py-3 px-4 rounded-xl transition-all transform hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-indigo-900/50 disabled:shadow-none flex items-center justify-center gap-2"
+              className="w-full bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-900 disabled:cursor-not-allowed text-white font-semibold py-3 max-sm:py-2.5 px-4 rounded-xl transition-all transform hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-indigo-900/50 disabled:shadow-none flex items-center justify-center gap-2 max-sm:text-sm"
             >
               {isLoading ? (
                 <>
@@ -180,8 +180,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToRegister })
           </form>
 
           {/* Register Link */}
-          <div className="mt-6 pt-6 border-t border-[#262626] text-center">
-            <p className="text-neutral-400 text-sm">
+          <div className="mt-6 max-sm:mt-5 pt-6 max-sm:pt-5 border-t border-[#262626] text-center">
+            <p className="text-neutral-400 text-sm max-sm:text-xs">
               Ainda não tem cadastro?{' '}
               <button
                 onClick={onGoToRegister}
@@ -194,8 +194,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToRegister })
         </div>
 
         {/* Footer Disclaimer */}
-        <div className="mt-8 text-center">
-          <p className="text-xs text-neutral-700 mt-2">
+        <div className="mt-8 max-sm:mt-5 text-center">
+          <p className="text-xs max-sm:text-[11px] text-neutral-700 mt-2">
             © {new Date().getFullYear()} Arcco Agents. Todos os direitos reservados.
           </p>
         </div>

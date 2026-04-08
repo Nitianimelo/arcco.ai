@@ -1,9 +1,9 @@
 """
-Serviço de navegação remota via Browserbase + Playwright (CDP).
+Serviço de navegação remota via Steel + Playwright (CDP).
 
-Arquitetura nova:
-- o Browserbase continua como músculo de execução;
-- o backend passa a operar em loop iterativo de percepção -> decisão -> ação;
+Arquitetura:
+- Steel fornece a sessão remota do navegador;
+- o backend opera em loop iterativo de percepção -> decisão -> ação;
 - pop-ups/cookies comuns são tratados antes de gastar tokens;
 - captchas e bloqueios geram handoff explícito para o usuário.
 """
@@ -17,15 +17,19 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
 
+import httpx
+
 
 logger = logging.getLogger(__name__)
 
 _MAX_CONTENT_CHARS = 15_000
 _BROWSER_MAX_STEPS = 10
-_BROWSER_LOOP_TIMEOUT_SECONDS = 90.0
+_BROWSER_LOOP_TIMEOUT_SECONDS = 150.0
 _BROWSER_RESUME_TTL_SECONDS = 15 * 60.0
 _BROWSER_VISIBLE_TEXT_CHARS = 3_500
 _BROWSER_MAX_INTERACTIVE_ITEMS = 28
+_BROWSER_NAVIGATION_TIMEOUT_MS = 45_000
+_BROWSER_ACTION_TIMEOUT_MS = 6_000
 
 _NOISE_TAGS = [
     "script", "style", "noscript", "nav", "footer",
@@ -137,7 +141,7 @@ BrowserProgressCallback = Callable[[dict[str, Any]], None]
 @dataclass
 class PausedBrowserSession:
     resume_token: str
-    browserbase_session_id: str
+    browser_session_id: str
     connect_url: str
     url: str
     goal: str
@@ -145,7 +149,7 @@ class PausedBrowserSession:
     include_tags: list[str] | None
     exclude_tags: list[str] | None
     debugger_url: str
-    debugger_fullscreen_url: str
+    session_viewer_url: str
     created_at: float
 
 
@@ -192,7 +196,7 @@ def get_paused_browser_session(resume_token: str | None) -> dict[str, Any] | Non
         return None
     return {
         "resume_token": session.resume_token,
-        "browserbase_session_id": session.browserbase_session_id,
+        "browser_session_id": session.browser_session_id,
         "connect_url": session.connect_url,
         "url": session.url,
         "goal": session.goal,
@@ -200,9 +204,81 @@ def get_paused_browser_session(resume_token: str | None) -> dict[str, Any] | Non
         "include_tags": session.include_tags,
         "exclude_tags": session.exclude_tags,
         "debugger_url": session.debugger_url,
-        "debugger_fullscreen_url": session.debugger_fullscreen_url,
+        "debugger_fullscreen_url": session.session_viewer_url,
+        "session_viewer_url": session.session_viewer_url,
         "created_at": session.created_at,
     }
+
+
+def _build_steel_connect_url(api_key: str, session_id: str, websocket_url: str | None = None) -> str:
+    raw = (websocket_url or "").strip()
+    if raw:
+        separator = "&" if "?" in raw else "?"
+        return raw if "apiKey=" in raw else f"{raw}{separator}apiKey={api_key}"
+    return f"wss://connect.steel.dev?apiKey={api_key}&sessionId={session_id}"
+
+
+def _build_steel_live_url(debug_url: str | None) -> str:
+    raw = (debug_url or "").strip()
+    if not raw:
+        return ""
+    separator = "&" if "?" in raw else "?"
+    suffix = "interactive=true&showControls=true"
+    return raw if "interactive=true" in raw else f"{raw}{separator}{suffix}"
+
+
+def _create_steel_session(steel_client: Any, *, dimensions: dict[str, int]):
+    try:
+        return steel_client.sessions.create(
+            dimensions=dimensions,
+            solve_captcha=True,
+            timeout=900.0,
+        )
+    except Exception as exc:
+        message = str(exc).lower()
+        if "captcha solving is not available" not in message:
+            raise
+        logger.warning("[BROWSER] Steel sem suporte a solve_captcha no plano atual. Recuando para sessão sem solver.")
+        return steel_client.sessions.create(
+            dimensions=dimensions,
+            timeout=900.0,
+        )
+
+
+def _is_retryable_browser_result(result: str) -> bool:
+    text = (result or "").lower()
+    return "target page, context or browser has been closed" in text or "page.wait_for_timeout: target page, context or browser has been closed" in text
+
+
+def _call_openrouter_sync(*, messages: list[dict[str, Any]], model: str, max_tokens: int, temperature: float) -> dict[str, Any]:
+    from backend.core.config import get_config
+
+    config = get_config()
+    api_key = (config.openrouter_api_key or "").strip()
+    if not api_key:
+        raise RuntimeError("OpenRouter API key não configurada.")
+
+    payload = {
+        "model": model or config.openrouter_model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": False,
+    }
+    with httpx.Client(timeout=45.0) as client:
+        response = client.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://arcco.ai",
+                "X-Title": "Arcco.ai Agent",
+            },
+            json=payload,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"LLM API Error: {response.text}")
+        return response.json()
 
 
 def _emit_progress(
@@ -264,9 +340,9 @@ async def execute_browserbase_task(
     progress_callback: BrowserProgressCallback | None = None,
 ) -> str:
     """
-    Executa navegação iterativa via Browserbase.
+    Executa navegação iterativa via Steel.
 
-    - mantém Browserbase como infraestrutura remota;
+    - mantém Steel como infraestrutura remota;
     - executa auto-healing silencioso;
     - decide uma ação por iteração;
     - pausa com handoff quando detecta desafio humano.
@@ -274,28 +350,21 @@ async def execute_browserbase_task(
     from backend.core.config import get_config
 
     config = get_config()
-    api_key = config.browserbase_api_key
-    project_id = config.browserbase_project_id
+    api_key = config.steel_api_key
 
     if not api_key:
         return (
-            "Erro: Browserbase API key não configurada. "
+            "Erro: Steel API key não configurada. "
             "Adicione na tabela ApiKeys do Supabase: "
-            "provider='browserbase', api_key='bb_live_...'."
-        )
-    if not project_id:
-        return (
-            "Erro: Browserbase Project ID não configurado. "
-            "Adicione na tabela ApiKeys do Supabase: "
-            "provider='browserbase_project_id', api_key='<uuid>'."
+            "provider='steel', api_key='ste_...'."
         )
 
     try:
-        from browserbase import Browserbase
+        from steel import Steel
     except ImportError as exc:
         return (
             f"Erro de dependência: {exc}. "
-            "Execute: pip install browserbase playwright && playwright install chromium"
+            "Execute: pip install steel-sdk playwright && playwright install chromium"
         )
 
     try:
@@ -307,21 +376,31 @@ async def execute_browserbase_task(
         )
 
     _cleanup_paused_sessions()
-    bb = Browserbase(api_key=api_key)
+    steel = Steel(steel_api_key=api_key)
     actions = actions or []
     goal = _normalize_goal(url, goal, actions)
 
     handoff_pending = False
     session_id = ""
     connect_url = ""
-    debug_fullscreen_url = ""
     debug_url = ""
+    session_viewer_url = ""
+    dimensions = {"width": 390, "height": 844} if mobile else {"width": 1440, "height": 900}
+
+    def _open_fresh_session() -> tuple[str, str, str, str]:
+        session = _create_steel_session(steel, dimensions=dimensions)
+        fresh_session_id = session.id
+        fresh_connect_url = _build_steel_connect_url(api_key, fresh_session_id, getattr(session, "websocket_url", "") or "")
+        fresh_debug_url = getattr(session, "debug_url", "") or ""
+        fresh_viewer_url = _build_steel_live_url(getattr(session, "session_viewer_url", "") or fresh_debug_url)
+        logger.info("[BROWSER] Sessão Steel criada: %s -> %s", fresh_session_id, url)
+        return fresh_session_id, fresh_connect_url, fresh_debug_url, fresh_viewer_url
 
     if resume_token:
         paused = _PAUSED_BROWSER_SESSIONS.get(resume_token)
         if not paused:
             return "Erro: a sessão pausada do navegador não foi encontrada ou expirou."
-        session_id = paused.browserbase_session_id
+        session_id = paused.browser_session_id
         connect_url = paused.connect_url
         url = paused.url or url
         goal = paused.goal or goal
@@ -329,62 +408,70 @@ async def execute_browserbase_task(
         include_tags = paused.include_tags
         exclude_tags = paused.exclude_tags
         debug_url = paused.debugger_url
-        debug_fullscreen_url = paused.debugger_fullscreen_url
+        session_viewer_url = paused.session_viewer_url
         _emit_progress(progress_callback, "thought", content="Retomando a sessão do navegador...")
     else:
         try:
-            session = await asyncio.to_thread(
-                lambda: bb.sessions.create(
-                    project_id=project_id,
-                    keep_alive=True,
-                    api_timeout=300,
-                    user_metadata={
-                        "source": "arcco",
-                        "mode": "iterative_browser",
-                    },
-                )
+            session_id, connect_url, debug_url, session_viewer_url = await asyncio.to_thread(
+                _open_fresh_session
             )
-            session_id = session.id
-            connect_url = session.connect_url
-            logger.info("[BROWSER] Sessão Browserbase criada: %s -> %s", session_id, url)
         except Exception as exc:
-            logger.error("[BROWSER] Falha ao criar sessão Browserbase: %s", exc)
-            return f"Erro ao criar sessão no Browserbase: {exc}"
+            logger.error("[BROWSER] Falha ao criar sessão Steel: %s", exc)
+            return f"Erro ao criar sessão na Steel: {exc}"
 
     try:
-        result = await asyncio.wait_for(
-            asyncio.to_thread(
-                _run_sync_session_loop,
-                connect_url,
-                session_id,
-                url,
-                goal,
-                actions,
-                wait_for,
-                mobile,
-                include_tags,
-                exclude_tags,
-                progress_callback,
-                bool(resume_token),
-            ),
-            timeout=_BROWSER_LOOP_TIMEOUT_SECONDS,
-        )
+        async def _run_once(*, resume_mode: bool) -> str:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    _run_sync_session_loop,
+                    connect_url,
+                    session_id,
+                    url,
+                    goal,
+                    actions,
+                    wait_for,
+                    mobile,
+                    include_tags,
+                    exclude_tags,
+                    progress_callback,
+                    resume_mode,
+                ),
+                timeout=_BROWSER_LOOP_TIMEOUT_SECONDS,
+            )
+
+        result = await _run_once(resume_mode=bool(resume_token))
+        if _is_retryable_browser_result(result):
+            _emit_progress(progress_callback, "thought", content="A sessão do navegador fechou inesperadamente. Tentando reconectar...")
+            logger.warning("[BROWSER] Sessão %s fechou no meio do fluxo. Tentando reconexão.", session_id)
+            result = await _run_once(resume_mode=True)
+        if _is_retryable_browser_result(result) and not resume_token:
+            _emit_progress(progress_callback, "thought", content="Reconexão insuficiente. Abrindo uma nova sessão do navegador...")
+            logger.warning("[BROWSER] Reconexão falhou para a sessão %s. Abrindo nova sessão Steel.", session_id)
+            try:
+                await asyncio.to_thread(lambda: steel.sessions.release(session_id))
+            except Exception:
+                pass
+            session_id, connect_url, debug_url, session_viewer_url = await asyncio.to_thread(_open_fresh_session)
+            result = await _run_once(resume_mode=False)
+
         if resume_token:
             _PAUSED_BROWSER_SESSIONS.pop(resume_token, None)
         return result
     except BrowserHandoffRequired as exc:
         handoff_pending = True
         try:
-            debug_info = await asyncio.to_thread(lambda: bb.sessions.debug(session_id))
-            debug_url = getattr(debug_info, "debugger_url", "") or debug_url
-            debug_fullscreen_url = getattr(debug_info, "debugger_fullscreen_url", "") or debug_fullscreen_url
+            session_info = await asyncio.to_thread(lambda: steel.sessions.retrieve(session_id))
+            debug_url = getattr(session_info, "debug_url", "") or debug_url
+            session_viewer_url = _build_steel_live_url(
+                getattr(session_info, "session_viewer_url", "") or debug_url or session_viewer_url
+            )
         except Exception as debug_exc:
-            logger.warning("[BROWSER] Falha ao obter URLs de debug da sessão %s: %s", session_id, debug_exc)
+            logger.warning("[BROWSER] Falha ao obter URLs da sessão %s: %s", session_id, debug_exc)
 
         token = resume_token or str(uuid.uuid4())
         _PAUSED_BROWSER_SESSIONS[token] = PausedBrowserSession(
             resume_token=token,
-            browserbase_session_id=session_id,
+            browser_session_id=session_id,
             connect_url=connect_url,
             url=url,
             goal=goal,
@@ -392,7 +479,7 @@ async def execute_browserbase_task(
             include_tags=include_tags,
             exclude_tags=exclude_tags,
             debugger_url=debug_url,
-            debugger_fullscreen_url=debug_fullscreen_url,
+            session_viewer_url=session_viewer_url,
             created_at=time.time(),
         )
         raise BrowserHandoffRequired(
@@ -401,15 +488,15 @@ async def execute_browserbase_task(
             resume_token=token,
             session_id=session_id,
             debugger_url=debug_url,
-            debugger_fullscreen_url=debug_fullscreen_url,
+            debugger_fullscreen_url=session_viewer_url,
         ) from exc
     except asyncio.TimeoutError:
         logger.error("[BROWSER] Timeout global de %ss na sessão %s -> %s", _BROWSER_LOOP_TIMEOUT_SECONDS, session_id, url)
-        return f"Erro: Timeout de {int(_BROWSER_LOOP_TIMEOUT_SECONDS)}s durante navegação em {url}. O site pode estar lento ou o Browserbase sobrecarregado."
+        return f"Erro: Timeout de {int(_BROWSER_LOOP_TIMEOUT_SECONDS)}s durante navegação em {url}. O site pode estar lento ou a Steel sobrecarregada."
     finally:
         if session_id and not handoff_pending:
             try:
-                await asyncio.to_thread(lambda: bb.sessions.update(session_id, status="REQUEST_RELEASE"))
+                await asyncio.to_thread(lambda: steel.sessions.release(session_id))
                 logger.info("[BROWSER] Sessão %s liberada.", session_id)
             except Exception as exc:
                 logger.warning("[BROWSER] Falha ao liberar sessão %s: %s", session_id, exc)
@@ -435,7 +522,7 @@ def _run_sync_session_loop(
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(connect_url, timeout=30_000)
+            browser = p.chromium.connect_over_cdp(connect_url, timeout=45_000)
 
             if browser.contexts:
                 context = browser.contexts[0]
@@ -456,8 +543,8 @@ def _run_sync_session_loop(
                 pass
 
             page = context.pages[0] if context.pages else context.new_page()
-            page.set_default_timeout(8_000)
-            page.set_default_navigation_timeout(20_000)
+            page.set_default_timeout(_BROWSER_ACTION_TIMEOUT_MS)
+            page.set_default_navigation_timeout(_BROWSER_NAVIGATION_TIMEOUT_MS)
 
             _emit_progress(progress_callback, "browser_action", payload={
                 "status": "navigating",
@@ -469,11 +556,14 @@ def _run_sync_session_loop(
 
             if not resume_mode or page.url in {"about:blank", "chrome-error://chromewebdata/"}:
                 try:
-                    page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                    page.goto(url, wait_until="domcontentloaded", timeout=_BROWSER_NAVIGATION_TIMEOUT_MS)
                 except Exception as exc:
-                    logger.error("[BROWSER] Erro ao navegar para %s: %s", url, exc)
-                    browser.close()
-                    return f"Erro ao carregar a página {url}: {exc}"
+                    logger.warning("[BROWSER] Navegação inicial com falha parcial em %s: %s", url, exc)
+                    page.wait_for_timeout(1_500)
+                    fallback_text = _extract_page_text_sync(page, include_tags, exclude_tags)
+                    if not fallback_text.strip():
+                        browser.close()
+                        return f"Erro ao carregar a página {url}: {exc}"
             else:
                 try:
                     page.bring_to_front()
@@ -571,7 +661,7 @@ def _run_sync_session_loop(
         raise
     except Exception as exc:
         logger.error("[BROWSER] Erro crítico na sessão %s: %s", session_id, exc)
-        return f"Erro durante navegação com Browserbase: {exc}"
+        return f"Erro durante navegação com Steel: {exc}"
 
 
 def _compose_browser_result(url: str, title: str, final_response: str, extracted_text: str) -> str:
@@ -660,7 +750,7 @@ def _dismiss_common_ui_noise_sync(page: Any) -> list[str]:
         try:
             locator = page.locator(f'text="{keyword}"').first
             if locator.count() > 0:
-                locator.click(timeout=1_200)
+                locator.click(timeout=1_500)
                 notes.append(f"click(auto-dismiss:{keyword})")
                 page.wait_for_timeout(300)
         except Exception:
@@ -734,7 +824,6 @@ def _decide_next_action_sync(
 ) -> dict[str, Any]:
     from backend.agents import registry
     from backend.core.config import get_config
-    from backend.core.llm import call_openrouter
 
     model = registry.get_model("planner") or registry.get_model("chat") or get_config().openrouter_model
     user_prompt = (
@@ -750,16 +839,14 @@ def _decide_next_action_sync(
     )
 
     try:
-        response = asyncio.run(
-            call_openrouter(
-                messages=[
-                    {"role": "system", "content": _BROWSER_CONTROLLER_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                model=model,
-                max_tokens=600,
-                temperature=0.1,
-            )
+        response = _call_openrouter_sync(
+            messages=[
+                {"role": "system", "content": _BROWSER_CONTROLLER_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            model=model,
+            max_tokens=600,
+            temperature=0.1,
         )
         raw_content = (
             response.get("choices", [{}])[0]
@@ -825,9 +912,9 @@ def _apply_action_sync(
             selector = str(action.get("selector") or "").strip()
             if not selector:
                 raise ValueError("selector ausente")
-            page.locator(selector).first.click(timeout=4_000)
+            page.locator(selector).first.click(timeout=_BROWSER_ACTION_TIMEOUT_MS)
             try:
-                page.wait_for_load_state("domcontentloaded", timeout=4_000)
+                page.wait_for_load_state("domcontentloaded", timeout=_BROWSER_ACTION_TIMEOUT_MS)
             except Exception:
                 pass
             page.wait_for_timeout(700)
@@ -838,7 +925,7 @@ def _apply_action_sync(
             text = str(action.get("text") or "")
             if not selector:
                 raise ValueError("selector ausente")
-            page.locator(selector).first.fill(text, timeout=4_000)
+            page.locator(selector).first.fill(text, timeout=_BROWSER_ACTION_TIMEOUT_MS)
             page.wait_for_timeout(400)
             return f"write({selector}, {text[:40]})"
 
@@ -859,7 +946,7 @@ def _apply_action_sync(
             key = str(action.get("key") or "Enter")
             selector = str(action.get("selector") or "").strip()
             if selector:
-                page.locator(selector).first.press(key, timeout=4_000)
+                page.locator(selector).first.press(key, timeout=_BROWSER_ACTION_TIMEOUT_MS)
             else:
                 page.keyboard.press(key)
             page.wait_for_timeout(400)

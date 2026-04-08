@@ -7,58 +7,82 @@ import asyncio
 import json
 import logging
 import re
-from typing import List, Optional
-from pydantic import BaseModel, Field
 
 from backend.core.llm import call_openrouter
 from backend.agents import registry
+from backend.agents.contracts import (
+    ClarificationQuestionContract as ClarificationQuestion,
+    PlannerOutputContract as PlannerOutput,
+    PlanStepContract as PlanStep,
+    infer_capability_id_from_action,
+)
 
 logger = logging.getLogger(__name__)
 
 _PLANNER_TIMEOUT_SECONDS = 35.0
 _PLANNER_FALLBACK_MODEL = "openai/gpt-4o-mini"
 
-# Structured Output Schema for the Planner
-class PlanStep(BaseModel):
-    step: int = Field(description="Step number (1-indexed)")
-    action: str = Field(description="Action type: 'web_search', 'python', 'browser', 'file_modifier', 'text_generator', 'design_generator', 'deep_research', or 'direct_answer'")
-    detail: str = Field(description="A detailed description of what this step needs to accomplish.")
-    is_terminal: bool = Field(
-        default=False,
-        description="True ONLY for the LAST step that produces the final deliverable for the user. When True, the result is sent directly to the frontend and the pipeline stops. All preceding steps MUST be False."
-    )
-
-class ClarificationQuestion(BaseModel):
-    type: str = Field(description="'choice' for multiple-choice options or 'open' for free text input")
-    text: str = Field(description="The question to ask the user")
-    options: List[str] = Field(default_factory=list, description="Options for 'choice' type. Empty for 'open' type.")
-
-class PlannerOutput(BaseModel):
-    is_complex: bool = Field(description="True if the request requires multiple steps or tools; False if it can be answered directly.")
-    steps: List[PlanStep] = Field(description="List of steps to execute. If is_complex is False, this can be empty or have a single 'direct_answer' step.")
-    acknowledgment: str = Field(
-        default="",
-        description="Short natural phrase confirming what the agent will do. Always fill this. Ex: 'Ok, vou pesquisar barbearias na Maraponga, Fortaleza.'"
-    )
-    needs_clarification: bool = Field(
-        default=False,
-        description="True if the request is ambiguous and needs user clarification before executing. False for clear/specific requests."
-    )
-    questions: List[ClarificationQuestion] = Field(
-        default_factory=list,
-        description="Clarification questions for the user. Max 3. Only when needs_clarification is true."
-    )
+_JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}", re.DOTALL)
 
 
 def _fallback_direct_answer(user_intent: str) -> PlannerOutput:
     return PlannerOutput(
         is_complex=False,
         acknowledgment="Ok, vou responder diretamente.",
-        steps=[PlanStep(step=1, action="direct_answer", detail=user_intent, is_terminal=True)],
+        steps=[PlanStep(step=1, action="direct_answer", capability_id=None, detail=user_intent, is_terminal=True)],
     )
 
 
-async def _request_plan(messages: list[dict], model: str) -> PlannerOutput:
+def _extract_json_payload(raw_content: str) -> dict:
+    cleaned = (raw_content or "").strip()
+    fenced = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
+    candidates = [fenced]
+
+    match = _JSON_BLOCK_RE.search(fenced)
+    if match:
+        candidates.append(match.group(0))
+
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except Exception as exc:
+            last_error = exc
+
+    raise ValueError(f"Planner retornou JSON invalido: {last_error}")
+
+
+def _normalize_plan(plan: PlannerOutput, *, user_intent: str) -> PlannerOutput:
+    if not plan.steps:
+        if plan.is_complex and not plan.needs_clarification:
+            raise ValueError("Planner retornou plano complexo sem steps.")
+        if plan.needs_clarification:
+            return plan
+        return _fallback_direct_answer(user_intent)
+
+    normalized_steps: list[PlanStep] = []
+    total_steps = len(plan.steps)
+    for index, step in enumerate(plan.steps, start=1):
+        action = (step.action or "").strip()
+        normalized_steps.append(
+            step.model_copy(
+                update={
+                    "step": index,
+                    "action": action,
+                    "capability_id": step.capability_id or infer_capability_id_from_action(action),
+                    "is_terminal": step.is_terminal or (
+                        index == total_steps
+                        and total_steps == 1
+                        and action == "direct_answer"
+                    ),
+                }
+            )
+        )
+
+    return plan.model_copy(update={"steps": normalized_steps})
+
+
+async def _request_plan(messages: list[dict], model: str, *, user_intent: str) -> PlannerOutput:
     data = await asyncio.wait_for(
         call_openrouter(
             messages=messages,
@@ -70,32 +94,9 @@ async def _request_plan(messages: list[dict], model: str) -> PlannerOutput:
     )
 
     raw_content = data["choices"][0]["message"]["content"].strip()
-    match = re.search(r"\{.*\}", raw_content, re.DOTALL)
-    if match:
-        raw_content = match.group(0)
-
-    parsed_json = json.loads(raw_content)
+    parsed_json = _extract_json_payload(raw_content)
     plan = PlannerOutput.model_validate(parsed_json)
-
-    if not plan.steps:
-        if plan.is_complex:
-            raise ValueError("Planner retornou plano complexo sem steps.")
-        return _fallback_direct_answer(messages[-1]["content"])
-
-    plan.steps = [
-        step.model_copy(
-            update={
-                "step": index,
-                "is_terminal": step.is_terminal or (
-                    index == len(plan.steps)
-                    and len(plan.steps) == 1
-                    and step.action == "direct_answer"
-                ),
-            }
-        )
-        for index, step in enumerate(plan.steps, start=1)
-    ]
-    return plan
+    return _normalize_plan(plan, user_intent=user_intent)
 
 async def generate_plan(user_intent: str, model: str) -> PlannerOutput:
     """
@@ -123,7 +124,7 @@ async def generate_plan(user_intent: str, model: str) -> PlannerOutput:
         _skills_desc = skills_loader.get_skill_descriptions(user_intent)
         if _skills_desc:
             messages[0]["content"] += (
-                f"\n\nSKILLS DE NEGÓCIO DISPONÍVEIS (use o nome exato como valor de 'action' no plano):\n"
+                f"\n\nSKILLS DE NEGÓCIO DISPONÍVEIS (use o nome exato como valor de 'action' e capability_id como skill_<nome>):\n"
                 f"{_skills_desc}"
             )
 
@@ -134,7 +135,7 @@ async def generate_plan(user_intent: str, model: str) -> PlannerOutput:
         last_error: Exception | None = None
         for candidate_model in candidate_models:
             try:
-                return await _request_plan(messages, candidate_model)
+                return await _request_plan(messages, candidate_model, user_intent=user_intent)
             except asyncio.TimeoutError as exc:
                 last_error = exc
                 logger.warning(

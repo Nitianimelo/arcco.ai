@@ -1,0 +1,29 @@
+- generic [ref=e4]:
+  - img "Arcco" [ref=e32]
+  - generic [ref=e6]:
+    - generic [ref=e7]:
+      - heading "Entrar" [level=2] [ref=e8]
+      - paragraph [ref=e9]: Acesse sua conta para continuar
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - generic [ref=e12]: E-mail
+        - generic [ref=e13]:
+          - generic:
+            - img
+          - textbox "E-mail" [ref=e14]:
+            - /placeholder: seu@email.com
+      - generic [ref=e15]:
+        - generic [ref=e16]: Senha
+        - generic [ref=e17]:
+          - generic:
+            - img
+          - textbox "Senha" [ref=e18]:
+            - /placeholder: Digite sua senha
+          - button [ref=e19]:
+            - img [ref=e20]
+        - button "Esqueceu sua senha?" [ref=e24]
+      - button "Entrar" [ref=e25]
+    - paragraph [ref=e27]:
+      - text: Ainda não tem cadastro?
+      - button "Faça seu cadastro agora" [ref=e28]
+  - paragraph [ref=e30]: © 2026 Arcco Agents. Todos os direitos reservados.

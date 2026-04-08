@@ -24,7 +24,10 @@ from typing import Any, AsyncGenerator
 
 from backend.core.llm import call_openrouter, stream_openrouter
 from backend.agents import registry
+from backend.agents.capabilities import get_capability_by_route, get_direct_dispatch_routes, get_runtime_semantics, route_requires_link_only
+from backend.agents.contracts import CapabilityResult
 from backend.agents.planner import ClarificationQuestion
+from backend.agents.dispatcher import dispatch_direct_route, planner_action_to_tool_name, resolve_runtime_target
 from backend.agents.executor import execute_tool
 from backend.agents.tools import SUPERVISOR_TOOLS, COMPUTER_TOOLS, SPY_PAGES_TOOLS
 from backend.services.browser_service import BrowserHandoffRequired, get_paused_browser_session
@@ -127,27 +130,7 @@ def _build_pre_action_ack(tool_calls: list) -> str | None:
     return None
 
 
-# ── Mapa de Ferramentas do Supervisor ────────────────────────────────────────
-
-TOOL_MAP = {
-    "read_session_file": {"route": "session_file", "is_terminal": False},
-    "ask_text_generator": {"route": "text_generator", "is_terminal": True},
-    "ask_design_generator": {"route": "design_generator", "is_terminal": True},
-    "ask_file_modifier": {"route": "file_modifier", "is_terminal": False},
-    "ask_browser": {"route": "browser", "is_terminal": False},
-    "ask_web_search": {"route": "web_search", "is_terminal": False},
-    "execute_python": {"route": "python", "is_terminal": False},
-    "deep_research": {"route": "deep_research", "is_terminal": False},
-    # Arcco Computer tools (só ativas quando computer_enabled=True)
-    "list_computer_files": {"route": "computer", "is_terminal": False},
-    "read_computer_file": {"route": "computer", "is_terminal": False},
-    "manage_computer_file": {"route": "computer", "is_terminal": False},
-    # Spy Pages (SimilarWeb via Apify) — só ativa quando spy_pages_enabled=True
-    "analyze_web_pages": {"route": "spy_pages", "is_terminal": False},
-}
-
-# Rotas que DEVEM conter links de download
-ROUTES_REQUIRING_LINK = {"file_modifier"}
+DIRECT_DISPATCH_ROUTES = get_direct_dispatch_routes()
 _MARKDOWN_LINK_PATTERN = re.compile(r'\[([^\]]+)\]\((https?://[^\)]+)\)', re.IGNORECASE)
 _ATTACHMENT_READ_PATTERN = re.compile(
     r"\b(leia|ler|resuma|resumir|analise|analisar|extraia|extrair|consulte|consulta|"
@@ -342,6 +325,9 @@ def _normalize_plan_for_session_files(plan_output, *, user_intent: str, session_
     if not ref:
         return plan_output
 
+    if getattr(plan_output, "needs_clarification", False):
+        return plan_output
+
     if _ATTACHMENT_MODIFY_PATTERN.search(user_intent or ""):
         return plan_output
 
@@ -349,15 +335,17 @@ def _normalize_plan_for_session_files(plan_output, *, user_intent: str, session_
     if not file_name:
         return plan_output
 
+    from backend.agents.planner import PlanStep
+
     plan_output.is_complex = True
     plan_output.steps = [
-        type(plan_output.steps[0])(
+        PlanStep(
             step=1,
             action="session_file",
             detail=f"Ler o anexo da sessão '{file_name}' e extrair apenas os dados necessários para responder ao pedido.",
             is_terminal=False,
         ),
-        type(plan_output.steps[0])(
+        PlanStep(
             step=2,
             action="direct_answer",
             detail="Responder ao usuário usando exclusivamente o conteúdo validado do anexo lido.",
@@ -412,6 +400,75 @@ def _normalize_plan_for_visual_requests(plan_output, *, user_intent: str):
 
 def _artifact_payload(label: str, url: str) -> str:
     return json.dumps({"filename": label, "url": url})
+
+
+def _artifact_refs_from_content(content: str) -> list[dict[str, str]]:
+    return [
+        {"label": label, "url": url, "artifact_type": "file"}
+        for label, url in _extract_storage_markdown_links(content or "")
+    ]
+
+
+def _build_specialist_capability_result(
+    *,
+    route: str,
+    content: str,
+    error: bool,
+    handoff_required: bool = False,
+    metadata: dict[str, Any] | None = None,
+) -> CapabilityResult:
+    capability = get_capability_by_route(route) or {}
+    capability_id = capability.get("capability_id") or route
+    output_type = capability.get("output_type") or "text"
+    normalized_content = content or ""
+    return CapabilityResult(
+        capability_id=capability_id,
+        route=route,
+        status="awaiting_clarification" if handoff_required else ("failed" if error else "completed"),
+        output_type=output_type,
+        content=normalized_content,
+        artifacts=_artifact_refs_from_content(normalized_content),
+        handoff_required=handoff_required,
+        error_text=normalized_content if error else None,
+        metadata=metadata or {},
+    )
+
+
+async def _log_pipeline_terminated(
+    execution_logger,
+    execution_id: str | None,
+    *,
+    route: str,
+    step: int | None = None,
+    total_steps: int | None = None,
+    accumulated_context_chars: int | None = None,
+    artifact_only: bool = False,
+    skipped_steps: list[int] | None = None,
+) -> None:
+    if not execution_logger:
+        return
+    message = (
+        f"Pipeline encerrado no step {step}/{total_steps} ({route})."
+        if step is not None and total_steps is not None
+        else f"Pipeline encerrado ({route})."
+    )
+    payload: dict[str, Any] = {"terminal_route": route}
+    if step is not None:
+        payload["terminal_step"] = step
+    if total_steps is not None:
+        payload["total_steps"] = total_steps
+    if accumulated_context_chars is not None:
+        payload["accumulated_context_chars"] = accumulated_context_chars
+    if skipped_steps is not None:
+        payload["skipped_steps"] = skipped_steps
+    if artifact_only:
+        payload["artifact_only"] = True
+    await execution_logger.log_event(
+        execution_id,
+        event_type="pipeline_terminated",
+        message=message,
+        raw_payload=payload,
+    )
 
 
 async def _emit_file_artifacts(content: str) -> AsyncGenerator[str, None]:
@@ -941,7 +998,7 @@ def _validate_specialist_response(response: str, route: str, tool_messages: list
     Valida e corrige a resposta do especialista.
     Se a rota exige link de download e o LLM alucinhou (não incluiu), injeta o link real.
     """
-    if route not in ROUTES_REQUIRING_LINK:
+    if not route_requires_link_only(route):
         return response
 
     has_link = bool(_MARKDOWN_LINK_PATTERN.search(response))
@@ -971,6 +1028,7 @@ async def _run_specialist_with_tools(
     user_id: str | None = None,
     max_iterations: int = 5,
     thought_log: list | None = None,
+    tool_history: list | None = None,
 ) -> str:
     """
     Executa especialista com ferramentas. Retorna resposta final como string.
@@ -1011,6 +1069,12 @@ async def _run_specialist_with_tools(
                     "tool_call_id": tool["id"],
                     "content": str(result),
                 })
+                if tool_history is not None:
+                    tool_history.append({
+                        "role": "tool",
+                        "tool_call_id": tool["id"],
+                        "content": str(result),
+                    })
         else:
             return message.get("content", "")
 
@@ -1071,6 +1135,7 @@ async def _run_specialist_with_qa(
     MAX_QA_RETRIES = 2
     specialist_response = ""
     current_messages = list(temp_messages)
+    tool_history: list[dict[str, str]] = []
 
     for attempt in range(MAX_QA_RETRIES + 1):
         if attempt == 0:
@@ -1087,6 +1152,7 @@ async def _run_specialist_with_qa(
                 registry.get_tools(route),
                 user_id=user_id,
                 thought_log=thought_log,
+                tool_history=tool_history,
             )
         except Exception as e:
             logger.error(f"[SPECIALIST] Erro na execução do especialista '{route}': {e}")
@@ -1097,7 +1163,7 @@ async def _run_specialist_with_qa(
             yield sse("thought", thought)
 
         specialist_response = _validate_specialist_response(
-            specialist_response, route, current_messages
+            specialist_response, route, tool_history
         )
 
         # QA Review
@@ -1340,20 +1406,7 @@ async def orchestrate_and_stream(
             # Mapa de ação do Planner → nome da ferramenta do Supervisor.
             # Isso garante que o Supervisor chame a ferramenta certa para cada passo,
             # evitando que o LLM substitua ask_browser por ask_web_search, por exemplo.
-            _PLANNER_ACTION_TO_TOOL = {
-                "session_file":   "read_session_file",
-                "browser":        "ask_browser",
-                "web_search":     "ask_web_search",
-                "python":         "execute_python",
-                "deep_research":  "deep_research",
-                "file_modifier":  "ask_file_modifier",
-                "text_generator": "ask_text_generator",
-                "design_generator": "ask_design_generator",
-            }
-            _forced_tool_name = _PLANNER_ACTION_TO_TOOL.get(step.action)
-            # Skills dinamicas: se a action do planner e um skill_id, usa direto
-            if not _forced_tool_name and skills_loader.is_skill(step.action):
-                _forced_tool_name = step.action
+            _forced_tool_name = planner_action_to_tool_name(step.action)
             _tool_choice = (
                 {"type": "function", "function": {"name": _forced_tool_name}}
                 if _forced_tool_name
@@ -1384,7 +1437,11 @@ async def orchestrate_and_stream(
                         execution_id,
                         event_type="pipeline_terminated",
                         message=f"Pipeline encerrado no step {step.step}/{len(plan_output.steps)} (direct_answer).",
-                        raw_payload={"step": step.step, "action": step.action},
+                        raw_payload={
+                            "step": step.step,
+                            "action": step.action,
+                            "capability_id": getattr(step, "capability_id", None),
+                        },
                     )
                 return
 
@@ -1398,7 +1455,11 @@ async def orchestrate_and_stream(
                         model=supervisor_model,
                         role="supervisor",
                         route=step.action,
-                        input_payload={"step_detail": step.detail, "forced_tool_name": _forced_tool_name},
+                        input_payload={
+                            "step_detail": step.detail,
+                            "forced_tool_name": _forced_tool_name,
+                            "capability_id": getattr(step, "capability_id", None),
+                        },
                     )
                 message = await _call_supervisor_for_step(
                     step_messages=step_messages,
@@ -1453,14 +1514,15 @@ async def orchestrate_and_stream(
                         yield sse("steps", "<step>Erro de argumentos sub-agente. Ignorando...</step>")
                         continue
 
-                    if func_name in TOOL_MAP:
-                        route = TOOL_MAP[func_name]["route"]
-                        is_terminal = TOOL_MAP[func_name]["is_terminal"]
-                    elif skills_loader.is_skill(func_name):
-                        route = "dynamic_skill"
-                        is_terminal = False
-                    else:
+                    resolved = resolve_runtime_target(func_name)
+                    if not resolved:
                         continue
+                    route = resolved["route"]
+                    route_semantics = get_runtime_semantics(
+                        tool_name=func_name,
+                        route=route,
+                        planner_terminal=step.is_terminal,
+                    )
 
                     recent_context = [m for m in step_messages if m.get("role") in ["user", "assistant"]][-5:]
                     tool_agent_id = None
@@ -1470,237 +1532,173 @@ async def orchestrate_and_stream(
                             agent_key=route,
                             agent_name=route,
                             model=registry.get_model(route) or supervisor_model,
-                            role="specialist" if is_terminal or route == "file_modifier" else "tool",
+                            role=str(route_semantics["agent_role"]),
                             route=route,
-                            input_payload={"func_name": func_name, "func_args": func_args, "step": step.step},
+                            input_payload={
+                                "func_name": func_name,
+                                "func_args": func_args,
+                                "step": step.step,
+                                "capability_id": getattr(step, "capability_id", None),
+                            },
                         )
                     
                     # ── try/except protege cada tool para que um erro não mate o pipeline ──
                     try:
 
-                        if route == "session_file":
-                            specialist_result = await execute_tool("read_session_file", func_args, user_id=user_id)
-                            if execution_logger:
-                                await execution_logger.log_event(
-                                    execution_id,
-                                    execution_agent_id=tool_agent_id,
-                                    event_type="tool_result",
-                                    message="Leitura de arquivo da sessão concluída",
-                                    tool_name="read_session_file",
-                                    tool_args=func_args,
-                                    tool_result=str(specialist_result)[:2000],
-                                )
-                            async for artifact_event in _emit_file_artifacts(specialist_result):
-                                yield artifact_event
-                            if _is_error_result(specialist_result):
-                                had_failures = True
-                                tool_failed = True
-                                failure_msg = f"Falha ao consultar o anexo {func_args.get('file_name', '') or 'da sessão'}."
-                                failure_summaries.append(failure_msg)
-                                accumulated_context += f"\n[Passo {step.step} - ERRO session_file]: {specialist_result}"
-                                yield sse("thought", failure_msg)
-                            else:
-                                accumulated_context += f"\n[Passo {step.step} - session_file]: {specialist_result}"
-                                yield sse(
-                                    "thought",
-                                    f"Arquivo de sessão consultado: {func_args.get('file_name', '')}",
-                                )
-
-                        elif route == "web_search":
-                            query = func_args.get("query", "")
+                        if route_semantics["direct_dispatch"]:
                             specialist_result = None
-                            async for event in _exec_with_heartbeat(
-                                execute_tool("web_search", {"query": query}, user_id=user_id),
-                                lambda elapsed: sse("steps", f"<step>Pesquisando na web — {int(elapsed)}s...</step>"),
-                                timeout=_SEARCH_TIMEOUT,
+                            dispatch_info = None
+                            dispatch_result: CapabilityResult | None = None
+                            dispatch_args = dict(func_args)
+                            if route == "deep_research":
+                                dispatch_args["_model"] = registry.get_model("deep_research") or supervisor_model
+                                dispatch_args["context"] = accumulated_context
+                            elif route == "dynamic_skill":
+                                dispatch_args["_func_name"] = func_name
+                            async for event in dispatch_direct_route(
+                                route=route,
+                                func_args=dispatch_args,
+                                user_id=user_id,
+                                mode="planner",
+                                step_label=f"Passo {step.step}",
+                                execute_tool_fn=execute_tool,
+                                exec_with_heartbeat_fn=_exec_with_heartbeat,
+                                exec_browser_with_progress_fn=_exec_browser_with_progress,
+                                emit_file_artifacts_fn=_emit_file_artifacts,
+                                browser_handoff_payload_fn=_browser_handoff_payload,
+                                is_error_result_fn=_is_error_result,
+                                sse_fn=sse,
+                                logger=logger,
+                                search_timeout=_SEARCH_TIMEOUT,
+                                browser_timeout=_BROWSER_TIMEOUT,
+                                skill_timeout=_SKILL_TIMEOUT,
                             ):
-                                if isinstance(event, dict) and "_result" in event:
-                                    if event.get("_timeout"):
-                                        specialist_result = f"Erro: Timeout de {int(_SEARCH_TIMEOUT)}s na pesquisa web. O serviço de busca pode estar indisponível."
-                                        logger.error(f"[ORCHESTRATOR] web_search timeout (planner) query={query[:60]}")
-                                    elif event.get("_error"):
-                                        specialist_result = f"Erro na pesquisa web: {event['_error']}"
-                                        logger.error(f"[ORCHESTRATOR] web_search error (planner): {event['_error']}")
+                                if isinstance(event, dict) and "_dispatch" in event:
+                                    dispatch_info = event["_dispatch"]
+                                    if dispatch_info.get("result"):
+                                        dispatch_result = CapabilityResult.model_validate(dispatch_info["result"])
+                                        specialist_result = dispatch_result.content
                                     else:
-                                        specialist_result = event["_result"]
-                                else:
-                                    yield event  # heartbeat SSE em tempo real
-                            if specialist_result is None:
-                                specialist_result = "Erro: pesquisa web não retornou resultado."
-                            if execution_logger:
-                                await execution_logger.log_event(
-                                    execution_id,
-                                    execution_agent_id=tool_agent_id,
-                                    event_type="tool_result",
-                                    message=f"Pesquisa web concluída: {query[:120]}",
-                                    tool_name="web_search",
-                                    tool_args={"query": query},
-                                    tool_result=str(specialist_result)[:2000],
-                                )
-                            async for artifact_event in _emit_file_artifacts(specialist_result):
-                                yield artifact_event
-                            if _is_error_result(specialist_result):
-                                had_failures = True
-                                tool_failed = True
-                                failure_msg = f"Falha na pesquisa web para '{query[:80]}'."
-                                failure_summaries.append(failure_msg)
-                                accumulated_context += f"\n[Passo {step.step} - ERRO web_search]: {specialist_result}"
-                                yield sse("thought", failure_msg)
-                            else:
-                                accumulated_context += f"\n[Passo {step.step} - web_search]: {specialist_result}"
-                                yield sse("thought", f"Dados obtidos da web via busca: {query}")
-
-                        elif route == "python":
-                            yield sse("steps", f"<step>Executando código Python (Passo {step.step})...</step>")
-                            specialist_result = await execute_tool("execute_python", func_args, user_id=user_id)
-                            async for artifact_event in _emit_file_artifacts(specialist_result):
-                                yield artifact_event
-                            if specialist_result.startswith("Erro"):
-                                logger.error(
-                                    "[ORCHESTRATOR] Execução Python falhou no passo %s: %s",
-                                    step.step,
-                                    specialist_result,
-                                )
-                            if execution_logger:
-                                await execution_logger.log_event(
-                                    execution_id,
-                                    execution_agent_id=tool_agent_id,
-                                    event_type="tool_result",
-                                    message="Execução Python concluída",
-                                    tool_name="execute_python",
-                                    tool_args=func_args,
-                                    tool_result=str(specialist_result)[:2000],
-                                )
-                            if _is_error_result(specialist_result):
-                                had_failures = True
-                                tool_failed = True
-                                failure_msg = "Falha na execução Python deste passo."
-                                failure_summaries.append(failure_msg)
-                                accumulated_context += f"\n[Passo {step.step} - ERRO python]: {specialist_result}"
-                                yield sse("thought", failure_msg)
-                            else:
-                                accumulated_context += f"\n[Passo {step.step} - python]: {specialist_result}"
-                                yield sse("thought", f"Resultado do código Python: {specialist_result[:120]}...")
-
-                        elif route == "browser":
-                            url = func_args.get("url", "")
-                            yield sse("browser_action", json.dumps({
-                                "status": "navigating",
-                                "url": url,
-                                "title": f"Acessando {url[:60]}...",
-                                "actions": [a.get("type", "?") for a in func_args.get("actions", []) if isinstance(a, dict)]
-                            }))
-
-                            yield sse("thought", f"Iniciando motor de navegação headless em {url}...")
-                            yield sse("thought", "Inspecionando a página e decidindo uma ação por vez...")
-
-                            specialist_result = None
-                            handoff_exc = None
-                            async for event in _exec_browser_with_progress(func_args, user_id=user_id, timeout=_BROWSER_TIMEOUT):
-                                if isinstance(event, dict) and "_result" in event:
-                                    if event.get("_timeout"):
-                                        specialist_result = f"Erro: Timeout de {int(_BROWSER_TIMEOUT)}s ao acessar {url}. O site pode estar lento ou inacessível."
-                                        logger.error(f"[ORCHESTRATOR] Browser timeout (planner loop) em {url}")
-                                    elif event.get("_error"):
-                                        specialist_result = f"Erro ao executar Browser Agent: {event['_error']}"
-                                        logger.error(f"[ORCHESTRATOR] Browser error (planner): {event['_error']}")
-                                    else:
-                                        specialist_result = event["_result"]
-                                elif isinstance(event, dict) and "_handoff" in event:
-                                    handoff_exc = event["_handoff"]
+                                        specialist_result = dispatch_info.get("specialist_result")
                                 else:
                                     yield event
-                            if handoff_exc is not None:
-                                payload = _browser_handoff_payload(handoff_exc, url)
-                                yield sse("browser_action", json.dumps(payload["browser_action"]))
-                                yield sse("needs_clarification", json.dumps(payload))
+                            if dispatch_info is None:
+                                specialist_result = specialist_result or f"Erro: route {route} não retornou resultado."
+                                dispatch_info = {
+                                    "tool_name": func_name,
+                                    "message": f"Execução concluída: {route}",
+                                    "error": _is_error_result(specialist_result),
+                                }
+                            if dispatch_result is None:
+                                dispatch_result = CapabilityResult(
+                                    capability_id=getattr(step, "capability_id", None) or route,
+                                    route=route,
+                                    status="failed" if dispatch_info.get("error") else "completed",
+                                    output_type="text",
+                                    content=str(specialist_result or ""),
+                                    handoff_required=bool(dispatch_info.get("handoff")),
+                                    error_text=str(specialist_result or "") if dispatch_info.get("error") else None,
+                                    metadata={"message": dispatch_info.get("message"), "tool_name": dispatch_info.get("tool_name")},
+                                )
+                            if execution_logger:
+                                await execution_logger.log_event(
+                                    execution_id,
+                                    execution_agent_id=tool_agent_id,
+                                    level="warning" if dispatch_info.get("handoff") else "info",
+                                    event_type="browser_handoff_requested" if dispatch_info.get("handoff") else "tool_result",
+                                    message=dispatch_info.get("message"),
+                                    tool_name=dispatch_info.get("tool_name"),
+                                    tool_args=func_args,
+                                    tool_result=dispatch_result.content[:2000] if dispatch_result.content else None,
+                                    raw_payload={
+                                        "dispatch_result": dispatch_result.model_dump(),
+                                        "handoff_payload": dispatch_info.get("handoff_payload"),
+                                    },
+                                )
+                            if dispatch_info.get("handoff"):
                                 if execution_logger:
-                                    await execution_logger.log_event(
-                                        execution_id,
-                                        execution_agent_id=tool_agent_id,
-                                        level="warning",
-                                        event_type="browser_handoff_requested",
-                                        message=handoff_exc.message,
-                                        tool_name="ask_browser",
-                                        tool_args=func_args,
-                                        raw_payload=payload,
-                                    )
                                     await execution_logger.finish_agent(
                                         tool_agent_id,
                                         status="awaiting_clarification",
-                                        output_payload={"preview": handoff_exc.message},
-                                        metadata={"resume_token": handoff_exc.resume_token},
+                                        output_payload={"preview": dispatch_info.get("message")},
+                                        metadata={"resume_token": dispatch_info.get("resume_token")},
                                     )
                                     await execution_logger.finish_execution(execution_id, status="awaiting_clarification")
                                 return
-                            if specialist_result is None:
-                                specialist_result = f"Erro: browser não retornou resultado para {url}."
-                            if execution_logger:
-                                await execution_logger.log_event(
-                                    execution_id,
-                                    execution_agent_id=tool_agent_id,
-                                    event_type="tool_result",
-                                    message=f"Browser concluído para {url[:120]}",
-                                    tool_name="ask_browser",
-                                    tool_args=func_args,
-                                    tool_result=str(specialist_result)[:2000],
-                                )
-
-                            async for artifact_event in _emit_file_artifacts(specialist_result):
-                                yield artifact_event
-
                             if _is_error_result(specialist_result):
-                                yield sse("browser_action", json.dumps({
-                                    "status": "error",
-                                    "url": url,
-                                    "title": specialist_result[:100]
-                                }))
                                 had_failures = True
                                 tool_failed = True
-                                failure_msg = f"Falha ao acessar {url} no navegador."
-                                failure_summaries.append(failure_msg)
-                                yield sse("thought", failure_msg)
-                                accumulated_context += f"\n[Passo {step.step} - ERRO browser]: {specialist_result}"
-                            else:
-                                yield sse("browser_action", json.dumps({
-                                    "status": "done",
-                                    "url": url,
-                                    "title": "Página lida com sucesso"
-                                }))
-                                yield sse("thought", f"Extração de {url} concluída com sucesso. Analisando dados...")
-                                accumulated_context += f"\n[Passo {step.step} - browser]: {specialist_result}"
-                        
-                        elif route == "deep_research":
-                            from backend.agents.deep_research import run_deep_research
-                            research_query = func_args.get("query", "")
-                            research_result = ""
-                            deep_research_model = registry.get_model("deep_research") or supervisor_model
-                            async for event in run_deep_research(research_query, deep_research_model, accumulated_context):
-                                if event.startswith("RESULT:"):
-                                    research_result = event[7:]
+                                if route == "session_file":
+                                    failure_msg = f"Falha ao consultar o anexo {func_args.get('file_name', '') or 'da sessão'}."
+                                elif route == "web_search":
+                                    failure_msg = f"Falha na pesquisa web para '{func_args.get('query', '')[:80]}'."
+                                elif route == "python":
+                                    failure_msg = "Falha na execução Python deste passo."
+                                elif route == "deep_research":
+                                    failure_msg = f"Falha na pesquisa profunda para '{func_args.get('query', '')[:80]}'."
+                                elif route == "dynamic_skill":
+                                    failure_msg = f"Falha na skill {func_name}: {specialist_result}"
                                 else:
-                                    yield event
-                            if execution_logger:
-                                await execution_logger.log_event(
-                                    execution_id,
-                                    execution_agent_id=tool_agent_id,
-                                    event_type="tool_result",
-                                    message=f"Pesquisa profunda concluída: {research_query[:120]}",
-                                    tool_name="deep_research",
-                                    tool_args=func_args,
-                                    tool_result=str(research_result)[:2000],
-                                )
-                            async for artifact_event in _emit_file_artifacts(research_result):
-                                yield artifact_event
-                            if _is_error_result(research_result) or not research_result.strip():
-                                had_failures = True
-                                tool_failed = True
-                                failure_msg = f"Falha na pesquisa profunda para '{research_query[:80]}'."
+                                    failure_msg = f"Falha ao acessar {func_args.get('url', '')} no navegador."
                                 failure_summaries.append(failure_msg)
-                                accumulated_context += f"\n[Passo {step.step} - ERRO deep_research]: {research_result or 'Sem resultado.'}"
+                                accumulated_context += f"\n[Passo {step.step} - ERRO {route}]: {specialist_result}"
                                 yield sse("thought", failure_msg)
                             else:
-                                accumulated_context += f"\n[Passo {step.step} - deep_research]: {research_result}"
+                                accumulated_context += f"\n[Passo {step.step} - {route}]: {specialist_result}"
+                                if route == "session_file":
+                                    yield sse("thought", f"Arquivo de sessão consultado: {func_args.get('file_name', '')}")
+                                elif route == "web_search":
+                                    yield sse("thought", f"Dados obtidos da web via busca: {func_args.get('query', '')}")
+                                elif route == "python":
+                                    yield sse("thought", f"Resultado do código Python: {str(specialist_result)[:120]}...")
+                                elif route == "deep_research":
+                                    yield sse("thought", f"Pesquisa profunda concluída para: {func_args.get('query', '')[:120]}")
+                                elif route == "dynamic_skill":
+                                    yield sse("thought", f"Skill {func_name} executada com sucesso.")
+                                    if step.is_terminal and route_semantics["artifact_terminal"]:
+                                        local_rendered_design = _render_local_design_if_possible(str(specialist_result))
+                                        if local_rendered_design:
+                                            if execution_logger:
+                                                await execution_logger.log_event(
+                                                    execution_id,
+                                                    execution_agent_id=tool_agent_id,
+                                                    event_type="terminal_result",
+                                                    message=f"Resultado terminal gerado por {func_name}",
+                                                    raw_payload={
+                                                        "preview": local_rendered_design[:2000],
+                                                        "is_terminal": True,
+                                                        "artifact_only": True,
+                                                        "forced_terminal": True,
+                                                    },
+                                                )
+                                                await execution_logger.finish_agent(
+                                                    tool_agent_id,
+                                                    status="completed",
+                                                    output_payload={
+                                                        "preview": local_rendered_design[:2000],
+                                                        "artifact_only": True,
+                                                        "forced_terminal": True,
+                                                    },
+                                                )
+                                            remaining_steps = [s.step for s in plan_output.steps if s.step > step.step]
+                                            if execution_logger:
+                                                await execution_logger.log_event(
+                                                    execution_id,
+                                                    event_type="pipeline_terminated",
+                                                    message=f"Pipeline encerrado no step {step.step}/{len(plan_output.steps)} ({func_name}, terminal artifact).",
+                                                    raw_payload={
+                                                        "artifact_only": True,
+                                                        "skipped_steps": remaining_steps,
+                                                        "terminal_step": step.step,
+                                                        "terminal_route": func_name,
+                                                        "accumulated_context_chars": len(accumulated_context),
+                                                    },
+                                                )
+                                            async for artifact_event in _emit_design_artifact(local_rendered_design):
+                                                yield artifact_event
+                                            return
+                                else:
+                                    yield sse("thought", f"Extração de {func_args.get('url', '')} concluída com sucesso. Analisando dados...")
 
                         elif route == "spy_pages":
                             yield sse("steps", f"<step>Analisando sites via SimilarWeb (Passo {step.step})...</step>")
@@ -1710,125 +1708,14 @@ async def orchestrate_and_stream(
                             accumulated_context += f"\n[Passo {step.step} - spy_pages]: {spy_result}"
                             yield sse("thought", "Dados SimilarWeb obtidos com sucesso.")
 
-                        elif route == "dynamic_skill":
-                            yield sse("steps", f"<step>Executando skill: {func_name} (Passo {step.step})...</step>")
-                            specialist_result = None
-                            async for event in _exec_with_heartbeat(
-                                skills_loader.execute_dynamic_skill(func_name, func_args),
-                                lambda elapsed: sse("steps", f"<step>Executando skill {func_name} — {int(elapsed)}s...</step>"),
-                                timeout=_SKILL_TIMEOUT,
-                            ):
-                                if isinstance(event, dict) and "_result" in event:
-                                    if event.get("_timeout"):
-                                        specialist_result = (
-                                            f"Erro na skill {func_name}: Timeout de {int(_SKILL_TIMEOUT)}s."
-                                        )
-                                        logger.error(
-                                            "[ORCHESTRATOR] dynamic_skill timeout (planner) skill=%s step=%s",
-                                            func_name,
-                                            step.step,
-                                        )
-                                    elif event.get("_error"):
-                                        specialist_result = f"Erro na skill {func_name}: {event['_error']}"
-                                        logger.error(
-                                            "[ORCHESTRATOR] dynamic_skill error (planner) skill=%s step=%s: %s",
-                                            func_name,
-                                            step.step,
-                                            event["_error"],
-                                        )
-                                    else:
-                                        specialist_result = event["_result"]
-                                else:
-                                    yield event
-                            if specialist_result is None:
-                                specialist_result = f"Erro na skill {func_name}: resultado vazio."
-                            if execution_logger:
-                                await execution_logger.log_event(
-                                    execution_id,
-                                    execution_agent_id=tool_agent_id,
-                                    level="error" if _is_error_result(specialist_result) else "info",
-                                    event_type="tool_error" if _is_error_result(specialist_result) else "tool_result",
-                                    message=(
-                                        f"Skill {func_name} falhou"
-                                        if _is_error_result(specialist_result)
-                                        else f"Skill {func_name} concluída"
-                                    ),
-                                    tool_name=func_name,
-                                    tool_args=func_args,
-                                    tool_result=str(specialist_result)[:2000],
-                                )
-                            if _is_error_result(specialist_result):
-                                had_failures = True
-                                tool_failed = True
-                                failure_msg = f"Falha na skill {func_name}: {specialist_result}"
-                                failure_summaries.append(failure_msg[:300])
-                                accumulated_context += f"\n[Passo {step.step} - ERRO {func_name}]: {specialist_result}"
-                                yield sse("thought", failure_msg)
-                            else:
-                                accumulated_context += f"\n[Passo {step.step} - {func_name}]: {specialist_result}"
-                                yield sse("thought", f"Skill {func_name} executada com sucesso.")
-                                if step.is_terminal:
-                                    local_rendered_design = _render_local_design_if_possible(str(specialist_result))
-                                    if local_rendered_design:
-                                        if execution_logger:
-                                            await execution_logger.log_event(
-                                                execution_id,
-                                                execution_agent_id=tool_agent_id,
-                                                event_type="terminal_result",
-                                                message=f"Resultado terminal gerado por {func_name}",
-                                                raw_payload={
-                                                    "preview": local_rendered_design[:2000],
-                                                    "is_terminal": True,
-                                                    "artifact_only": True,
-                                                    "forced_terminal": True,
-                                                },
-                                            )
-                                            await execution_logger.finish_agent(
-                                                tool_agent_id,
-                                                status="completed",
-                                                output_payload={
-                                                    "preview": local_rendered_design[:2000],
-                                                    "artifact_only": True,
-                                                    "forced_terminal": True,
-                                                },
-                                            )
-                                        remaining_steps = [s.step for s in plan_output.steps if s.step > step.step]
-                                        if execution_logger:
-                                            await execution_logger.log_event(
-                                                execution_id,
-                                                event_type="pipeline_terminated",
-                                                message=f"Pipeline encerrado no step {step.step}/{len(plan_output.steps)} ({func_name}, terminal artifact).",
-                                                raw_payload={
-                                                    "artifact_only": True,
-                                                    "skipped_steps": remaining_steps,
-                                                    "terminal_step": step.step,
-                                                    "terminal_route": func_name,
-                                                    "accumulated_context_chars": len(accumulated_context),
-                                                },
-                                            )
-                                        yield sse("design_artifact", json.dumps({
-                                            "designs": [
-                                                part.strip()
-                                                for part in local_rendered_design.split("<!-- ARCCO_DESIGN_SEPARATOR -->")
-                                                if part.strip()
-                                            ]
-                                        }))
-                                        return
-                            if execution_logger:
-                                await execution_logger.finish_agent(
-                                    tool_agent_id,
-                                    status="failed" if _is_error_result(specialist_result) else "completed",
-                                    output_payload={"preview": str(specialist_result)[:2000]},
-                                    error_text=str(specialist_result)[:2000] if _is_error_result(specialist_result) else None,
-                                )
 
-                        elif is_terminal:
+                        elif route_semantics["terminal_specialist"]:
                             # Ferramentas que PODEM ser terminais (text_generator, design_generator)
                             # O planner decide via step.is_terminal se este step encerra o pipeline
                             local_rendered_design = None
                             if route == "text_generator":
                                 content = f"Título sugerido: {func_args.get('title_hint', '')}\nContexto Prévio: {accumulated_context}\nInstruções: {func_args.get('instructions', '')}"
-                            elif route == "design_generator":
+                            elif route == "design_generator" and route_semantics["supports_local_design_render"]:
                                 design_context = _extract_visual_context_for_design(accumulated_context)
                                 local_rendered_design = _render_local_design_if_possible(design_context)
                                 content = f"Contexto Prévio:\n{design_context}\n\nInstruções: {func_args.get('instructions', '')}"
@@ -1850,13 +1737,23 @@ async def orchestrate_and_stream(
                                     route_tools,
                                     user_id=user_id,
                                 )
+                            terminal_result = _build_specialist_capability_result(
+                                route=route,
+                                content=str(final_result),
+                                error=_is_error_result(final_result),
+                                metadata={
+                                    "step": step.step,
+                                    "is_terminal": step.is_terminal,
+                                    "preview_kind": "terminal_specialist",
+                                },
+                            )
                             if execution_logger:
                                 await execution_logger.log_event(
                                     execution_id,
                                     execution_agent_id=tool_agent_id,
                                     event_type="terminal_result" if step.is_terminal else "intermediate_result",
                                     message=f"Resultado {'terminal' if step.is_terminal else 'intermediário'} gerado por {route}",
-                                    raw_payload={"preview": final_result[:2000], "is_terminal": step.is_terminal},
+                                    raw_payload=terminal_result.model_dump(),
                                 )
 
                             if _is_error_result(final_result):
@@ -1878,16 +1775,13 @@ async def orchestrate_and_stream(
                                 elif route == "design_generator":
                                     design_html = _extract_design_html(final_result)
                                     if design_html:
-                                        yield sse("design_artifact", json.dumps({
-                                            "designs": [
-                                                part.strip() for part in design_html.split("<!-- ARCCO_DESIGN_SEPARATOR -->") if part.strip()
-                                            ]
-                                        }))
+                                        async for artifact_event in _emit_design_artifact(design_html):
+                                            yield artifact_event
                                         if execution_logger:
                                             await execution_logger.finish_agent(
                                                 tool_agent_id,
                                                 status="completed",
-                                                output_payload={"preview": design_html[:2000], "artifact_only": True},
+                                                output_payload={"preview": design_html[:2000], "artifact_only": True, "capability_result": terminal_result.model_dump()},
                                             )
                                         remaining_steps = [s.step for s in plan_output.steps if s.step > step.step]
                                         if execution_logger:
@@ -1912,7 +1806,7 @@ async def orchestrate_and_stream(
                                     await execution_logger.finish_agent(
                                         tool_agent_id,
                                         status="completed",
-                                        output_payload={"preview": final_result[:2000]},
+                                        output_payload={"preview": final_result[:2000], "capability_result": terminal_result.model_dump()},
                                     )
 
                                 # Já enviou pro usuário, termina por aqui
@@ -1946,7 +1840,7 @@ async def orchestrate_and_stream(
                                     await execution_logger.finish_agent(
                                         tool_agent_id,
                                         status="completed",
-                                        output_payload={"preview": final_result[:2000]},
+                                        output_payload={"preview": final_result[:2000], "capability_result": terminal_result.model_dump()},
                                     )
                                     await execution_logger.log_event(
                                         execution_id,
@@ -1957,6 +1851,7 @@ async def orchestrate_and_stream(
                                             "route": route,
                                             "result_chars": len(final_result),
                                             "accumulated_context_chars": len(accumulated_context),
+                                            "capability_result": terminal_result.model_dump(),
                                         },
                                     )
                         else:
@@ -1989,18 +1884,24 @@ async def orchestrate_and_stream(
                                 else:
                                     yield event
                             if execution_logger:
+                                specialist_contract = _build_specialist_capability_result(
+                                    route=route,
+                                    content=specialist_result,
+                                    error=_is_error_result(specialist_result),
+                                    metadata={"step": step.step, "preview_kind": "specialist_with_qa"},
+                                )
                                 await execution_logger.log_event(
                                     execution_id,
                                     execution_agent_id=tool_agent_id,
                                     event_type="specialist_result",
                                     message=f"Especialista {route} concluído",
-                                    raw_payload={"preview": specialist_result[:2000]},
+                                    raw_payload=specialist_contract.model_dump(),
                                 )
                             async for artifact_event in _emit_file_artifacts(specialist_result):
                                 yield artifact_event
 
                             # ANTI-LEAK
-                            if route in ROUTES_REQUIRING_LINK:
+                            if route_requires_link_only(route):
                                 md_links = _extract_storage_markdown_links(specialist_result)
                                 if md_links:
                                     links_only = "\n".join(f"[{label}]({url})" for label, url in md_links)
@@ -2011,10 +1912,10 @@ async def orchestrate_and_stream(
                                 await execution_logger.finish_agent(
                                     tool_agent_id,
                                     status="completed",
-                                    output_payload={"preview": specialist_result[:2000]},
+                                    output_payload={"preview": specialist_result[:2000], "capability_result": specialist_contract.model_dump()},
                                 )
 
-                        if execution_logger and route in {"session_file", "web_search", "python", "browser", "deep_research"}:
+                        if execution_logger and route in DIRECT_DISPATCH_ROUTES:
                             success_preview = locals().get("specialist_result") or locals().get("research_result") or ""
                             await execution_logger.finish_agent(
                                 tool_agent_id,
@@ -2156,7 +2057,9 @@ async def orchestrate_and_stream(
 
         # Chama o LLM do Supervisor
         try:
-            data = await call_openrouter(
+            data = await _call_openrouter_with_timeout(
+                timeout=_SUPERVISOR_TIMEOUT,
+                label=f"Supervisor ({supervisor_model})",
                 messages=current_messages,
                 model=supervisor_model,
                 max_tokens=4096,
@@ -2201,19 +2104,16 @@ async def orchestrate_and_stream(
                     yield sse("steps", "<step>Aguardando sub-agente corrigir os parâmetros da ferramenta...</step>")
                     continue
 
-                if func_name in TOOL_MAP:
-                    route = TOOL_MAP[func_name]["route"]
-                    is_terminal = TOOL_MAP[func_name]["is_terminal"]
-                elif skills_loader.is_skill(func_name):
-                    route = "dynamic_skill"
-                    is_terminal = False
-                else:
+                resolved = resolve_runtime_target(func_name)
+                if not resolved:
                     current_messages.append({
                         "role": "tool",
                         "tool_call_id": tool["id"],
                         "content": f"Erro: ferramenta '{func_name}' não suportada pelo orquestrador.",
                     })
                     continue
+                route = resolved["route"]
+                route_semantics = get_runtime_semantics(tool_name=func_name, route=route)
                 react_agent_id = None
                 if execution_logger:
                     react_agent_id = await execution_logger.start_agent(
@@ -2221,7 +2121,7 @@ async def orchestrate_and_stream(
                         agent_key=route,
                         agent_name=route,
                         model=registry.get_model(route) or model,
-                        role="specialist" if is_terminal or route == "file_modifier" else "tool",
+                        role=str(route_semantics["agent_role"]),
                         route=route,
                         input_payload={"func_name": func_name, "func_args": func_args, "iteration": iteration},
                     )
@@ -2231,333 +2131,210 @@ async def orchestrate_and_stream(
 
                 if route == "browser" and referenced_session_file:
                     route = "session_file"
-                    is_terminal = False
                     func_name = "read_session_file"
                     func_args = {
                         "session_id": session_id,
-                        "file_name": referenced_session_file.get("name", ""),
+                        "file_name": (
+                            referenced_session_file.get("original_name")
+                            or referenced_session_file.get("file_name")
+                            or ""
+                        ),
                     }
+                    route_semantics = get_runtime_semantics(tool_name=func_name, route=route)
 
                 # ── ROTA: Pesquisa Web Rápida (direto, sem sub-agente, sem QA) ──
-                if route == "session_file":
-                    file_name = func_args.get("file_name", "")
-                    yield sse("steps", f"<step>Consultando anexo da sessão: {file_name[:60]}...</step>")
-                    specialist_result = await execute_tool("read_session_file", func_args, user_id=user_id)
-                    if execution_logger:
-                        await execution_logger.log_event(
-                            execution_id,
-                            execution_agent_id=react_agent_id,
-                            event_type="tool_result",
-                            message="Leitura de anexo concluída",
-                            tool_name="read_session_file",
-                            tool_args=func_args,
-                            tool_result=str(specialist_result)[:2000],
-                        )
-                    async for artifact_event in _emit_file_artifacts(specialist_result):
-                        yield artifact_event
-                    current_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool["id"],
-                        "content": specialist_result,
-                    })
-                    yield sse("steps", "<step>Leitura do anexo concluída — integrando contexto...</step>")
-                    if execution_logger:
-                        await execution_logger.finish_agent(
-                            react_agent_id,
-                            status="failed" if _is_error_result(specialist_result) else "completed",
-                            output_payload={"preview": specialist_result[:2000]},
-                            error_text=specialist_result if _is_error_result(specialist_result) else None,
-                        )
-                    if _is_error_result(specialist_result):
-                        yield sse("error", specialist_result)
-                        return
-
-                elif route == "web_search":
-                    query = func_args.get("query", "")
-                    fetch_url = func_args.get("fetch_url", "")
-                    yield sse("steps", f"<step>Pesquisando: {query[:60]}...</step>")
-
+                if route_semantics["direct_dispatch"]:
                     specialist_result = None
-                    async for event in _exec_with_heartbeat(
-                        execute_tool("web_search", {"query": query}, user_id=user_id),
-                        lambda elapsed: sse("steps", f"<step>Pesquisando na web — {int(elapsed)}s...</step>"),
-                        timeout=_SEARCH_TIMEOUT,
+                    dispatch_info = None
+                    dispatch_result: CapabilityResult | None = None
+                    dispatch_args = dict(func_args)
+                    if route == "deep_research":
+                        dispatch_args["_model"] = registry.get_model("deep_research") or supervisor_model
+                    elif route == "dynamic_skill":
+                        dispatch_args["_func_name"] = func_name
+                    async for event in dispatch_direct_route(
+                        route=route,
+                        func_args=dispatch_args,
+                        user_id=user_id,
+                        mode="react",
+                        step_label=f"Iteração {iteration}",
+                        execute_tool_fn=execute_tool,
+                        exec_with_heartbeat_fn=_exec_with_heartbeat,
+                        exec_browser_with_progress_fn=_exec_browser_with_progress,
+                        emit_file_artifacts_fn=_emit_file_artifacts,
+                        browser_handoff_payload_fn=_browser_handoff_payload,
+                        is_error_result_fn=_is_error_result,
+                        sse_fn=sse,
+                        logger=logger,
+                        search_timeout=_SEARCH_TIMEOUT,
+                        browser_timeout=_BROWSER_TIMEOUT,
+                        skill_timeout=_SKILL_TIMEOUT,
                     ):
-                        if isinstance(event, dict) and "_result" in event:
-                            if event.get("_timeout"):
-                                specialist_result = f"Erro: Timeout de {int(_SEARCH_TIMEOUT)}s na pesquisa web para '{query[:40]}'. O serviço de busca pode estar indisponível."
-                                logger.error(f"[ORCHESTRATOR] web_search timeout (react) query={query[:60]}")
-                            elif event.get("_error"):
-                                specialist_result = f"Erro na pesquisa web: {event['_error']}"
-                                logger.error(f"[ORCHESTRATOR] web_search error (react): {event['_error']}")
+                        if isinstance(event, dict) and "_dispatch" in event:
+                            dispatch_info = event["_dispatch"]
+                            if dispatch_info.get("result"):
+                                dispatch_result = CapabilityResult.model_validate(dispatch_info["result"])
+                                specialist_result = dispatch_result.content
                             else:
-                                specialist_result = event["_result"]
-                        else:
-                            yield event  # heartbeat SSE em tempo real
-                    if specialist_result is None:
-                        specialist_result = "Erro: pesquisa web não retornou resultado."
-                    if execution_logger:
-                        await execution_logger.log_event(
-                            execution_id,
-                            execution_agent_id=react_agent_id,
-                            event_type="tool_result",
-                            message=f"Pesquisa web concluída: {query[:120]}",
-                            tool_name="web_search",
-                            tool_args=func_args,
-                            tool_result=str(specialist_result)[:2000],
-                        )
-
-                    if fetch_url and not _is_error_result(specialist_result):
-                        yield sse("steps", f"<step>Lendo página {fetch_url[:50]}...</step>")
-                        try:
-                            page_content = await asyncio.wait_for(
-                                execute_tool("web_fetch", {"url": fetch_url}, user_id=user_id),
-                                timeout=20.0,
-                            )
-                            specialist_result += f"\n\n---\nConteúdo detalhado de {fetch_url}:\n{page_content}"
-                        except asyncio.TimeoutError:
-                            specialist_result += f"\n\n---\nTimeout ao ler {fetch_url}."
-                            logger.error(f"[ORCHESTRATOR] web_fetch timeout: {fetch_url}")
-                        except Exception as exc:
-                            specialist_result += f"\n\n---\nErro ao ler {fetch_url}: {exc}"
-                    async for artifact_event in _emit_file_artifacts(specialist_result):
-                        yield artifact_event
-
-                    current_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool["id"],
-                        "content": specialist_result,
-                    })
-                    if execution_logger:
-                        await execution_logger.finish_agent(
-                            react_agent_id,
-                            status="failed" if _is_error_result(specialist_result) else "completed",
-                            output_payload={"preview": specialist_result[:2000]},
-                            error_text=specialist_result if _is_error_result(specialist_result) else None,
-                        )
-                    if _is_error_result(specialist_result):
-                        current_messages.append({
-                            "role": "system",
-                            "content": (
-                                "A busca web falhou. NÃO invente dados nem cite resultados não verificados. "
-                                "Explique a limitação ao usuário e peça outra abordagem se necessário."
-                            ),
-                        })
-                    else:
-                        current_messages.append({
-                            "role": "system",
-                            "content": (
-                                "Os dados da busca foram obtidos com sucesso. "
-                                "Sintetize as informações recebidas e responda ao usuário agora de forma clara e objetiva. "
-                                "NÃO chame mais ferramentas de busca."
-                            ),
-                        })
-                    yield sse("steps", "<step>Dados recebidos — elaborando resposta...</step>")
-
-                # ── ROTA: Execução Python (direto, sem sub-agente, sem QA) ──
-                elif route == "python":
-                    yield sse("steps", "<step>Executando código Python...</step>")
-                    try:
-                        specialist_result = await execute_tool("execute_python", func_args, user_id=user_id)
-                    except Exception as exc:
-                        logger.error(f"[ORCHESTRATOR] Erro na execução Python: {exc}")
-                        specialist_result = f"Erro ao executar Python: {exc}"
-                    async for artifact_event in _emit_file_artifacts(specialist_result):
-                        yield artifact_event
-                    if execution_logger:
-                        await execution_logger.log_event(
-                            execution_id,
-                            execution_agent_id=react_agent_id,
-                            event_type="tool_result",
-                            message="Execução Python concluída",
-                            tool_name="execute_python",
-                            tool_args=func_args,
-                            tool_result=str(specialist_result)[:2000],
-                        )
-                    if _is_error_result(specialist_result):
-                        if execution_logger:
-                            await execution_logger.finish_agent(
-                                react_agent_id,
-                                status="failed",
-                                output_payload={"preview": specialist_result[:2000]},
-                                error_text=specialist_result,
-                            )
-                        yield sse("error", specialist_result)
-                        return
-                    current_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool["id"],
-                        "content": specialist_result,
-                    })
-                    yield sse("steps", "<step>Código executado — integrando resultado...</step>")
-                    if execution_logger:
-                        await execution_logger.finish_agent(
-                            react_agent_id,
-                            status="completed" if not _is_error_result(specialist_result) else "failed",
-                            output_payload={"preview": specialist_result[:2000]},
-                            error_text=specialist_result if _is_error_result(specialist_result) else None,
-                        )
-
-                # ── ROTA: Browser (direto, sem sub-agente, sem QA) ──
-                elif route == "browser":
-                    url = func_args.get("url", "")
-                    yield sse("steps", f"<step>Navegando em {url[:40]}... (modo iterativo)</step>")
-                    yield sse("browser_action", json.dumps({
-                        "status": "navigating",
-                        "url": url,
-                        "title": f"Acessando {url[:60]}...",
-                        "actions": [a.get("type", "?") for a in func_args.get("actions", []) if isinstance(a, dict)]
-                    }))
-
-                    specialist_result = None
-                    handoff_exc = None
-                    async for event in _exec_browser_with_progress(func_args, user_id=user_id, timeout=_BROWSER_TIMEOUT):
-                        if isinstance(event, dict) and "_result" in event:
-                            if event.get("_timeout"):
-                                specialist_result = f"Erro: Timeout de {int(_BROWSER_TIMEOUT)}s ao acessar {url}. O site pode estar lento ou inacessível."
-                                logger.error(f"[ORCHESTRATOR] Browser timeout (react loop) em {url}")
-                            elif event.get("_error"):
-                                specialist_result = f"Erro ao executar Browser Agent: {event['_error']}"
-                                logger.error(f"[ORCHESTRATOR] Browser error (react): {event['_error']}")
-                            else:
-                                specialist_result = event["_result"]
-                        elif isinstance(event, dict) and "_handoff" in event:
-                            handoff_exc = event["_handoff"]
+                                specialist_result = dispatch_info.get("specialist_result")
                         else:
                             yield event
-                    if handoff_exc is not None:
-                        payload = _browser_handoff_payload(handoff_exc, url)
-                        yield sse("browser_action", json.dumps(payload["browser_action"]))
-                        yield sse("needs_clarification", json.dumps(payload))
+                    if dispatch_info is None:
+                        specialist_result = specialist_result or f"Erro: route {route} não retornou resultado."
+                        dispatch_info = {
+                            "tool_name": func_name,
+                            "message": f"Execução concluída: {route}",
+                            "error": _is_error_result(specialist_result),
+                        }
+                    if dispatch_result is None:
+                        dispatch_result = CapabilityResult(
+                            capability_id=route,
+                            route=route,
+                            status="failed" if dispatch_info.get("error") else "completed",
+                            output_type="text",
+                            content=str(specialist_result or ""),
+                            handoff_required=bool(dispatch_info.get("handoff")),
+                            error_text=str(specialist_result or "") if dispatch_info.get("error") else None,
+                            metadata={"message": dispatch_info.get("message"), "tool_name": dispatch_info.get("tool_name")},
+                        )
+                    if execution_logger:
+                        await execution_logger.log_event(
+                            execution_id,
+                            execution_agent_id=react_agent_id,
+                            level="warning" if dispatch_info.get("handoff") else "info",
+                            event_type="browser_handoff_requested" if dispatch_info.get("handoff") else "tool_result",
+                            message=dispatch_info.get("message"),
+                            tool_name=dispatch_info.get("tool_name"),
+                            tool_args=func_args,
+                            tool_result=dispatch_result.content[:2000] if dispatch_result.content else None,
+                            raw_payload={
+                                "dispatch_result": dispatch_result.model_dump(),
+                                "handoff_payload": dispatch_info.get("handoff_payload"),
+                            },
+                        )
+                    if dispatch_info.get("handoff"):
                         if execution_logger:
-                            await execution_logger.log_event(
-                                execution_id,
-                                execution_agent_id=react_agent_id,
-                                level="warning",
-                                event_type="browser_handoff_requested",
-                                message=handoff_exc.message,
-                                tool_name="ask_browser",
-                                tool_args=func_args,
-                                raw_payload=payload,
-                            )
                             await execution_logger.finish_agent(
                                 react_agent_id,
                                 status="awaiting_clarification",
-                                output_payload={"preview": handoff_exc.message},
-                                metadata={"resume_token": handoff_exc.resume_token},
+                                output_payload={"preview": dispatch_info.get("message")},
+                                metadata={"resume_token": dispatch_info.get("resume_token")},
                             )
                             await execution_logger.finish_execution(execution_id, status="awaiting_clarification")
                         return
-                    if specialist_result is None:
-                        specialist_result = f"Erro: browser não retornou resultado para {url}."
-                    if execution_logger:
-                        await execution_logger.log_event(
-                            execution_id,
-                            execution_agent_id=react_agent_id,
-                            event_type="tool_result",
-                            message=f"Browser concluído para {url[:120]}",
-                            tool_name="ask_browser",
-                            tool_args=func_args,
-                            tool_result=str(specialist_result)[:2000],
-                        )
-                    async for artifact_event in _emit_file_artifacts(specialist_result):
-                        yield artifact_event
-
-                    if _is_error_result(specialist_result):
-                        yield sse("browser_action", json.dumps({
-                            "status": "error",
-                            "url": url,
-                            "title": specialist_result[:100]
-                        }))
-                        # Fallback: informar supervisor que browser está indisponível
-                        current_messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool["id"],
-                            "content": specialist_result,
-                        })
-                        current_messages.append({
-                            "role": "system",
-                            "content": (
-                                "O navegador falhou ou está indisponível. "
-                                "NÃO tente usar ask_browser novamente. "
-                                "NÃO invente dados da página nem diga que conseguiu acessar algo que falhou. "
-                                "Se precisar de dados da web, use ask_web_search. "
-                                "Caso contrário, responda ao usuário com as informações disponíveis."
-                            ),
-                        })
-                    else:
-                        yield sse("browser_action", json.dumps({
-                            "status": "done",
-                            "url": url,
-                            "title": "Página lida com sucesso"
-                        }))
-                        current_messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool["id"],
-                            "content": specialist_result,
-                        })
-
-                    yield sse("steps", "<step>Conteúdo extraído — analisando dados...</step>")
-                    if execution_logger:
-                        await execution_logger.finish_agent(
-                            react_agent_id,
-                            status="completed" if not _is_error_result(specialist_result) else "failed",
-                            output_payload={"preview": specialist_result[:2000]},
-                            error_text=specialist_result if _is_error_result(specialist_result) else None,
-                        )
-
-                # ── ROTA: Pesquisa Profunda (multi-step, paralelo) ──
-                elif route == "deep_research":
-                    from backend.agents.deep_research import run_deep_research
-
-                    research_query = func_args.get("query", "")
-                    research_context = func_args.get("context", "")
-                    yield sse("steps", f"<step>Iniciando pesquisa profunda: {research_query[:60]}...</step>")
-
-                    research_result = ""
-                    deep_research_model = registry.get_model("deep_research") or supervisor_model
-                    async for event in run_deep_research(research_query, deep_research_model, research_context):
-                        if event.startswith("RESULT:"):
-                            research_result = event[7:]
-                        else:
-                            yield event
-
-                    if not research_result.strip():
-                        research_result = "A pesquisa profunda não retornou resultados. Tente reformular o pedido com mais detalhes."
-                    async for artifact_event in _emit_file_artifacts(research_result):
-                        yield artifact_event
-
                     current_messages.append({
                         "role": "tool",
                         "tool_call_id": tool["id"],
-                        "content": research_result,
+                        "content": specialist_result,
                     })
+                    if route == "session_file":
+                        yield sse("steps", "<step>Leitura do anexo concluída — integrando contexto...</step>")
+                    elif route == "web_search":
+                        if dispatch_info.get("error"):
+                            current_messages.append({
+                                "role": "system",
+                                "content": (
+                                    "A busca web falhou. NÃO invente dados nem cite resultados não verificados. "
+                                    "Explique a limitação ao usuário e peça outra abordagem se necessário."
+                                ),
+                            })
+                        else:
+                            current_messages.append({
+                                "role": "system",
+                                "content": (
+                                    "Os dados da busca foram obtidos com sucesso. "
+                                    "Sintetize as informações recebidas e responda ao usuário agora de forma clara e objetiva. "
+                                    "NÃO chame mais ferramentas de busca."
+                                ),
+                            })
+                        yield sse("steps", "<step>Dados recebidos — elaborando resposta...</step>")
+                    elif route == "python":
+                        yield sse("steps", "<step>Código executado — integrando resultado...</step>")
+                    elif route == "browser":
+                        if dispatch_info.get("error"):
+                            yield sse("browser_action", json.dumps({
+                                "status": "error",
+                                "url": func_args.get("url", ""),
+                                "title": str(specialist_result)[:100],
+                            }))
+                            current_messages.append({
+                                "role": "system",
+                                "content": (
+                                    "O navegador falhou ou está indisponível. "
+                                    "NÃO tente usar ask_browser novamente. "
+                                    "NÃO invente dados da página nem diga que conseguiu acessar algo que falhou. "
+                                    "Se precisar de dados da web, use ask_web_search. "
+                                    "Caso contrário, responda ao usuário com as informações disponíveis."
+                                ),
+                            })
+                        else:
+                            yield sse("browser_action", json.dumps({
+                                "status": "done",
+                                "url": func_args.get("url", ""),
+                                "title": "Página lida com sucesso",
+                            }))
+                        yield sse("steps", "<step>Conteúdo extraído — analisando dados...</step>")
+                    elif route == "deep_research":
+                        if dispatch_info.get("error"):
+                            current_messages.append({
+                                "role": "system",
+                                "content": (
+                                    "A pesquisa profunda falhou ou foi inconclusiva. "
+                                    "NÃO invente fatos nem cite fontes não verificadas. "
+                                    "Explique a limitação ao usuário."
+                                ),
+                            })
+                        yield sse("steps", "<step>Pesquisa profunda concluída — preparando resposta...</step>")
+                    elif route == "dynamic_skill":
+                        if dispatch_info.get("error"):
+                            current_messages.append({
+                                "role": "system",
+                                "content": (
+                                    f"A skill {func_name} falhou. NÃO invente a saída dessa skill. "
+                                    "Explique a limitação ou siga com os dados já disponíveis."
+                                ),
+                            })
+                            yield sse("thought", f"Falha na skill {func_name}.")
+                        else:
+                            yield sse("thought", f"Skill {func_name} executada com sucesso.")
+                            if route_semantics["artifact_terminal"]:
+                                local_rendered = _render_local_design_if_possible(str(specialist_result))
+                                if local_rendered:
+                                    if execution_logger:
+                                        await execution_logger.log_event(
+                                            execution_id,
+                                            execution_agent_id=react_agent_id,
+                                            event_type="terminal_result",
+                                            message="Resultado visual convertido em terminal por static_design_generator",
+                                            raw_payload={"preview": local_rendered[:2000], "artifact_only": True, "forced_terminal": True},
+                                        )
+                                        await execution_logger.finish_agent(
+                                            react_agent_id,
+                                            status="completed",
+                                            output_payload={"preview": local_rendered[:2000], "artifact_only": True, "forced_terminal": True},
+                                        )
+                                        await _log_pipeline_terminated(
+                                            execution_logger,
+                                            execution_id,
+                                            route="static_design_generator",
+                                            artifact_only=True,
+                                        )
+                                    async for artifact_event in _emit_design_artifact(local_rendered):
+                                        yield artifact_event
+                                    return
                     if execution_logger:
-                        await execution_logger.log_event(
-                            execution_id,
-                            execution_agent_id=react_agent_id,
-                            event_type="tool_result",
-                            message=f"Pesquisa profunda concluída: {research_query[:120]}",
-                            tool_name="deep_research",
-                            tool_args=func_args,
-                            tool_result=str(research_result)[:2000],
-                        )
                         await execution_logger.finish_agent(
                             react_agent_id,
-                            status="failed" if _is_error_result(research_result) else "completed",
-                            output_payload={"preview": research_result[:2000]},
-                            error_text=research_result if _is_error_result(research_result) else None,
+                            status="failed" if dispatch_info.get("error") else "completed",
+                            output_payload={"preview": str(specialist_result)[:2000]},
+                            error_text=str(specialist_result) if dispatch_info.get("error") else None,
                         )
-                    if _is_error_result(research_result):
-                        current_messages.append({
-                            "role": "system",
-                            "content": (
-                                "A pesquisa profunda falhou ou foi inconclusiva. "
-                                "NÃO invente fatos nem cite fontes não verificadas. "
-                                "Explique a limitação ao usuário."
-                            ),
-                        })
-                    yield sse("steps", "<step>Pesquisa profunda concluída — preparando resposta...</step>")
+                    if route == "session_file" and dispatch_info.get("error"):
+                        yield sse("error", specialist_result)
+                        return
+                    if route == "python" and dispatch_info.get("error"):
+                        yield sse("error", specialist_result)
+                        return
 
                 # ── ROTA: Spy Pages (SimilarWeb via Apify) ──
                 elif route == "spy_pages":
@@ -2595,90 +2372,9 @@ async def orchestrate_and_stream(
                     })
                     yield sse("steps", "<step>Dados SimilarWeb recebidos — preparando resposta...</step>")
 
-                # ── ROTA: Dynamic Skill (skills de negócio registradas em backend/skills/) ──
-                elif route == "dynamic_skill":
-                    yield sse("steps", f"<step>Executando skill: {func_name}...</step>")
-                    specialist_result = None
-                    async for event in _exec_with_heartbeat(
-                        skills_loader.execute_dynamic_skill(func_name, func_args),
-                        lambda elapsed: sse("steps", f"<step>Executando skill {func_name} — {int(elapsed)}s...</step>"),
-                        timeout=_SKILL_TIMEOUT,
-                    ):
-                        if isinstance(event, dict) and "_result" in event:
-                            if event.get("_timeout"):
-                                specialist_result = f"Erro na skill {func_name}: Timeout de {int(_SKILL_TIMEOUT)}s."
-                                logger.error("[ORCHESTRATOR] dynamic_skill timeout (react) skill=%s", func_name)
-                            elif event.get("_error"):
-                                specialist_result = f"Erro na skill {func_name}: {event['_error']}"
-                                logger.error("[ORCHESTRATOR] dynamic_skill error (react) skill=%s: %s", func_name, event["_error"])
-                            else:
-                                specialist_result = event["_result"]
-                        else:
-                            yield event
-                    if specialist_result is None:
-                        specialist_result = f"Erro na skill {func_name}: resultado vazio."
-                    current_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool["id"],
-                        "content": specialist_result,
-                    })
-                    if execution_logger:
-                        await execution_logger.log_event(
-                            execution_id,
-                            execution_agent_id=react_agent_id,
-                            level="error" if _is_error_result(specialist_result) else "info",
-                            event_type="tool_error" if _is_error_result(specialist_result) else "tool_result",
-                            message=(
-                                f"Skill {func_name} falhou"
-                                if _is_error_result(specialist_result)
-                                else f"Skill {func_name} concluída"
-                            ),
-                            tool_name=func_name,
-                            tool_args=func_args,
-                            tool_result=str(specialist_result)[:2000],
-                        )
-                        await execution_logger.finish_agent(
-                            react_agent_id,
-                            status="failed" if _is_error_result(specialist_result) else "completed",
-                            output_payload={"preview": str(specialist_result)[:2000]},
-                            error_text=str(specialist_result)[:2000] if _is_error_result(specialist_result) else None,
-                        )
-                    if _is_error_result(specialist_result):
-                        current_messages.append({
-                            "role": "system",
-                            "content": (
-                                f"A skill {func_name} falhou. NÃO invente a saída dessa skill. "
-                                "Explique a limitação ou siga com os dados já disponíveis."
-                            ),
-                        })
-                        yield sse("thought", f"Falha na skill {func_name}.")
-                    else:
-                        yield sse("thought", f"Skill {func_name} executada com sucesso.")
-                        if func_name == "static_design_generator":
-                            local_rendered = _render_local_design_if_possible(str(specialist_result))
-                            if local_rendered:
-                                if execution_logger:
-                                    await execution_logger.log_event(
-                                        execution_id,
-                                        execution_agent_id=react_agent_id,
-                                        event_type="terminal_result",
-                                        message="Resultado visual convertido em terminal por static_design_generator",
-                                        raw_payload={"preview": local_rendered[:2000], "artifact_only": True, "forced_terminal": True},
-                                    )
-                                    await execution_logger.finish_agent(
-                                        react_agent_id,
-                                        status="completed",
-                                        output_payload={"preview": local_rendered[:2000], "artifact_only": True, "forced_terminal": True},
-                                    )
-                                yield sse("design_artifact", json.dumps({
-                                    "designs": [
-                                        part.strip() for part in local_rendered.split("<!-- ARCCO_DESIGN_SEPARATOR -->") if part.strip()
-                                    ]
-                                }))
-                                return
 
                 # ── ROTA: Terminal (text_generator, design_generator) ──
-                elif is_terminal:
+                elif route_semantics["terminal_specialist"]:
                     local_rendered_design = None
                     if route == "text_generator":
                         step_message = "Estruturando documento bruto e preparando preview..."
@@ -2687,7 +2383,7 @@ async def orchestrate_and_stream(
                             f"Instruções: {func_args.get('instructions', '')}\n"
                             f"Contexto: {func_args.get('content_brief', '')}"
                         )
-                    elif route == "design_generator":
+                    elif route == "design_generator" and route_semantics["supports_local_design_render"]:
                         step_message = "Construindo design editável e preparando preview..."
                         message_context = _extract_template_payload_from_messages(recent_context) or _extract_template_payload_from_any_messages(current_messages)
                         local_rendered_design = _render_local_design_if_possible(message_context)
@@ -2734,13 +2430,19 @@ async def orchestrate_and_stream(
                             route_tools,
                             user_id=user_id,
                         )
+                    terminal_result = _build_specialist_capability_result(
+                        route=route,
+                        content=str(final_result),
+                        error=_is_error_result(final_result),
+                        metadata={"iteration": iteration, "preview_kind": "terminal_specialist"},
+                    )
                     if execution_logger:
                         await execution_logger.log_event(
                             execution_id,
                             execution_agent_id=react_agent_id,
                             event_type="terminal_result",
                             message=f"Resultado terminal gerado por {route}",
-                            raw_payload={"preview": final_result[:2000]},
+                            raw_payload=terminal_result.model_dump(),
                         )
 
                     if route == "text_generator":
@@ -2753,16 +2455,19 @@ async def orchestrate_and_stream(
                     elif route == "design_generator":
                         design_html = _extract_design_html(final_result)
                         if design_html:
-                            yield sse("design_artifact", json.dumps({
-                                "designs": [
-                                    part.strip() for part in design_html.split("<!-- ARCCO_DESIGN_SEPARATOR -->") if part.strip()
-                                ]
-                            }))
+                            async for artifact_event in _emit_design_artifact(design_html):
+                                yield artifact_event
                             if execution_logger:
                                 await execution_logger.finish_agent(
                                     react_agent_id,
                                     status="completed",
-                                    output_payload={"preview": design_html[:2000], "artifact_only": True},
+                                    output_payload={"preview": design_html[:2000], "artifact_only": True, "capability_result": terminal_result.model_dump()},
+                                )
+                                await _log_pipeline_terminated(
+                                    execution_logger,
+                                    execution_id,
+                                    route=route,
+                                    artifact_only=True,
                                 )
                             return
 
@@ -2773,7 +2478,12 @@ async def orchestrate_and_stream(
                         await execution_logger.finish_agent(
                             react_agent_id,
                             status="completed",
-                            output_payload={"preview": final_result[:2000]},
+                            output_payload={"preview": final_result[:2000], "capability_result": terminal_result.model_dump()},
+                        )
+                        await _log_pipeline_terminated(
+                            execution_logger,
+                            execution_id,
+                            route=route,
                         )
 
                     # Proteção do frontend: encerra o loop do Supervisor
@@ -2818,33 +2528,43 @@ async def orchestrate_and_stream(
                     if not specialist_result.strip():
                         specialist_result = "O especialista não retornou resultado. Tente reformular o pedido."
                         logger.warning(f"[ORCHESTRATOR] Especialista '{route}' retornou vazio")
+                    specialist_contract = _build_specialist_capability_result(
+                        route=route,
+                        content=specialist_result,
+                        error=_is_error_result(specialist_result),
+                        metadata={"iteration": iteration, "preview_kind": "specialist_with_qa"},
+                    )
 
-                    if route == "design_generator":
+                    if route == "design_generator" and route_semantics["supports_local_design_render"]:
                         design_html = _extract_design_html(specialist_result)
                         if design_html:
                             if execution_logger:
                                 await execution_logger.log_event(
                                     execution_id,
-                                    execution_agent_id=tool_agent_id,
+                                    execution_agent_id=react_agent_id,
                                     event_type="terminal_result",
                                     message="Resultado visual convertido em terminal por design_generator",
-                                    raw_payload={"preview": design_html[:2000], "forced_terminal": True, "artifact_only": True},
+                                    raw_payload={
+                                        **specialist_contract.model_dump(),
+                                        "metadata": {
+                                            **specialist_contract.metadata,
+                                            "forced_terminal": True,
+                                            "artifact_only": True,
+                                        },
+                                    },
                                 )
                                 await execution_logger.finish_agent(
-                                    tool_agent_id,
+                                    react_agent_id,
                                     status="completed",
-                                    output_payload={"preview": design_html[:2000], "forced_terminal": True, "artifact_only": True},
+                                    output_payload={"preview": design_html[:2000], "forced_terminal": True, "artifact_only": True, "capability_result": specialist_contract.model_dump()},
                                 )
 
-                            yield sse("design_artifact", json.dumps({
-                                "designs": [
-                                    part.strip() for part in design_html.split("<!-- ARCCO_DESIGN_SEPARATOR -->") if part.strip()
-                                ]
-                            }))
+                            async for artifact_event in _emit_design_artifact(design_html):
+                                yield artifact_event
                             return
 
                     # ANTI-LEAK: Para rotas de arquivo, enviar APENAS o link pro Supervisor
-                    if route in ROUTES_REQUIRING_LINK:
+                    if route_requires_link_only(route):
                         async for artifact_event in _emit_file_artifacts(specialist_result):
                             yield artifact_event
                         md_links = _extract_storage_markdown_links(specialist_result)
@@ -2864,12 +2584,12 @@ async def orchestrate_and_stream(
                             execution_agent_id=react_agent_id,
                             event_type="specialist_result",
                             message=f"Especialista {route} concluído",
-                            raw_payload={"preview": specialist_result[:2000]},
+                            raw_payload=specialist_contract.model_dump(),
                         )
                         await execution_logger.finish_agent(
                             react_agent_id,
                             status="completed",
-                            output_payload={"preview": specialist_result[:2000]},
+                            output_payload={"preview": specialist_result[:2000], "capability_result": specialist_contract.model_dump()},
                         )
 
                     yield sse("steps", "<step>Integrando resultado do especialista...</step>")

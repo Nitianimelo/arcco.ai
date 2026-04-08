@@ -134,7 +134,7 @@ async def _web_fetch(url: str) -> str:
 
 async def _ask_browser(args: dict, event_callback=None) -> str:
     """
-    Navega remotamente via Browserbase + Playwright (CDP).
+    Navega remotamente via Steel + Playwright (CDP).
     Delega toda a lógica para browser_service.execute_browserbase_task.
     """
     from backend.services.browser_service import BrowserHandoffRequired, execute_browserbase_task

@@ -116,7 +116,9 @@ class ExecutionLogService:
             "finished_at": _now_iso(),
         }
         if metadata is not None:
-            payload["metadata"] = _safe_json(metadata)
+            merged_metadata = dict(await self.get_execution_metadata(execution_id))
+            merged_metadata.update(metadata)
+            payload["metadata"] = _safe_json(merged_metadata)
         if total_tokens:
             payload["total_tokens"] = total_tokens
         if total_cost_usd:
@@ -125,6 +127,24 @@ class ExecutionLogService:
             await asyncio.to_thread(get_supabase_client().update, "agent_executions", payload, {"id": execution_id})
         except Exception as exc:
             logger.warning("[EXEC-LOG] finish_execution failed: %s", exc)
+
+    async def get_execution_metadata(self, execution_id: str | None) -> dict[str, Any]:
+        if not execution_id:
+            return {}
+        try:
+            rows = await asyncio.to_thread(
+                get_supabase_client().query,
+                "agent_executions",
+                "metadata",
+                {"id": execution_id},
+                "created_at.desc",
+                1,
+            )
+            if rows and isinstance(rows[0].get("metadata"), dict):
+                return rows[0]["metadata"]
+        except Exception as exc:
+            logger.warning("[EXEC-LOG] get_execution_metadata failed: %s", exc)
+        return {}
 
     async def start_agent(
         self,

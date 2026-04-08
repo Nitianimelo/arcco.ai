@@ -27,8 +27,8 @@ PyMuPDF>=1.24.0
 python-multipart>=0.0.6
 PyPDF2>=3.0.0
 
-# Browser Agent (Browserbase + Playwright via CDP)
-browserbase>=1.0.0
+# Browser Agent (Steel + Playwright via CDP)
+steel-sdk>=0.1.0
 playwright>=1.44.0
 
 # Sandbox Execution

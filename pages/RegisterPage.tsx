@@ -304,7 +304,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegister, onBackTo
   );
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden" style={{ backgroundColor: 'var(--bg-base)' }}>
+    <div className="min-h-screen flex items-center justify-center p-4 max-sm:p-3 relative overflow-hidden" style={{ backgroundColor: 'var(--bg-base)' }}>
       <DottedSurface />
       <div className="pointer-events-none absolute inset-0 z-0 bg-[radial-gradient(circle_at_top,rgba(99,102,241,0.14),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(139,92,246,0.10),transparent_32%)]" />
 
@@ -321,23 +321,23 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegister, onBackTo
       />
 
       {/* Card */}
-      <div className="relative z-10 w-full max-w-[28rem]">
+      <div className="relative z-10 w-full max-w-[28rem] max-sm:max-w-[15.5rem]">
         {/* Logo */}
-        <div className="text-center mb-7">
+        <div className="text-center mb-7 max-sm:mb-5">
           <img
             src="https://qscezcbpwvnkqoevulbw.supabase.co/storage/v1/object/public/Chipro%20calculadora/arcco%20(1).png"
             alt="Arcco"
-            className="h-[92px] w-auto object-contain mx-auto drop-shadow-[0_0_40px_rgba(99,102,241,0.3)]"
+            className="h-[92px] max-sm:h-[72px] w-auto object-contain mx-auto drop-shadow-[0_0_40px_rgba(99,102,241,0.3)]"
           />
         </div>
 
         {/* Card */}
-        <div className="bg-[#0F0F0F]/90 border border-[#262626] rounded-2xl p-7 shadow-2xl shadow-black/40 backdrop-blur-xl">
+        <div className="bg-[#0F0F0F]/90 border border-[#262626] rounded-2xl p-7 max-sm:p-5 shadow-2xl shadow-black/40 backdrop-blur-xl">
           {/* Back Button */}
           {step === 'form' && (
             <button
               onClick={onBackToLogin}
-              className="flex items-center gap-2 text-sm text-neutral-500 hover:text-white mb-6 transition-colors"
+              className="flex items-center gap-2 text-sm max-sm:text-xs text-neutral-500 hover:text-white mb-6 max-sm:mb-4 transition-colors"
             >
               <ArrowLeft size={16} />
               Voltar ao login
@@ -346,9 +346,9 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegister, onBackTo
 
           {/* Title */}
           {step === 'form' && (
-            <div className="mb-6">
-              <h2 className="text-2xl font-bold text-white mb-1">Criar conta</h2>
-              <p className="text-neutral-400 text-sm">
+            <div className="mb-6 max-sm:mb-4">
+              <h2 className="text-2xl max-sm:text-xl font-bold text-white mb-1">Criar conta</h2>
+              <p className="text-neutral-400 text-sm max-sm:text-xs">
                 Preencha seus dados para comecar
               </p>
             </div>
@@ -360,8 +360,8 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegister, onBackTo
         </div>
 
         {/* Footer */}
-        <div className="mt-8 text-center">
-          <p className="text-xs text-neutral-600 leading-relaxed max-w-sm mx-auto">
+        <div className="mt-8 max-sm:mt-5 text-center">
+          <p className="text-xs max-sm:text-[11px] text-neutral-600 leading-relaxed max-w-sm mx-auto">
             Ao criar sua conta, voce concorda com nossos Termos de Uso e Politica de Privacidade.
           </p>
         </div>

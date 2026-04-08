@@ -121,7 +121,7 @@ def _write_prompt_to_source(agent_id: str, new_prompt: str) -> None:
     if not constant:
         return  # Agente sem constante mapeada — nada a fazer
 
-    content = _PROMPTS_FILE.read_text(encoding="utf-8")
+    content = _PROMPTS_FILE.read_text(encoding="utf-8-sig")
 
     # Garante que o conteúdo não contenha triple-quotes que quebrariam o Python
     safe_prompt = new_prompt.replace('"""', "'''")
@@ -158,7 +158,7 @@ def _write_tools_to_source(agent_id: str, new_tools: list) -> None:
     if not constant:
         return  # Agente não tem tools no tools.py — silencioso
 
-    content = _TOOLS_FILE.read_text(encoding="utf-8")
+    content = _TOOLS_FILE.read_text(encoding="utf-8-sig")
     lines = content.split("\n")
 
     tree = ast.parse(content)
@@ -285,8 +285,11 @@ async def update_agent(agent_id: str, req: "AgentUpdateRequest"):
 
     if req.model is not None:
         try:
-            save_agent_model_override(agent_id, req.model)
-            update_data["model"] = req.model
+            normalized_model = req.model.strip()
+            if not normalized_model:
+                raise ValueError("model vazio")
+            save_agent_model_override(agent_id, normalized_model)
+            update_data["model"] = normalized_model
             update_data["model_source"] = "supabase"
         except Exception as e:
             errors.append(f"model_supabase: {e}")

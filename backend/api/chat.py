@@ -38,6 +38,7 @@ from backend.services.session_gc_service import cleanup_expired_sessions
 from backend.services.session_file_service import get_session_inventory, touch_session
 from backend.services.chat_models import list_chat_models
 from backend.services.execution_log_service import ExecutionLogService
+from backend.agents.capabilities import ARCHITECTURE_VERSION, get_capability_summary
 from backend.services.memory_service import get_user_memory, update_user_memory
 from backend.services.project_rag_service import search_project_context
 
@@ -609,7 +610,15 @@ async def chat_endpoint(request: Request):
                 request_text=user_message,
                 request_source=mode,
                 supervisor_agent="chat",
-                metadata={"model": model, "fast_model": fast_model, "mode": mode},
+                metadata={
+                    "model": model,
+                    "fast_model": fast_model,
+                    "mode": mode,
+                    "execution_mode": "normal" if mode == "normal" else "agent",
+                    "architecture_version": ARCHITECTURE_VERSION,
+                    "state": "running",
+                    "capability_summary": get_capability_summary(),
+                },
                 model_used=model,
             )
 
@@ -715,16 +724,45 @@ async def chat_endpoint(request: Request):
                     total_tokens=_total_t,
                     estimated_cost_usd=_cost_usd,
                 )
+            final_response = "".join(collected_content)
+            final_metadata = {
+                "response_length": len(final_response),
+                "state": "awaiting_clarification" if awaiting_clarification else ("failed" if stream_failed else "completed"),
+                "execution_mode": "normal" if mode == "normal" else "agent",
+                "runtime_summary": {
+                    "model": model,
+                    "fast_model": fast_model,
+                    "mode": mode,
+                    "session_id": session_id,
+                    "conversation_id": conv_id,
+                    "browser_resume_token_present": bool(browser_resume_token),
+                },
+                "task_summary": {
+                    "stream_failed": stream_failed,
+                    "awaiting_clarification": awaiting_clarification,
+                    "collected_chunks_length": len(final_response),
+                    "total_tokens": _total_t,
+                    "total_cost_usd": round(_cost_usd, 6),
+                },
+                "final_response_preview": final_response[:1500],
+            }
+            await execution_logger.log_event(
+                execution_id,
+                level="error" if stream_failed else "info",
+                event_type="execution_summary",
+                message=final_error or "Execução concluída",
+                raw_payload=final_metadata,
+            )
             await execution_logger.finish_execution(
                 execution_id,
                 status="awaiting_clarification" if awaiting_clarification else ("failed" if stream_failed else "completed"),
                 final_error=final_error,
-                metadata={"response_length": len("".join(collected_content))},
+                metadata=final_metadata,
                 total_tokens=_total_t,
                 total_cost_usd=_cost_usd,
             )
             if conv_id and user_id and (user_message or collected_content):
-                full_response = "".join(collected_content)
+                full_response = final_response
                 try:
                     await _save_conversation_and_update_memory(
                         conv_id=conv_id,

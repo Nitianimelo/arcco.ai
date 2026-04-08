@@ -10,6 +10,7 @@ export type ChatStreamEventType =
     | 'thought'
     | 'browser_action'
     | 'text_doc'
+    | 'design_artifact'
     | 'file_artifact'
     | 'clarification'
     | 'spy_pages_result'

@@ -1,4 +1,4 @@
-﻿"""
+"""
 DefiniÃ§Ãµes de ferramentas por agente especialista.
 
 Isolamento estrito: cada especialista tem acesso APENAS Ã s suas ferramentas.
@@ -540,7 +540,7 @@ SUPERVISOR_TOOLS = [
         "function": {
             "name": "ask_browser",
             "description": (
-                "Abre um navegador remoto no Browserbase para acessar, interagir e extrair conteúdo de sites dinâmicos. "
+                "Abre um navegador remoto na Steel para acessar, interagir e extrair conteúdo de sites dinâmicos. "
                 "Use quando o site exige JavaScript, SPA, login, cliques, scroll, formulários ou leitura de conteúdo que ask_web_search não consegue.\n\n"
                 "O comportamento agora é ITERATIVO: o backend observa o estado atual da página, decide UMA micro-ação, executa, observa de novo e repete até concluir o objetivo. "
                 "Não trate o campo 'actions' como roteiro cego obrigatório.\n\n"

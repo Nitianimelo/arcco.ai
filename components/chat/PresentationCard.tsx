@@ -27,14 +27,19 @@ function countSlides(html: string): number {
 
 /** For presentations: show only the first slide at 16:9, hide nav controls */
 function normalizePresentationThumbnail(html: string): string {
-  const base = normalizeDesignHtml(html);
+  const preset = inferCanvasPreset(html);
+  const base = normalizeDesignHtml(html, preset);
   const overrideCSS = `<style id="arcco-pres-thumb">
     /* Hide all slides, then show only the first */
     .slide, .slide-container { display: none !important; }
     .slide:first-of-type, .slide-container:first-of-type {
       display: flex !important;
       opacity: 1 !important;
-      min-height: 100vh !important;
+      width: 100% !important;
+      height: 100% !important;
+      min-height: 0 !important;
+      max-width: 100% !important;
+      max-height: 100% !important;
     }
     /* Hide navigation controls */
     .nav-btn, .slide-nav, .slide-counter, .slide-navigation,
@@ -84,9 +89,7 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
   }
 
   // Presentation: 16:9 card. Single design: square card.
-  const aspectClass = isPresentation
-    ? 'aspect-video'
-    : presetSpec.width === presetSpec.height
+  const aspectClass = presetSpec.width === presetSpec.height
       ? 'aspect-square'
       : presetSpec.width > presetSpec.height
         ? 'aspect-video'
@@ -123,7 +126,11 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
       <div className="mt-2 min-w-0">
         <p className="text-xs text-neutral-200 truncate">{title}</p>
         <p className="text-[10px] text-neutral-500">
-          {isPresentation ? `Apresentação com ${slideCount} slides` : presetSpec.label}
+          {isPresentation
+            ? (preset === 'instagram-square' || preset === 'instagram-portrait'
+                ? `Carrossel com ${slideCount} slides`
+                : `Apresentação com ${slideCount} slides`)
+            : presetSpec.label}
         </p>
       </div>
     </div>
