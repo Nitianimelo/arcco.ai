@@ -87,11 +87,9 @@ _TOOLS_FILE   = Path(__file__).parent.parent / "agents" / "tools.py"
 # Mapeamento: agent_id → nome da constante Python em prompts.py
 _PROMPT_CONSTANTS: dict[str, str] = {
     "chat":           "CHAT_SYSTEM_PROMPT",
-    "web_search":     "WEB_SEARCH_SYSTEM_PROMPT",
     "text_generator": "TEXT_GENERATOR_SYSTEM_PROMPT",
     "design_generator": "DESIGN_GENERATOR_SYSTEM_PROMPT",
     "file_modifier":  "FILE_MODIFIER_SYSTEM_PROMPT",
-    "qa":             "QA_SYSTEM_PROMPT",
     "planner":        "PLANNER_SYSTEM_PROMPT",
 }
 
@@ -99,7 +97,6 @@ _PROMPT_CONSTANTS: dict[str, str] = {
 # Apenas agentes que têm ferramentas definidas como lista no tools.py
 _TOOLS_CONSTANTS: dict[str, str] = {
     "chat":           "SUPERVISOR_TOOLS",
-    "web_search":     "WEB_SEARCH_TOOLS",
     "text_generator": "TEXT_GENERATOR_TOOLS",
     "design_generator": "DESIGN_GENERATOR_TOOLS",
     "file_modifier":  "FILE_MODIFIER_TOOLS",
@@ -152,7 +149,7 @@ def _write_tools_to_source(agent_id: str, new_tools: list) -> None:
       capturar conteúdo demais como poderia acontecer com regex
     - O novo valor é serializado como JSON (válido como Python literal)
 
-    Agentes sem tools mapeados (chat, design, dev, qa) são silenciosamente ignorados.
+    Agentes sem tools mapeados são silenciosamente ignorados.
     """
     constant = _TOOLS_CONSTANTS.get(agent_id)
     if not constant:
@@ -323,25 +320,21 @@ async def reset_agent(agent_id: str):
     """
     from backend.agents.prompts import (
         CHAT_SYSTEM_PROMPT,
-        WEB_SEARCH_SYSTEM_PROMPT, TEXT_GENERATOR_SYSTEM_PROMPT, DESIGN_GENERATOR_SYSTEM_PROMPT,
-        FILE_MODIFIER_SYSTEM_PROMPT, QA_SYSTEM_PROMPT, PLANNER_SYSTEM_PROMPT,
+        TEXT_GENERATOR_SYSTEM_PROMPT, DESIGN_GENERATOR_SYSTEM_PROMPT,
+        FILE_MODIFIER_SYSTEM_PROMPT, PLANNER_SYSTEM_PROMPT,
     )
-    from backend.agents.tools import SUPERVISOR_TOOLS, WEB_SEARCH_TOOLS, TEXT_GENERATOR_TOOLS, DESIGN_GENERATOR_TOOLS, FILE_MODIFIER_TOOLS
+    from backend.agents.tools import SUPERVISOR_TOOLS, TEXT_GENERATOR_TOOLS, DESIGN_GENERATOR_TOOLS, FILE_MODIFIER_TOOLS
     from backend.core.config import get_config
 
     default_model = get_config().openrouter_model
 
     DEFAULTS: dict[str, dict] = {
         "chat":           {"system_prompt": CHAT_SYSTEM_PROMPT,           "model": default_model, "tools": SUPERVISOR_TOOLS},
-        "web_search":     {"system_prompt": WEB_SEARCH_SYSTEM_PROMPT,     "model": default_model, "tools": WEB_SEARCH_TOOLS},
         "text_generator": {"system_prompt": TEXT_GENERATOR_SYSTEM_PROMPT, "model": default_model, "tools": TEXT_GENERATOR_TOOLS},
         "design_generator": {"system_prompt": DESIGN_GENERATOR_SYSTEM_PROMPT, "model": default_model, "tools": DESIGN_GENERATOR_TOOLS},
         "file_modifier":  {"system_prompt": FILE_MODIFIER_SYSTEM_PROMPT,  "model": default_model, "tools": FILE_MODIFIER_TOOLS},
-        "qa":             {"system_prompt": QA_SYSTEM_PROMPT,             "model": default_model, "tools": []},
         "planner":        {"system_prompt": PLANNER_SYSTEM_PROMPT,        "model": "openai/gpt-4o-mini", "tools": []},
         "deep_research":  {"system_prompt": "",                           "model": default_model, "tools": []},
-        "memory":         {"system_prompt": "",                           "model": "openai/gpt-4o-mini", "tools": []},
-        "intent_router":  {"system_prompt": "",                           "model": "openai/gpt-4o-mini", "tools": []},
     }
 
     if agent_id not in DEFAULTS:

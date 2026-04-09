@@ -8,12 +8,13 @@ import logging
 
 from fastapi import APIRouter
 
-from backend.agents import registry
+from backend.core.config import get_config
 from backend.models.schemas import RouteRequest, RouteResponse
 from backend.core.llm import call_openrouter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_ROUTER_MODEL = "openai/gpt-4o-mini"
 
 # Padrões de keywords para classificação zero-token
 KEYWORD_PATTERNS = {
@@ -47,6 +48,7 @@ def match_keywords(message: str) -> str | None:
 async def classify_with_llm(message: str) -> str:
     """Classificação por LLM (fallback)."""
     try:
+        config = get_config()
         data = await call_openrouter(
             messages=[{
                 "role": "user",
@@ -57,7 +59,7 @@ async def classify_with_llm(message: str) -> str:
                     'Return ONLY the intent.'
                 ),
             }],
-            model=registry.get_model("intent_router"),
+            model=config.openrouter_model or _ROUTER_MODEL,
             max_tokens=20,
         )
         result = data["choices"][0]["message"]["content"]

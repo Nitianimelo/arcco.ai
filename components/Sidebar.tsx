@@ -2,8 +2,6 @@ import React, { useState, useEffect } from 'react';
 import {
   Wrench,
   MessageSquare,
-  HardDrive,
-  Monitor,
   Settings,
   ChevronDown,
   ChevronRight,
@@ -262,10 +260,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       setToolsOpen(false);
     }
   }, [collapsed]);
-
-  const appTools: NavItem[] = [
-    { id: 'ARCCO_COMPUTER', label: 'Arcco Computer', icon: Monitor },
-  ];
 
   const isToolsActive = currentView === 'TOOLS_MY' || currentView === 'TOOLS_STORE';
 
@@ -536,21 +530,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      {/* 4. Apps */}
       <div className={`pt-2 pb-1 border-t border-[#262629] shrink-0 ${effectiveCollapsed ? 'px-1' : 'px-2'}`}>
-        <SectionHeader collapsed={effectiveCollapsed} label="APPS" />
-        {appTools.map((item) => (
-          <NavButton
-            key={item.id}
-            item={item}
-            isActive={currentView === item.id}
-            userPlan={userPlan}
-            collapsed={effectiveCollapsed}
-            onNavigate={handleNavigateWithClose}
-            onTriggerUpsell={onTriggerUpsell}
-          />
-        ))}
-
         <NavButton
           item={{ id: 'SETTINGS', label: 'Configurações', icon: Settings }}
           isActive={false}

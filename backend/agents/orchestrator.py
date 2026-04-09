@@ -6,7 +6,7 @@ Fluxo de execução:
   2. O Supervisor decide se responde diretamente ou se usa Ferramentas (Sub-Agentes).
   3. Ao usar uma Ferramenta Não-Terminal (Busca, Arquivos):
       - O sub-agente executa a tarefa.
-      - O Agente QA revisa (máx 2 tentativas) — apenas para rotas de arquivo.
+      - Guardrails internos validam consistência e links obrigatórios.
       - O resultado volta para o Supervisor redigir a resposta final amigável.
   4. Ao usar uma Ferramenta Terminal (Design, Text Generator):
       - O sub-agente executa a tarefa.
@@ -41,7 +41,7 @@ from backend.agents.workflow_state import (
     update_workflow_stages,
 )
 from backend.agents.executor import execute_tool
-from backend.agents.tools import SUPERVISOR_TOOLS, COMPUTER_TOOLS, SPY_PAGES_TOOLS
+from backend.agents.tools import SUPERVISOR_TOOLS, SPY_PAGES_TOOLS
 from backend.services.browser_service import BrowserHandoffRequired, get_paused_browser_session
 from backend.skills import loader as skills_loader
 
@@ -55,7 +55,6 @@ _SUPERVISOR_TIMEOUT = 60.0
 _SKILL_TIMEOUT = 60.0
 _SPECIALIST_TIMEOUT = 90.0
 _TERMINAL_TIMEOUT = 90.0
-_QA_TIMEOUT = 20.0
 
 
 async def _exec_with_heartbeat(coro, heartbeat_fn, timeout: float, interval: float = _HEARTBEAT_INTERVAL):
@@ -1151,38 +1150,7 @@ def _build_session_inventory_message(session_id: str | None) -> str | None:
         return None
 
 
-# ── Agente QA ────────────────────────────────────────────────────────────────
-
-async def _qa_review(
-    user_intent: str, specialist_response: str, route: str, model: str
-) -> dict:
-    """Revisa a resposta do especialista. Retorna {approved, issues, correction_instruction}."""
-    try:
-        review_prompt = (
-            f"Pedido original: {user_intent}\n"
-            f"Tipo esperado: {route}\n\n"
-            f"Resposta do especialista:\n{specialist_response[:3000]}"
-        )
-        data = await _call_openrouter_with_timeout(
-            timeout=_QA_TIMEOUT,
-            label=f"QA ({route})",
-            messages=[
-                {"role": "system", "content": registry.get_prompt("qa")},
-                {"role": "user", "content": review_prompt},
-            ],
-            model=registry.get_model("qa") or model,
-            max_tokens=300,
-            temperature=0.1,
-        )
-        raw = data["choices"][0]["message"]["content"].strip()
-        raw = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
-        return json.loads(raw)
-    except Exception as e:
-        logger.warning(f"[QA] Erro na revisão: {e}")
-        return {"approved": True, "issues": []}  # Fail-open
-
-
-# ── Validação Anti-Alucinação ────────────────────────────────────────────────
+# ── Guardrails de Saída ──────────────────────────────────────────────────────
 
 _URL_PATTERN = re.compile(r'https?://[^\s\)\]"\'>]+', re.IGNORECASE)
 _DOC_TAG_RE = re.compile(r'<doc\s+title="([^"]+)">([\s\S]*?)</doc>', re.DOTALL)
@@ -1334,7 +1302,7 @@ async def _run_terminal_one_shot(
     return result
 
 
-async def _run_specialist_with_qa(
+async def _run_guarded_specialist(
     route: str,
     user_intent: str,
     temp_messages: list,
@@ -1343,58 +1311,35 @@ async def _run_specialist_with_qa(
     user_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """
-    Executa o Especialista + QA + Validação Anti-Alucinação.
+    Executa o especialista com guardrails internos de consistência.
     Yields SSE steps para a UI, e no final yielda 'RESULT:' com a resposta validada.
     """
-    MAX_QA_RETRIES = 2
     specialist_response = ""
-    current_messages = list(temp_messages)
     tool_history: list[dict[str, str]] = []
+    yield sse("steps", f"<step>{custom_step_msg}</step>")
 
-    for attempt in range(MAX_QA_RETRIES + 1):
-        if attempt == 0:
-            yield sse("steps", f"<step>{custom_step_msg}</step>")
-        else:
-            yield sse("steps", "<step>Aperfeiçoando qualidade do resultado...</step>")
-
-        thought_log: list[str] = []
-        try:
-            specialist_response = await _run_specialist_with_tools(
-                current_messages,
-                registry.get_model(route) or model,
-                registry.get_prompt(route),
-                registry.get_tools(route),
-                user_id=user_id,
-                thought_log=thought_log,
-                tool_history=tool_history,
-            )
-        except Exception as e:
-            logger.error(f"[SPECIALIST] Erro na execução do especialista '{route}': {e}")
-            yield f"RESULT:Erro ao processar especialista: {e}"
-            return
-
-        for thought in thought_log:
-            yield sse("thought", thought)
-
-        specialist_response = _validate_specialist_response(
-            specialist_response, route, tool_history
+    thought_log: list[str] = []
+    try:
+        specialist_response = await _run_specialist_with_tools(
+            list(temp_messages),
+            registry.get_model(route) or model,
+            registry.get_prompt(route),
+            registry.get_tools(route),
+            user_id=user_id,
+            thought_log=thought_log,
+            tool_history=tool_history,
         )
+    except Exception as e:
+        logger.error(f"[SPECIALIST] Erro na execução do especialista '{route}': {e}")
+        yield f"RESULT:Erro ao processar especialista: {e}"
+        return
 
-        # QA Review
-        yield sse("steps", "<step>Validando qualidade do resultado...</step>")
-        qa_result = await _qa_review(user_intent, specialist_response, route, model)
+    for thought in thought_log:
+        yield sse("thought", thought)
 
-        if qa_result.get("approved", True):
-            break
-
-        if attempt < MAX_QA_RETRIES:
-            correction = qa_result.get("correction_instruction", "Corrija a resposta.")
-            current_messages = current_messages + [
-                {"role": "assistant", "content": specialist_response},
-                {"role": "user", "content": f"[QA Feedback] {correction}"},
-            ]
-        else:
-            yield sse("steps", "<step>Preparando melhor resultado disponível...</step>")
+    specialist_response = _validate_specialist_response(
+        specialist_response, route, tool_history
+    )
 
     yield f"RESULT:{specialist_response}"
 
@@ -1407,7 +1352,6 @@ async def orchestrate_and_stream(
     session_id: str | None = None,
     user_id: str | None = None,
     browser_resume_token: str | None = None,
-    computer_enabled: bool = False,
     spy_pages_enabled: bool = False,
     execution_id: str | None = None,
     execution_logger = None,
@@ -1452,16 +1396,9 @@ async def orchestrate_and_stream(
     # Skills são filtradas por relevância ao intent do usuário — evita injetar 70 skills desnecessárias
     active_tools = (
         SUPERVISOR_TOOLS
-        + (COMPUTER_TOOLS if computer_enabled else [])
         + (SPY_PAGES_TOOLS if spy_pages_enabled else [])
         + skills_loader.get_skill_tool_definitions(user_intent)
     )
-    if computer_enabled:
-        supervisor_prompt += (
-            "\n\nO usuário ativou o Arcco Computer. Você tem acesso a ferramentas para listar, ler e gerenciar "
-            "os arquivos pessoais do usuário. Use list_computer_files para ver os arquivos, read_computer_file "
-            "para ler conteúdo, e manage_computer_file para mover, renomear, criar pastas ou salvar novos arquivos."
-        )
     if spy_pages_enabled:
         supervisor_prompt += (
             "\n\nO usuário ativou o Spy Pages. Use a ferramenta analyze_web_pages para analisar tráfego, "
@@ -2386,7 +2323,7 @@ async def orchestrate_and_stream(
                             )
                             temp_msgs = recent_context + [{"role": "user", "content": content}]
                             specialist_result = ""
-                            async for event in _run_specialist_with_qa(
+                            async for event in _run_guarded_specialist(
                                 route,
                                 user_intent,
                                 temp_msgs,
@@ -2403,7 +2340,7 @@ async def orchestrate_and_stream(
                                     route=route,
                                     content=specialist_result,
                                     error=_is_error_result(specialist_result),
-                                    metadata={"step": step.step, "preview_kind": "specialist_with_qa"},
+                                    metadata={"step": step.step, "preview_kind": "guarded_specialist"},
                                 )
                                 await execution_logger.log_event(
                                     execution_id,
@@ -2733,7 +2670,7 @@ async def orchestrate_and_stream(
                     }
                     route_semantics = get_runtime_semantics(tool_name=func_name, route=route)
 
-                # ── ROTA: Pesquisa Web Rápida (direto, sem sub-agente, sem QA) ──
+                # ── ROTA: Pesquisa Web Rápida (direto, sem sub-agente extra) ──
                 if route_semantics["direct_dispatch"]:
                     specialist_result = None
                     dispatch_info = None
@@ -3235,7 +3172,7 @@ async def orchestrate_and_stream(
                     # Proteção do frontend: encerra o loop do Supervisor
                     return
 
-                # ── ROTA: Não-terminal com QA (file_modifier) ──
+                # ── ROTA: Não-terminal com guardrails (file_modifier) ──
                 else:
                     if route == "file_modifier":
                         step_message = "Lendo estrutura do arquivo original e aplicando modificações..."
@@ -3258,7 +3195,7 @@ async def orchestrate_and_stream(
                     temp_msgs = recent_context + [{"role": "user", "content": content}]
 
                     specialist_result = ""
-                    async for event in _run_specialist_with_qa(
+                    async for event in _run_guarded_specialist(
                         route,
                         user_intent,
                         temp_msgs,
@@ -3278,7 +3215,7 @@ async def orchestrate_and_stream(
                         route=route,
                         content=specialist_result,
                         error=_is_error_result(specialist_result),
-                        metadata={"iteration": iteration, "preview_kind": "specialist_with_qa"},
+                        metadata={"iteration": iteration, "preview_kind": "guarded_specialist"},
                     )
 
                     if route == "design_generator" and route_semantics["supports_local_design_render"]:

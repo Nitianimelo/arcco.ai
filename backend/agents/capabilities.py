@@ -37,7 +37,7 @@ class CapabilityDefinition:
     tool_name: str | None
     owning_agent: str
     is_terminal: bool
-    requires_qa: bool
+    requires_guardrails: bool
     supports_handoff: bool
     output_type: OutputType
     allowed_in_planner: bool = True
@@ -45,7 +45,7 @@ class CapabilityDefinition:
     notes: str = ""
 
 
-ARCHITECTURE_VERSION = "capabilities-v1"
+ARCHITECTURE_VERSION = "capabilities-v2"
 
 
 _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
@@ -57,7 +57,7 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
         tool_name="read_session_file",
         owning_agent="chat",
         is_terminal=False,
-        requires_qa=False,
+        requires_guardrails=False,
         supports_handoff=False,
         output_type="session_file_result",
         notes="Le o texto extraido de anexos da sessao atual.",
@@ -70,7 +70,7 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
         tool_name="ask_text_generator",
         owning_agent="text_generator",
         is_terminal=True,
-        requires_qa=True,
+        requires_guardrails=True,
         supports_handoff=False,
         output_type="file_artifact",
         notes="Especialista terminal para documentos textuais.",
@@ -83,7 +83,7 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
         tool_name="ask_design_generator",
         owning_agent="design_generator",
         is_terminal=True,
-        requires_qa=True,
+        requires_guardrails=True,
         supports_handoff=False,
         output_type="design_artifact",
         notes="Especialista terminal para HTML visual.",
@@ -96,7 +96,7 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
         tool_name="ask_file_modifier",
         owning_agent="file_modifier",
         is_terminal=False,
-        requires_qa=True,
+        requires_guardrails=True,
         supports_handoff=False,
         output_type="file_artifact",
         notes="Retorna URL de arquivo modificado; hoje o supervisor ainda consolida a resposta final.",
@@ -109,7 +109,7 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
         tool_name="ask_browser",
         owning_agent="chat",
         is_terminal=False,
-        requires_qa=False,
+        requires_guardrails=False,
         supports_handoff=True,
         output_type="browser_result",
         notes="Suporta pausa e retomada com handoff humano.",
@@ -120,9 +120,9 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
         kind="tool",
         route="web_search",
         tool_name="ask_web_search",
-        owning_agent="web_search",
+        owning_agent="chat",
         is_terminal=False,
-        requires_qa=False,
+        requires_guardrails=False,
         supports_handoff=False,
         output_type="search_result",
     ),
@@ -134,7 +134,7 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
         tool_name="execute_python",
         owning_agent="chat",
         is_terminal=False,
-        requires_qa=False,
+        requires_guardrails=False,
         supports_handoff=False,
         output_type="python_result",
     ),
@@ -146,22 +146,9 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
         tool_name="deep_research",
         owning_agent="deep_research",
         is_terminal=False,
-        requires_qa=False,
+        requires_guardrails=False,
         supports_handoff=False,
         output_type="research_report",
-    ),
-    CapabilityDefinition(
-        capability_id="computer_files",
-        display_name="Arcco Computer",
-        kind="tool",
-        route="computer",
-        tool_name=None,
-        owning_agent="chat",
-        is_terminal=False,
-        requires_qa=False,
-        supports_handoff=False,
-        output_type="text",
-        notes="Grupo de tools list_computer_files/read_computer_file/manage_computer_file.",
     ),
     CapabilityDefinition(
         capability_id="spy_pages",
@@ -171,7 +158,7 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
         tool_name="analyze_web_pages",
         owning_agent="chat",
         is_terminal=False,
-        requires_qa=False,
+        requires_guardrails=False,
         supports_handoff=False,
         output_type="skill_result",
     ),
@@ -183,7 +170,7 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
         tool_name="slide_generator",
         owning_agent="chat",
         is_terminal=False,
-        requires_qa=False,
+        requires_guardrails=False,
         supports_handoff=False,
         output_type="skill_result",
         notes="Skill preparatoria para decks/carrosseis.",
@@ -196,7 +183,7 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
         tool_name="static_design_generator",
         owning_agent="chat",
         is_terminal=False,
-        requires_qa=False,
+        requires_guardrails=False,
         supports_handoff=False,
         output_type="skill_result",
         notes="Pode virar artefato terminal por renderizacao local no orquestrador atual.",
@@ -209,7 +196,7 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
         tool_name="multi_doc_investigator",
         owning_agent="chat",
         is_terminal=False,
-        requires_qa=False,
+        requires_guardrails=False,
         supports_handoff=False,
         output_type="skill_result",
     ),
@@ -221,7 +208,7 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
         tool_name="web_form_operator",
         owning_agent="chat",
         is_terminal=False,
-        requires_qa=False,
+        requires_guardrails=False,
         supports_handoff=True,
         output_type="skill_result",
     ),
@@ -233,7 +220,7 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
         tool_name="local_lead_extractor",
         owning_agent="chat",
         is_terminal=False,
-        requires_qa=False,
+        requires_guardrails=False,
         supports_handoff=False,
         output_type="skill_result",
     ),
@@ -241,7 +228,7 @@ _CAPABILITIES: tuple[CapabilityDefinition, ...] = (
 
 _DIRECT_DISPATCH_ROUTES = frozenset({"session_file", "web_search", "python", "browser", "deep_research", "dynamic_skill"})
 _TERMINAL_SPECIALIST_ROUTES = frozenset({"text_generator", "design_generator"})
-_QA_SPECIALIST_ROUTES = frozenset({"file_modifier"})
+_GUARDED_SPECIALIST_ROUTES = frozenset({"file_modifier"})
 _LINK_ONLY_ROUTES = frozenset({"file_modifier"})
 _LOCAL_RENDER_ROUTES = frozenset({"design_generator"})
 _LOCAL_RENDER_TOOL_NAMES = frozenset({"static_design_generator"})
@@ -298,7 +285,7 @@ def get_runtime_semantics(
     normalized_route = route or ""
     normalized_tool_name = tool_name or ""
 
-    execution_mode = "specialist_with_qa"
+    execution_mode = "guarded_specialist"
     if normalized_route in _DIRECT_DISPATCH_ROUTES:
         execution_mode = "direct_dispatch"
     elif normalized_route in _TERMINAL_SPECIALIST_ROUTES:
@@ -311,9 +298,9 @@ def get_runtime_semantics(
 
     return {
         "execution_mode": execution_mode,
-        "agent_role": "specialist" if normalized_route in (_TERMINAL_SPECIALIST_ROUTES | _QA_SPECIALIST_ROUTES) else "tool",
+        "agent_role": "specialist" if normalized_route in (_TERMINAL_SPECIALIST_ROUTES | _GUARDED_SPECIALIST_ROUTES) else "tool",
         "direct_dispatch": normalized_route in _DIRECT_DISPATCH_ROUTES,
-        "runs_with_qa": normalized_route in _QA_SPECIALIST_ROUTES,
+        "runs_with_guardrails": normalized_route in _GUARDED_SPECIALIST_ROUTES,
         "emit_links_only": normalized_route in _LINK_ONLY_ROUTES,
         "supports_local_design_render": (
             normalized_route in _LOCAL_RENDER_ROUTES

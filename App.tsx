@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Menu } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import ArccoChatPage from './pages/ArccoChat';
-import { ArccoComputerPage } from './pages/ArccoComputer';
 import { AdminPage } from './pages/AdminPage';
 import ToolsStorePage from './pages/ToolsStorePage';
 import MyToolsPage from './pages/MyToolsPage';
@@ -206,13 +205,6 @@ function App() {
             }}
             initialMessage={initialChatIntent}
             onClearInitialMessage={() => setInitialChatIntent(null)}
-          />
-        );
-      case 'ARCCO_COMPUTER':
-      case 'ARCCO_DRIVE':
-        return (
-          <ArccoComputerPage
-            userId={userId}
           />
         );
       case 'TOOLS_STORE':

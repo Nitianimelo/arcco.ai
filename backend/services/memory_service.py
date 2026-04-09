@@ -1,21 +1,28 @@
 """
-Serviço de Memória Acumulativa do Usuário.
+Serviço determinístico de memória do usuário.
 
 get_user_memory()    — busca memória do usuário no Supabase
-update_user_memory() — extrai e agrega fatos da conversa via gpt-4o-mini (background)
+update_user_memory() — resume fatos estáveis sem depender de agente configurável
 """
 
 import logging
+import re
 from datetime import datetime, timezone
 
 from backend.core.supabase_client import get_supabase_client
-from backend.core.llm import call_openrouter
-from backend.agents import registry
 
 logger = logging.getLogger(__name__)
 
 _TABLE = "user_memory"
 _MAX_MEMORY_CHARS = 1500
+_MAX_FACTS = 16
+_STABLE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("nome", re.compile(r"\b(?:meu nome é|me chamo|pode me chamar de)\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s'-]{1,60})", re.IGNORECASE)),
+    ("empresa", re.compile(r"\b(?:minha empresa é|trabalho na|trabalho no|sou da|sou do|empresa:)\s+([A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9\s&.'/-]{1,80})", re.IGNORECASE)),
+    ("cargo", re.compile(r"\b(?:sou|atuo como|trabalho como)\s+(?:um|uma)?\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s'-]{2,60})", re.IGNORECASE)),
+    ("objetivo", re.compile(r"\b(?:quero|preciso|nosso objetivo é|meu objetivo é)\s+([^.!?\n]{8,140})", re.IGNORECASE)),
+    ("preferência", re.compile(r"\b(?:prefiro|gosto de|quero sempre)\s+([^.!?\n]{6,120})", re.IGNORECASE)),
+)
 
 
 def _now_iso() -> str:
@@ -40,48 +47,17 @@ def get_user_memory(user_id: str) -> str:
 async def update_user_memory(user_id: str, conversation_text: str) -> None:
     """
     Extrai fatos permanentes da conversa e agrega à memória existente.
-    Usa gpt-4o-mini com síntese comprimida (máx. 1500 chars).
-    Chamado em background após cada stream completo.
+    O resumo é determinístico: usa padrões simples, deduplicação e truncamento.
     """
     if not user_id or not conversation_text.strip():
         return
 
     existing_memory = get_user_memory(user_id)
 
-    system_prompt = (
-        "Você é um sistema de memória. Sua tarefa é agregar os fatos novos "
-        "da conversa com a memória existente, removendo redundâncias e "
-        "mantendo APENAS fatos permanentes e relevantes sobre o usuário: "
-        "profissão, empresa, objetivos de negócio, preferências estáveis, "
-        "nomes de pessoas/produtos relevantes.\n"
-        "REGRA RÍGIDA: o resultado final deve ter no MÁXIMO 1500 caracteres. "
-        "Sintetize, comprima e elimine informação transitória (tarefas "
-        "pontuais já feitas, perguntas genéricas, etc.).\n"
-        f"Memória existente:\n{existing_memory or '(vazia)'}\n\n"
-        f"Conversa nova:\n{conversation_text[:3000]}\n\n"
-        "Retorne APENAS a memória atualizada, sem prefixos nem explicações."
-    )
-
     try:
-        response = await call_openrouter(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": "Atualize a memória."},
-            ],
-            model=registry.get_model("memory"),
-            max_tokens=600,
-            temperature=0.1,
-        )
-
-        new_memory = ""
-        if response and "choices" in response:
-            new_memory = response["choices"][0]["message"]["content"].strip()
-
-        if not new_memory:
+        new_memory = _build_memory_snapshot(existing_memory, conversation_text)
+        if not new_memory.strip():
             return
-
-        # Trunca para garantir limite
-        new_memory = new_memory[:_MAX_MEMORY_CHARS]
 
         db = get_supabase_client()
         db.upsert(
@@ -100,3 +76,49 @@ async def update_user_memory(user_id: str, conversation_text: str) -> None:
 
     except Exception as e:
         logger.error(f"[MEMORY] Falha ao atualizar memória de {user_id}: {e}")
+
+
+def _normalize_fact(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip(" -:\n\t")).strip()
+
+
+def _extract_facts(conversation_text: str) -> list[str]:
+    facts: list[str] = []
+    for label, pattern in _STABLE_PATTERNS:
+        for match in pattern.finditer(conversation_text):
+            value = _normalize_fact(match.group(1))
+            if len(value) < 3:
+                continue
+            facts.append(f"{label}: {value[:120]}")
+    return facts
+
+
+def _parse_existing_memory(existing_memory: str) -> list[str]:
+    if not existing_memory.strip():
+        return []
+    lines: list[str] = []
+    for line in existing_memory.splitlines():
+        clean = _normalize_fact(line.lstrip("-•"))
+        if clean:
+            lines.append(clean)
+    return lines
+
+
+def _build_memory_snapshot(existing_memory: str, conversation_text: str) -> str:
+    combined: list[str] = []
+    seen: set[str] = set()
+
+    for fact in [*_parse_existing_memory(existing_memory), *_extract_facts(conversation_text)]:
+        key = fact.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        combined.append(fact)
+        if len(combined) >= _MAX_FACTS:
+            break
+
+    if not combined:
+        return existing_memory[:_MAX_MEMORY_CHARS]
+
+    snapshot = "\n".join(f"- {fact}" for fact in combined)
+    return snapshot[:_MAX_MEMORY_CHARS]

@@ -6,7 +6,7 @@ POST /api/agent/chat
   → Emite SSE {"type": "conversation_id"} antes do primeiro chunk
   → Orquestrador analisa a mensagem e determina a rota
   → Especialista executa (apenas com suas ferramentas)
-  → QA revisa a saída (máx. 2 tentativas)
+  → Guardrails internos validam a saída e podem replanejar
   → Resposta final via SSE streaming
   → Background task: salva mensagens no Supabase + atualiza memória
 
@@ -478,7 +478,6 @@ async def chat_endpoint(request: Request):
     project_id = body.get("project_id") or None
     conversation_id = body.get("conversation_id") or None
     web_search = bool(body.get("web_search", False))
-    computer_enabled = bool(body.get("computer_enabled", False))
     spy_pages_enabled = bool(body.get("spy_pages_enabled", False))
     fast_model = body.get("fast_model") or None
     fast_system_prompt = body.get("fast_system_prompt", "") or ""
@@ -668,7 +667,6 @@ async def chat_endpoint(request: Request):
                     session_id,
                     user_id=user_id,
                     browser_resume_token=browser_resume_token,
-                    computer_enabled=computer_enabled,
                     spy_pages_enabled=spy_pages_enabled,
                     execution_id=execution_id,
                     execution_logger=execution_logger,

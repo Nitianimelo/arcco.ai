@@ -28,7 +28,6 @@ import {
   Calendar,
   Eye,
   EyeOff,
-  CheckCircle,
   XCircle,
   AlertTriangle,
   Database,
@@ -155,16 +154,12 @@ const MODULE_COLORS: Record<string, string> = {
 const AGENT_ICONS: Record<string, React.ReactNode> = {
   chat: <Brain size={15} />,
   orchestrator: <GitBranch size={15} />,
-  web_search: <Terminal size={15} />,
   text_generator: <FileText size={15} />,
   design_generator: <Monitor size={15} />,
   file_modifier: <Wrench size={15} />,
   deep_research: <Database size={15} />,
-  memory: <Database size={15} />,
-  intent_router: <GitBranch size={15} />,
   design: <Cpu size={15} />,
   dev: <Code2 size={15} />,
-  qa: <CheckCircle size={15} />,
 };
 
 /** Formata preÃ§o por 1M tokens: 0 â†’ "GrÃ¡tis", outros â†’ "$0.0050" */
@@ -663,7 +658,7 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, models, loadingModels, onS
               </div>
             ) : agent.tools.length === 0 && toolsJson === '[]' ? (
               <div className="flex items-center gap-2 px-4 py-3 bg-neutral-900/50 border border-neutral-800 rounded-lg text-xs text-neutral-600">
-                <XCircle size={13} /> Este agente nÃ£o usa ferramentas (design/dev/chat/qa)
+                <XCircle size={13} /> Este agente nÃ£o usa ferramentas editáveis no painel.
               </div>
             ) : (
               <>

@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Loader2, Sparkles, Save, FileText, Download, ChevronDown, Paperclip, HardDrive, FileSpreadsheet, Eye, Square, Plus, Link, Folder, Pencil, Trash2, Upload, X, Check, AlertTriangle, Wrench, Globe, Monitor } from 'lucide-react';
+import { Send, Loader2, Sparkles, FileText, Download, ChevronDown, Paperclip, HardDrive, FileSpreadsheet, Eye, Square, Plus, Link, Folder, Pencil, Trash2, Upload, X, Check, AlertTriangle, Wrench, Globe } from 'lucide-react';
 import SpyPagesInputCard from '../components/chat/SpyPagesInputCard';
 import SpyPagesResultCard, { SpyPagesSite } from '../components/chat/SpyPagesResultCard';
 import { projectApi, Project, ProjectFile } from '../lib/projectApi';
 import { openRouterService } from '../lib/openrouter';
 import { agentApi, SessionFileItem, SessionFileStatus } from '../lib/api-client';
 import { supabase } from '../lib/supabase';
-import { driveService } from '../lib/driveService';
 import { ArtifactCard } from '../components/chat/ArtifactCard';
 import { ThoughtStep } from '../components/chat/AgentThoughtPanel';
 import { BrowserAgentCard } from '../components/chat/BrowserAgentCard';
@@ -35,7 +34,6 @@ interface FilePreviewCardProps {
 
 const FilePreviewCard: React.FC<FilePreviewCardProps> = ({ url, filename, type, onOpenPreview }) => {
   const { showToast } = useToast();
-  const [isSaving, setIsSaving] = useState(false);
 
   const handleDownload = async () => {
     try {
@@ -56,20 +54,6 @@ const FilePreviewCard: React.FC<FilePreviewCardProps> = ({ url, filename, type, 
     } catch (err: any) {
       console.error('Erro ao baixar arquivo:', err);
       showToast(`Erro ao baixar arquivo: ${err.message}`, 'error');
-    }
-  };
-
-  const handleSaveToVault = async () => {
-    try {
-      setIsSaving(true);
-      const fileType = type === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-      await driveService.saveArtifactReference(filename || `arquivo_${Date.now()}`, fileType, url);
-      showToast('Arquivo salvo no Arcco Drive com sucesso!', 'success');
-    } catch (err: any) {
-      console.error('Erro ao salvar no cofre:', err);
-      showToast(`Erro ao salvar no Cofre: ${err.message}`, 'error');
-    } finally {
-      setIsSaving(false);
     }
   };
 
@@ -106,14 +90,6 @@ const FilePreviewCard: React.FC<FilePreviewCardProps> = ({ url, filename, type, 
           className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-md border border-neutral-700 text-neutral-400 hover:text-neutral-200 hover:border-neutral-600 text-xs font-medium transition-colors"
         >
           <Download size={13} /> Baixar
-        </button>
-        <button
-          onClick={handleSaveToVault}
-          disabled={isSaving}
-          className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-md border border-neutral-700 text-neutral-400 hover:text-neutral-200 hover:border-neutral-600 text-xs font-medium transition-colors disabled:opacity-50"
-        >
-          {isSaving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
-          Salvar
         </button>
       </div>
     </div>
@@ -305,7 +281,6 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const [designPreview, setDesignPreview] = useState<{ designs: string[]; initialIndex: number } | null>(null);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [isSearchEnabled, setIsSearchEnabled] = useState(false);
-  const [computerEnabled, setComputerEnabled] = useState(false);
   const [spyPagesActive, setSpyPagesActive] = useState(false);
   const [spyPagesEnabled, setSpyPagesEnabled] = useState(false);
   const [spyPagesUrls, setSpyPagesUrls] = useState<string[]>([]);
@@ -1388,7 +1363,6 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
         projectId,
         conversationId,
         !isAgentMode && isSearchEnabled,
-        isAgentMode && computerEnabled,
         isAgentMode && spyPagesEnabled,
         !isAgentMode ? (selectedChatConfig?.fast_model_id || undefined) : undefined,
         !isAgentMode ? (selectedChatConfig?.fast_system_prompt || undefined) : undefined,
@@ -1761,25 +1735,6 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   </div>
                 </>
               )}
-            </div>
-          )}
-
-          {isAgentMode && (
-            <div className="relative group/computer">
-              <button
-                onClick={() => setComputerEnabled(p => !p)}
-                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-all duration-200 ${
-                  computerEnabled
-                    ? 'text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/15'
-                    : 'text-neutral-500 hover:text-neutral-300 hover:bg-white/[0.05]'
-                }`}
-              >
-                <Monitor size={12} />
-                <span>Computer</span>
-              </button>
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/computer:opacity-100 group-hover/computer:visible transition-all duration-150 pointer-events-none z-50">
-                {computerEnabled ? 'Ativo · a IA pode acessar seus arquivos' : 'Permite a IA acessar e gerenciar seus arquivos'}
-              </div>
             </div>
           )}
 
