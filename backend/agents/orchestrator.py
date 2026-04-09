@@ -25,9 +25,21 @@ from typing import Any, AsyncGenerator
 from backend.core.llm import call_openrouter, stream_openrouter
 from backend.agents import registry
 from backend.agents.capabilities import get_capability_by_route, get_direct_dispatch_routes, get_runtime_semantics, route_requires_link_only
-from backend.agents.contracts import CapabilityResult
+from backend.agents.contracts import CapabilityResult, PolicyDecisionContract, RouteReplanDecisionContract, ValidationResultContract
+from backend.agents.handoffs import build_browser_handoff_state, build_mass_document_handoff, build_search_to_spreadsheet_handoff
 from backend.agents.planner import ClarificationQuestion
 from backend.agents.dispatcher import dispatch_direct_route, planner_action_to_tool_name, resolve_runtime_target
+from backend.agents.task_types import get_task_type_definition, infer_task_type
+from backend.agents.validators import validate_capability_execution
+from backend.agents.workflow_policy import decide_on_route_failure, decide_on_validation
+from backend.agents.step_replanner import build_replanned_args, decide_route_replan
+from backend.agents.workflow_state import (
+    build_browser_workflow_stages,
+    build_mass_document_stages,
+    mass_document_updates_for_step_result,
+    mass_document_updates_for_step_start,
+    update_workflow_stages,
+)
 from backend.agents.executor import execute_tool
 from backend.agents.tools import SUPERVISOR_TOOLS, COMPUTER_TOOLS, SPY_PAGES_TOOLS
 from backend.services.browser_service import BrowserHandoffRequired, get_paused_browser_session
@@ -398,6 +410,72 @@ def _normalize_plan_for_visual_requests(plan_output, *, user_intent: str):
     return plan_output
 
 
+def _normalize_plan_for_mass_document_requests(plan_output, *, user_intent: str, session_id: str | None):
+    if getattr(plan_output, "needs_clarification", False):
+        return plan_output
+
+    inventory = _get_session_inventory_items(session_id)
+    if not inventory:
+        return plan_output
+
+    normalized = (user_intent or "").lower()
+    mass_doc_signals = (
+        "ocr",
+        "rag",
+        "documentos",
+        "documentos em lote",
+        "vários pdf",
+        "varios pdf",
+        "lote",
+        "contratos",
+        "processos",
+    )
+    objective_signals = (
+        "resumo",
+        "relatório",
+        "relatorio",
+        "compar",
+        "risco",
+        "planilha",
+        "tabela",
+        "slides",
+        "apresentação",
+        "apresentacao",
+        "perguntas",
+    )
+
+    has_many_docs = len(inventory) >= 2
+    likely_mass_doc = has_many_docs and any(signal in normalized for signal in mass_doc_signals)
+    if not likely_mass_doc:
+        return plan_output
+
+    has_clear_objective = any(signal in normalized for signal in objective_signals)
+    if has_clear_objective:
+        return plan_output
+
+    plan_output.task_type = "mass_document_analysis"
+    plan_output.is_complex = True
+    plan_output.needs_clarification = True
+    plan_output.acknowledgment = "Preciso só do objetivo principal antes de processar o lote de documentos."
+    plan_output.questions = [
+        ClarificationQuestion(
+            type="choice",
+            text="O que você quer extrair primeiro desse conjunto de documentos?",
+            options=["Resumo executivo", "Tabela comparativa", "Riscos e inconsistências"],
+            helper_text="Isso reduz custo e melhora a precisão do OCR/RAG.",
+        ),
+        ClarificationQuestion(
+            type="choice",
+            text="Como você quer receber a primeira saída?",
+            options=["Resumo executivo", "Tabela comparativa", "Relatório detalhado"],
+            helper_text="Escolher o formato evita processar conteúdo desnecessário logo de início.",
+        ),
+    ]
+    plan_output.steps = []
+    logger.info("[ORCHESTRATOR] Lote de documentos convertido em clarificação antes de OCR/RAG.")
+    return plan_output
+
+
 def _artifact_payload(label: str, url: str) -> str:
     return json.dumps({"filename": label, "url": url})
 
@@ -431,6 +509,71 @@ def _build_specialist_capability_result(
         handoff_required=handoff_required,
         error_text=normalized_content if error else None,
         metadata=metadata or {},
+    )
+
+
+def _validation_summary_for_context(validation_result: ValidationResultContract) -> str:
+    issues = "; ".join(issue.message for issue in validation_result.issues[:2])
+    suffix = f" Achados: {issues}" if issues else ""
+    return f"[Validação {validation_result.validator_id} - {validation_result.status}] {validation_result.summary}{suffix}"
+
+
+async def _log_workflow_stages(
+    execution_logger,
+    execution_id: str | None,
+    *,
+    workflow_id: str,
+    stages: list,
+    message: str,
+) -> None:
+    if not execution_logger or not execution_id:
+        return
+    await execution_logger.log_event(
+        execution_id,
+        event_type="workflow_stage_snapshot",
+        message=message,
+        raw_payload={
+            "workflow_id": workflow_id,
+            "stages": [stage.model_dump() for stage in stages],
+        },
+    )
+
+
+async def _log_policy_decision(
+    execution_logger,
+    execution_id: str | None,
+    *,
+    execution_agent_id: str | None = None,
+    decision: PolicyDecisionContract,
+) -> None:
+    if not execution_logger or not execution_id:
+        return
+    await execution_logger.log_event(
+        execution_id,
+        execution_agent_id=execution_agent_id,
+        level="warning" if (decision.request_clarification or decision.retry_same_route or decision.continue_partial) else "info",
+        event_type="workflow_policy_decision",
+        message=decision.user_message,
+        raw_payload=decision.model_dump(),
+    )
+
+
+async def _log_replan_decision(
+    execution_logger,
+    execution_id: str | None,
+    *,
+    execution_agent_id: str | None = None,
+    decision: RouteReplanDecisionContract,
+) -> None:
+    if not execution_logger or not execution_id:
+        return
+    await execution_logger.log_event(
+        execution_id,
+        execution_agent_id=execution_agent_id,
+        level="warning",
+        event_type="step_replanned",
+        message=decision.user_message,
+        raw_payload=decision.model_dump(),
     )
 
 
@@ -703,6 +846,7 @@ async def _resume_browser_handoff(
 
     if handoff_exc is not None:
         payload = _browser_handoff_payload(handoff_exc, resume_url)
+        workflow_handoff = build_browser_handoff_state(payload=payload, resume_token=handoff_exc.resume_token)
         yield sse("browser_action", json.dumps(payload["browser_action"]))
         yield sse("needs_clarification", json.dumps(payload))
         if execution_logger:
@@ -714,13 +858,46 @@ async def _resume_browser_handoff(
                 message=handoff_exc.message,
                 tool_name="ask_browser",
                 tool_args=func_args,
-                raw_payload=payload,
+                raw_payload={
+                    **payload,
+                    "workflow_handoff": workflow_handoff.model_dump() if workflow_handoff else None,
+                },
             )
             await execution_logger.finish_agent(
                 browser_agent_id,
                 status="awaiting_clarification",
                 output_payload={"preview": handoff_exc.message},
                 metadata={"resume_token": handoff_exc.resume_token},
+            )
+            await _log_workflow_stages(
+                execution_logger,
+                execution_id,
+                workflow_id="browser_workflow",
+                stages=build_browser_workflow_stages(
+                    awaiting_handoff=True,
+                    completed=False,
+                    resume_token=handoff_exc.resume_token,
+                    url=resume_url,
+                ),
+                message="Workflow do navegador aguardando handoff humano",
+            )
+            yield sse(
+                "workflow_state",
+                json.dumps(
+                    {
+                        "workflow_id": "browser_workflow",
+                        "stages": [
+                            stage.model_dump()
+                            for stage in build_browser_workflow_stages(
+                                awaiting_handoff=True,
+                                completed=False,
+                                resume_token=handoff_exc.resume_token,
+                                url=resume_url,
+                            )
+                        ],
+                        "message": "Workflow do navegador aguardando handoff humano",
+                    }
+                ),
             )
         return
 
@@ -736,12 +913,49 @@ async def _resume_browser_handoff(
             tool_name="ask_browser",
             tool_args=func_args,
             tool_result=str(specialist_result)[:2000],
+            raw_payload={
+                "workflow_state": {
+                    "status": "completed" if not str(specialist_result).startswith("Erro") else "failed",
+                    "url": resume_url,
+                    "resume_token": browser_resume_token,
+                }
+            },
         )
         await execution_logger.finish_agent(
             browser_agent_id,
             status="completed" if not str(specialist_result).startswith("Erro") else "failed",
             output_payload={"preview": str(specialist_result)[:2000]},
             error_text=str(specialist_result) if str(specialist_result).startswith("Erro") else None,
+        )
+        await _log_workflow_stages(
+            execution_logger,
+            execution_id,
+            workflow_id="browser_workflow",
+            stages=build_browser_workflow_stages(
+                awaiting_handoff=False,
+                completed=not str(specialist_result).startswith("Erro"),
+                resume_token=browser_resume_token,
+                url=resume_url,
+            ),
+            message="Workflow do navegador retomado",
+        )
+        yield sse(
+            "workflow_state",
+            json.dumps(
+                {
+                    "workflow_id": "browser_workflow",
+                    "stages": [
+                        stage.model_dump()
+                        for stage in build_browser_workflow_stages(
+                            awaiting_handoff=False,
+                            completed=not str(specialist_result).startswith("Erro"),
+                            resume_token=browser_resume_token,
+                            url=resume_url,
+                        )
+                    ],
+                    "message": "Workflow do navegador retomado",
+                }
+            ),
         )
 
     if str(specialist_result).startswith("Erro"):
@@ -1305,6 +1519,63 @@ async def orchestrate_and_stream(
         plan_output,
         user_intent=user_intent,
     )
+    plan_output = _normalize_plan_for_mass_document_requests(
+        plan_output,
+        user_intent=user_intent,
+        session_id=session_id,
+    )
+    inferred_task_type = getattr(plan_output, "task_type", None) or infer_task_type(user_intent, plan_output.steps)
+    plan_output.task_type = inferred_task_type
+    task_type_definition = get_task_type_definition(inferred_task_type) or {}
+    mass_doc_handoff = None
+    mass_doc_stages = None
+    if inferred_task_type == "mass_document_analysis":
+        mass_doc_items = _get_session_inventory_items(session_id)
+        mass_doc_handoff = build_mass_document_handoff(
+            session_items=mass_doc_items,
+            user_intent=user_intent,
+        )
+        mass_doc_stages = build_mass_document_stages(
+            session_items=mass_doc_items,
+            awaiting_user_goal=bool(plan_output.needs_clarification),
+            delivery_completed=False,
+        )
+    if execution_logger:
+        await execution_logger.log_event(
+            execution_id,
+            event_type="execution_context_initialized",
+            message=f"Tarefa classificada como {inferred_task_type}",
+            raw_payload={
+                "task_type": inferred_task_type,
+                "task_type_definition": task_type_definition,
+                "step_count": len(plan_output.steps),
+            },
+        )
+        if mass_doc_handoff:
+            await execution_logger.log_event(
+                execution_id,
+                event_type="step_handoff_prepared",
+                message=mass_doc_handoff.summary,
+                raw_payload=mass_doc_handoff.model_dump(),
+            )
+        if mass_doc_stages:
+            await _log_workflow_stages(
+                execution_logger,
+                execution_id,
+                workflow_id="mass_document_analysis",
+                stages=mass_doc_stages,
+                message="Pipeline documental inicializado",
+            )
+            yield sse(
+                "workflow_state",
+                json.dumps(
+                    {
+                        "workflow_id": "mass_document_analysis",
+                        "stages": [stage.model_dump() for stage in mass_doc_stages],
+                        "message": "Pipeline documental inicializado",
+                    }
+                ),
+            )
     if execution_logger:
         await execution_logger.log_event(
             execution_id,
@@ -1313,6 +1584,7 @@ async def orchestrate_and_stream(
             message=f"Plano gerado com {len(plan_output.steps)} passo(s)",
             raw_payload={
                 "is_complex": plan_output.is_complex,
+                "task_type": inferred_task_type,
                 "steps": [step.model_dump() for step in plan_output.steps],
             },
         )
@@ -1322,6 +1594,7 @@ async def orchestrate_and_stream(
             output_payload={
                 "is_complex": plan_output.is_complex,
                 "step_count": len(plan_output.steps),
+                "task_type": inferred_task_type,
             },
         )
     
@@ -1344,8 +1617,30 @@ async def orchestrate_and_stream(
                 execution_id,
                 event_type="clarification_requested",
                 message=f"Aguardando clarificação do usuário ({len(plan_output.questions)} perguntas)",
-                raw_payload={"questions": questions_payload, "acknowledgment": plan_output.acknowledgment},
+                raw_payload={
+                    "task_type": inferred_task_type,
+                    "questions": questions_payload,
+                    "acknowledgment": plan_output.acknowledgment,
+                },
             )
+            if mass_doc_stages:
+                await _log_workflow_stages(
+                    execution_logger,
+                    execution_id,
+                    workflow_id="mass_document_analysis",
+                    stages=mass_doc_stages,
+                    message="Pipeline documental aguardando objetivo do usuário",
+                )
+                yield sse(
+                    "workflow_state",
+                    json.dumps(
+                        {
+                            "workflow_id": "mass_document_analysis",
+                            "stages": [stage.model_dump() for stage in mass_doc_stages],
+                            "message": "Pipeline documental aguardando objetivo do usuário",
+                        }
+                    ),
+                )
             await execution_logger.finish_execution(execution_id, status="awaiting_clarification")
         return
 
@@ -1372,6 +1667,18 @@ async def orchestrate_and_stream(
         had_failures = False
         failure_summaries: list[str] = []
         abort_pipeline = False
+        validation_trail: list[dict[str, Any]] = []
+        capability_results: list[CapabilityResult] = []
+        route_attempts: dict[str, int] = {}
+        active_mass_doc_stages = (
+            build_mass_document_stages(
+                session_items=_get_session_inventory_items(session_id),
+                awaiting_user_goal=False,
+                delivery_completed=False,
+            )
+            if inferred_task_type == "mass_document_analysis"
+            else None
+        )
 
         # ── 2. Iteração do Plano ──
         for step in plan_output.steps:
@@ -1389,6 +1696,31 @@ async def orchestrate_and_stream(
                         "accumulated_context_chars": len(accumulated_context),
                     },
                 )
+                if active_mass_doc_stages:
+                    stage_updates, stage_metadata = mass_document_updates_for_step_start(step.action)
+                    if stage_updates or stage_metadata:
+                        active_mass_doc_stages = update_workflow_stages(
+                            active_mass_doc_stages,
+                            status_by_stage=stage_updates,
+                            metadata_by_stage=stage_metadata,
+                        )
+                        await _log_workflow_stages(
+                            execution_logger,
+                            execution_id,
+                            workflow_id="mass_document_analysis",
+                            stages=active_mass_doc_stages,
+                            message=f"Pipeline documental avançou no step {step.step}",
+                        )
+                        yield sse(
+                            "workflow_state",
+                            json.dumps(
+                                {
+                                    "workflow_id": "mass_document_analysis",
+                                    "stages": [stage.model_dump() for stage in active_mass_doc_stages],
+                                    "message": f"Pipeline documental avançou no step {step.step}",
+                                }
+                            ),
+                        )
             
             # Constrói temporariamente as mensagens injetando o contexto do passo anterior
             step_messages = [{"role": "system", "content": supervisor_prompt}]
@@ -1400,6 +1732,23 @@ async def orchestrate_and_stream(
             execution_prompt = f"Seu objetivo atual: {step.detail}\n"
             if accumulated_context:
                 execution_prompt += f"\nContexto prévio de passos anteriores (USE ESTES DADOS):\n{accumulated_context}"
+            step_handoff = None
+            if step.action == "python" and inferred_task_type == "spreadsheet_generation":
+                step_handoff = build_search_to_spreadsheet_handoff(context_results=capability_results)
+                if step_handoff:
+                    handoff_payload = step_handoff.model_dump()
+                    if execution_logger:
+                        await execution_logger.log_event(
+                            execution_id,
+                            event_type="step_handoff_prepared",
+                            message=step_handoff.summary,
+                            raw_payload=handoff_payload,
+                        )
+                    execution_prompt += (
+                        "\n\nHANDOFF ESTRUTURADO PARA ESTE PASSO "
+                        "(preserve estes itens como referência principal e não substitua nomes silenciosamente):\n"
+                        + json.dumps(handoff_payload, ensure_ascii=False)
+                    )
             
             step_messages.append({"role": "user", "content": execution_prompt})
             
@@ -1539,6 +1888,7 @@ async def orchestrate_and_stream(
                                 "func_args": func_args,
                                 "step": step.step,
                                 "capability_id": getattr(step, "capability_id", None),
+                                "step_handoff": step_handoff.model_dump() if step_handoff else None,
                             },
                         )
                     
@@ -1549,57 +1899,113 @@ async def orchestrate_and_stream(
                             specialist_result = None
                             dispatch_info = None
                             dispatch_result: CapabilityResult | None = None
-                            dispatch_args = dict(func_args)
-                            if route == "deep_research":
-                                dispatch_args["_model"] = registry.get_model("deep_research") or supervisor_model
-                                dispatch_args["context"] = accumulated_context
-                            elif route == "dynamic_skill":
-                                dispatch_args["_func_name"] = func_name
-                            async for event in dispatch_direct_route(
-                                route=route,
-                                func_args=dispatch_args,
-                                user_id=user_id,
-                                mode="planner",
-                                step_label=f"Passo {step.step}",
-                                execute_tool_fn=execute_tool,
-                                exec_with_heartbeat_fn=_exec_with_heartbeat,
-                                exec_browser_with_progress_fn=_exec_browser_with_progress,
-                                emit_file_artifacts_fn=_emit_file_artifacts,
-                                browser_handoff_payload_fn=_browser_handoff_payload,
-                                is_error_result_fn=_is_error_result,
-                                sse_fn=sse,
-                                logger=logger,
-                                search_timeout=_SEARCH_TIMEOUT,
-                                browser_timeout=_BROWSER_TIMEOUT,
-                                skill_timeout=_SKILL_TIMEOUT,
-                            ):
-                                if isinstance(event, dict) and "_dispatch" in event:
-                                    dispatch_info = event["_dispatch"]
-                                    if dispatch_info.get("result"):
-                                        dispatch_result = CapabilityResult.model_validate(dispatch_info["result"])
-                                        specialist_result = dispatch_result.content
+                            attempted_routes_for_step = {route}
+                            current_route = route
+                            current_func_name = func_name
+                            current_func_args = dict(func_args)
+                            while True:
+                                route_attempts[current_route] = route_attempts.get(current_route, 0) + 1
+                                dispatch_info = None
+                                dispatch_result = None
+                                dispatch_args = dict(current_func_args)
+                                if current_route == "deep_research":
+                                    dispatch_args["_model"] = registry.get_model("deep_research") or supervisor_model
+                                    dispatch_args["context"] = accumulated_context
+                                elif current_route == "dynamic_skill":
+                                    dispatch_args["_func_name"] = current_func_name
+                                async for event in dispatch_direct_route(
+                                    route=current_route,
+                                    func_args=dispatch_args,
+                                    user_id=user_id,
+                                    mode="planner",
+                                    step_label=f"Passo {step.step}",
+                                    execute_tool_fn=execute_tool,
+                                    exec_with_heartbeat_fn=_exec_with_heartbeat,
+                                    exec_browser_with_progress_fn=_exec_browser_with_progress,
+                                    emit_file_artifacts_fn=_emit_file_artifacts,
+                                    browser_handoff_payload_fn=_browser_handoff_payload,
+                                    is_error_result_fn=_is_error_result,
+                                    sse_fn=sse,
+                                    logger=logger,
+                                    search_timeout=_SEARCH_TIMEOUT,
+                                    browser_timeout=_BROWSER_TIMEOUT,
+                                    skill_timeout=_SKILL_TIMEOUT,
+                                ):
+                                    if isinstance(event, dict) and "_dispatch" in event:
+                                        dispatch_info = event["_dispatch"]
+                                        if dispatch_info.get("result"):
+                                            dispatch_result = CapabilityResult.model_validate(dispatch_info["result"])
+                                            specialist_result = dispatch_result.content
+                                        else:
+                                            specialist_result = dispatch_info.get("specialist_result")
                                     else:
-                                        specialist_result = dispatch_info.get("specialist_result")
-                                else:
-                                    yield event
-                            if dispatch_info is None:
-                                specialist_result = specialist_result or f"Erro: route {route} não retornou resultado."
-                                dispatch_info = {
-                                    "tool_name": func_name,
-                                    "message": f"Execução concluída: {route}",
-                                    "error": _is_error_result(specialist_result),
-                                }
-                            if dispatch_result is None:
-                                dispatch_result = CapabilityResult(
-                                    capability_id=getattr(step, "capability_id", None) or route,
-                                    route=route,
-                                    status="failed" if dispatch_info.get("error") else "completed",
-                                    output_type="text",
-                                    content=str(specialist_result or ""),
-                                    handoff_required=bool(dispatch_info.get("handoff")),
-                                    error_text=str(specialist_result or "") if dispatch_info.get("error") else None,
-                                    metadata={"message": dispatch_info.get("message"), "tool_name": dispatch_info.get("tool_name")},
-                                )
+                                        yield event
+                                if dispatch_info is None:
+                                    specialist_result = specialist_result or f"Erro: route {current_route} não retornou resultado."
+                                    dispatch_info = {
+                                        "tool_name": current_func_name,
+                                        "message": f"Execução concluída: {current_route}",
+                                        "error": _is_error_result(specialist_result),
+                                    }
+                                if dispatch_result is None:
+                                    dispatch_result = CapabilityResult(
+                                        capability_id=getattr(step, "capability_id", None) or current_route,
+                                        route=current_route,
+                                        status="failed" if dispatch_info.get("error") else "completed",
+                                        output_type="text",
+                                        content=str(specialist_result or ""),
+                                        handoff_required=bool(dispatch_info.get("handoff")),
+                                        error_text=str(specialist_result or "") if dispatch_info.get("error") else None,
+                                        metadata={"message": dispatch_info.get("message"), "tool_name": dispatch_info.get("tool_name")},
+                                    )
+                                if dispatch_info.get("error"):
+                                    failure_decision = decide_on_route_failure(
+                                        task_type=inferred_task_type,
+                                        route=current_route,
+                                        attempt_no=route_attempts[current_route],
+                                        error_text=str(specialist_result or ""),
+                                    )
+                                    if execution_logger:
+                                        await _log_policy_decision(
+                                            execution_logger,
+                                            execution_id,
+                                            execution_agent_id=tool_agent_id,
+                                            decision=failure_decision,
+                                        )
+                                    yield sse("policy_decision", json.dumps(failure_decision.model_dump()))
+                                    if failure_decision.retry_same_route:
+                                        yield sse("thought", f"{failure_decision.user_message} Tentando novamente {current_route}...")
+                                        continue
+                                    replan_decision = decide_route_replan(
+                                        task_type=inferred_task_type,
+                                        failed_route=current_route,
+                                        func_args=current_func_args,
+                                        step_detail=step.detail,
+                                        user_intent=user_intent,
+                                        attempted_routes=attempted_routes_for_step,
+                                    )
+                                    if replan_decision:
+                                        attempted_routes_for_step.add(replan_decision.to_route)
+                                        current_route = replan_decision.to_route
+                                        current_func_name = replan_decision.to_tool_name
+                                        current_func_args = build_replanned_args(
+                                            failed_route=replan_decision.from_route,
+                                            target_route=replan_decision.to_route,
+                                            func_args=current_func_args,
+                                            step_detail=step.detail,
+                                            user_intent=user_intent,
+                                        )
+                                        if execution_logger:
+                                            await _log_replan_decision(
+                                                execution_logger,
+                                                execution_id,
+                                                execution_agent_id=tool_agent_id,
+                                                decision=replan_decision,
+                                            )
+                                        yield sse("step_replanned", json.dumps(replan_decision.model_dump()))
+                                        yield sse("thought", replan_decision.user_message)
+                                        continue
+                                break
                             if execution_logger:
                                 await execution_logger.log_event(
                                     execution_id,
@@ -1615,6 +2021,42 @@ async def orchestrate_and_stream(
                                         "handoff_payload": dispatch_info.get("handoff_payload"),
                                     },
                                 )
+                            validation_result = validate_capability_execution(
+                                task_type=inferred_task_type,
+                                route=current_route,
+                                capability_result=dispatch_result,
+                                input_payload=current_func_args,
+                                context_results=capability_results,
+                            )
+                            if validation_result:
+                                validation_payload = validation_result.model_dump()
+                                validation_trail.append(validation_payload)
+                                accumulated_context += (
+                                    "\n"
+                                    + _validation_summary_for_context(validation_result)
+                                )
+                                if execution_logger:
+                                    await execution_logger.log_event(
+                                        execution_id,
+                                        execution_agent_id=tool_agent_id,
+                                        level="warning" if validation_result.status != "valid" else "info",
+                                        event_type="validation_result",
+                                        message=validation_result.summary,
+                                        raw_payload=validation_payload,
+                                    )
+                                validation_decision = decide_on_validation(
+                                    task_type=inferred_task_type,
+                                    route=current_route,
+                                    validation_result=validation_result,
+                                )
+                                if execution_logger:
+                                    await _log_policy_decision(
+                                        execution_logger,
+                                        execution_id,
+                                        execution_agent_id=tool_agent_id,
+                                        decision=validation_decision,
+                                    )
+                                yield sse("policy_decision", json.dumps(validation_decision.model_dump()))
                             if dispatch_info.get("handoff"):
                                 if execution_logger:
                                     await execution_logger.finish_agent(
@@ -1627,34 +2069,107 @@ async def orchestrate_and_stream(
                                 return
                             if _is_error_result(specialist_result):
                                 had_failures = True
-                                tool_failed = True
-                                if route == "session_file":
+                                failure_decision = decide_on_route_failure(
+                                    task_type=inferred_task_type,
+                                    route=current_route,
+                                    attempt_no=route_attempts.get(current_route, 1),
+                                    error_text=str(specialist_result or ""),
+                                )
+                                tool_failed = bool(failure_decision.should_abort and not failure_decision.continue_partial)
+                                if execution_logger and active_mass_doc_stages:
+                                    stage_updates, stage_metadata = mass_document_updates_for_step_result(route, success=False)
+                                    if stage_updates or stage_metadata:
+                                        active_mass_doc_stages = update_workflow_stages(
+                                            active_mass_doc_stages,
+                                            status_by_stage=stage_updates,
+                                            metadata_by_stage=stage_metadata,
+                                        )
+                                        await _log_workflow_stages(
+                                            execution_logger,
+                                            execution_id,
+                                            workflow_id="mass_document_analysis",
+                                            stages=active_mass_doc_stages,
+                                            message=f"Pipeline documental registrou falha em {route}",
+                                        )
+                                        yield sse(
+                                            "workflow_state",
+                                            json.dumps(
+                                                {
+                                                    "workflow_id": "mass_document_analysis",
+                                                    "stages": [stage.model_dump() for stage in active_mass_doc_stages],
+                                                    "message": f"Pipeline documental registrou falha em {route}",
+                                                }
+                                            ),
+                                        )
+                                if current_route == "session_file":
                                     failure_msg = f"Falha ao consultar o anexo {func_args.get('file_name', '') or 'da sessão'}."
-                                elif route == "web_search":
+                                elif current_route == "web_search":
                                     failure_msg = f"Falha na pesquisa web para '{func_args.get('query', '')[:80]}'."
-                                elif route == "python":
+                                elif current_route == "python":
                                     failure_msg = "Falha na execução Python deste passo."
-                                elif route == "deep_research":
+                                elif current_route == "deep_research":
                                     failure_msg = f"Falha na pesquisa profunda para '{func_args.get('query', '')[:80]}'."
-                                elif route == "dynamic_skill":
-                                    failure_msg = f"Falha na skill {func_name}: {specialist_result}"
+                                elif current_route == "dynamic_skill":
+                                    failure_msg = f"Falha na skill {current_func_name}: {specialist_result}"
                                 else:
                                     failure_msg = f"Falha ao acessar {func_args.get('url', '')} no navegador."
                                 failure_summaries.append(failure_msg)
                                 accumulated_context += f"\n[Passo {step.step} - ERRO {route}]: {specialist_result}"
-                                yield sse("thought", failure_msg)
+                                if execution_logger:
+                                    await _log_policy_decision(
+                                        execution_logger,
+                                        execution_id,
+                                        execution_agent_id=tool_agent_id,
+                                        decision=failure_decision,
+                                    )
+                                    if failure_decision.request_clarification and failure_decision.clarification_questions:
+                                        await execution_logger.log_event(
+                                            execution_id,
+                                            execution_agent_id=tool_agent_id,
+                                            event_type="clarification_suggested",
+                                            message=failure_decision.user_message,
+                                            raw_payload={"questions": [q.model_dump() for q in failure_decision.clarification_questions]},
+                                        )
+                                yield sse("policy_decision", json.dumps(failure_decision.model_dump()))
+                                yield sse("thought", failure_decision.user_message or failure_msg)
                             else:
-                                accumulated_context += f"\n[Passo {step.step} - {route}]: {specialist_result}"
-                                if route == "session_file":
+                                capability_results.append(dispatch_result)
+                                if execution_logger and active_mass_doc_stages:
+                                    stage_updates, stage_metadata = mass_document_updates_for_step_result(current_route, success=True)
+                                    if stage_updates or stage_metadata:
+                                        active_mass_doc_stages = update_workflow_stages(
+                                            active_mass_doc_stages,
+                                            status_by_stage=stage_updates,
+                                            metadata_by_stage=stage_metadata,
+                                        )
+                                        await _log_workflow_stages(
+                                            execution_logger,
+                                            execution_id,
+                                            workflow_id="mass_document_analysis",
+                                            stages=active_mass_doc_stages,
+                                            message=f"Pipeline documental concluiu {route}",
+                                        )
+                                        yield sse(
+                                            "workflow_state",
+                                            json.dumps(
+                                                {
+                                                    "workflow_id": "mass_document_analysis",
+                                                    "stages": [stage.model_dump() for stage in active_mass_doc_stages],
+                                                    "message": f"Pipeline documental concluiu {route}",
+                                                }
+                                            ),
+                                        )
+                                accumulated_context += f"\n[Passo {step.step} - {current_route}]: {specialist_result}"
+                                if current_route == "session_file":
                                     yield sse("thought", f"Arquivo de sessão consultado: {func_args.get('file_name', '')}")
-                                elif route == "web_search":
+                                elif current_route == "web_search":
                                     yield sse("thought", f"Dados obtidos da web via busca: {func_args.get('query', '')}")
-                                elif route == "python":
+                                elif current_route == "python":
                                     yield sse("thought", f"Resultado do código Python: {str(specialist_result)[:120]}...")
-                                elif route == "deep_research":
+                                elif current_route == "deep_research":
                                     yield sse("thought", f"Pesquisa profunda concluída para: {func_args.get('query', '')[:120]}")
-                                elif route == "dynamic_skill":
-                                    yield sse("thought", f"Skill {func_name} executada com sucesso.")
+                                elif current_route == "dynamic_skill":
+                                    yield sse("thought", f"Skill {current_func_name} executada com sucesso.")
                                     if step.is_terminal and route_semantics["artifact_terminal"]:
                                         local_rendered_design = _render_local_design_if_possible(str(specialist_result))
                                         if local_rendered_design:
@@ -2017,6 +2532,46 @@ async def orchestrate_and_stream(
                     event_type="final_response_generated",
                     message="Resposta final consolidada enviada ao usuário",
                 )
+                await execution_logger.log_event(
+                    execution_id,
+                    event_type="execution_trace_summary",
+                    message="Resumo de task type, validação e trilha do pipeline",
+                    raw_payload={
+                        "task_type": inferred_task_type,
+                        "task_type_definition": task_type_definition,
+                        "validation_trail": validation_trail,
+                        "capability_results_count": len(capability_results),
+                    },
+                )
+                if inferred_task_type == "mass_document_analysis":
+                    await _log_workflow_stages(
+                        execution_logger,
+                        execution_id,
+                        workflow_id="mass_document_analysis",
+                        stages=build_mass_document_stages(
+                            session_items=_get_session_inventory_items(session_id),
+                            awaiting_user_goal=False,
+                            delivery_completed=True,
+                        ),
+                        message="Pipeline documental concluído",
+                    )
+                    yield sse(
+                        "workflow_state",
+                        json.dumps(
+                            {
+                                "workflow_id": "mass_document_analysis",
+                                "stages": [
+                                    stage.model_dump()
+                                    for stage in build_mass_document_stages(
+                                        session_items=_get_session_inventory_items(session_id),
+                                        awaiting_user_goal=False,
+                                        delivery_completed=True,
+                                    )
+                                ],
+                                "message": "Pipeline documental concluído",
+                            }
+                        ),
+                    )
         except Exception as exc:
             logger.error("[ORCHESTRATOR] Erro no streaming final consolidado: %s", exc)
             if execution_logger:
@@ -2038,12 +2593,48 @@ async def orchestrate_and_stream(
 
     # ── 3. Fallback / Sem Planejamento Complexo (Execução Normal ReAct) ──
     yield sse("thought", "Pedido direto. Respondendo ou acionando a ferramenta aplicável.")
+    direct_task_type = infer_task_type(user_intent)
+    direct_task_type_definition = get_task_type_definition(direct_task_type) or {}
+    direct_validation_trail: list[dict[str, Any]] = []
+    direct_capability_results: list[CapabilityResult] = []
+    direct_route_attempts: dict[str, int] = {}
+    direct_mass_doc_stages = (
+        build_mass_document_stages(
+            session_items=_get_session_inventory_items(session_id),
+            awaiting_user_goal=False,
+            delivery_completed=False,
+        )
+        if direct_task_type == "mass_document_analysis"
+        else None
+    )
     if execution_logger:
         await execution_logger.log_event(
             execution_id,
             event_type="direct_mode_started",
             message="Fluxo ReAct sem plano complexo iniciado",
+            raw_payload={
+                "task_type": direct_task_type,
+                "task_type_definition": direct_task_type_definition,
+            },
         )
+        if direct_mass_doc_stages:
+            await _log_workflow_stages(
+                execution_logger,
+                execution_id,
+                workflow_id="mass_document_analysis",
+                stages=direct_mass_doc_stages,
+                message="Pipeline documental iniciado em modo direto",
+            )
+            yield sse(
+                "workflow_state",
+                json.dumps(
+                    {
+                        "workflow_id": "mass_document_analysis",
+                        "stages": [stage.model_dump() for stage in direct_mass_doc_stages],
+                        "message": "Pipeline documental iniciado em modo direto",
+                    }
+                ),
+            )
     current_messages = [{"role": "system", "content": supervisor_prompt}]
     if session_inventory_message:
         current_messages.append({"role": "system", "content": session_inventory_message})
@@ -2147,56 +2738,137 @@ async def orchestrate_and_stream(
                     specialist_result = None
                     dispatch_info = None
                     dispatch_result: CapabilityResult | None = None
-                    dispatch_args = dict(func_args)
-                    if route == "deep_research":
-                        dispatch_args["_model"] = registry.get_model("deep_research") or supervisor_model
-                    elif route == "dynamic_skill":
-                        dispatch_args["_func_name"] = func_name
-                    async for event in dispatch_direct_route(
-                        route=route,
-                        func_args=dispatch_args,
-                        user_id=user_id,
-                        mode="react",
-                        step_label=f"Iteração {iteration}",
-                        execute_tool_fn=execute_tool,
-                        exec_with_heartbeat_fn=_exec_with_heartbeat,
-                        exec_browser_with_progress_fn=_exec_browser_with_progress,
-                        emit_file_artifacts_fn=_emit_file_artifacts,
-                        browser_handoff_payload_fn=_browser_handoff_payload,
-                        is_error_result_fn=_is_error_result,
-                        sse_fn=sse,
-                        logger=logger,
-                        search_timeout=_SEARCH_TIMEOUT,
-                        browser_timeout=_BROWSER_TIMEOUT,
-                        skill_timeout=_SKILL_TIMEOUT,
-                    ):
-                        if isinstance(event, dict) and "_dispatch" in event:
-                            dispatch_info = event["_dispatch"]
-                            if dispatch_info.get("result"):
-                                dispatch_result = CapabilityResult.model_validate(dispatch_info["result"])
-                                specialist_result = dispatch_result.content
+                    attempted_routes_for_turn = {route}
+                    current_route = route
+                    current_func_name = func_name
+                    current_func_args = dict(func_args)
+                    if execution_logger and direct_mass_doc_stages:
+                        stage_updates, stage_metadata = mass_document_updates_for_step_start(current_route)
+                        if stage_updates or stage_metadata:
+                            direct_mass_doc_stages = update_workflow_stages(
+                                direct_mass_doc_stages,
+                                status_by_stage=stage_updates,
+                                metadata_by_stage=stage_metadata,
+                            )
+                            await _log_workflow_stages(
+                                execution_logger,
+                                execution_id,
+                                workflow_id="mass_document_analysis",
+                                stages=direct_mass_doc_stages,
+                                message=f"Pipeline documental avançou em {route}",
+                            )
+                            yield sse(
+                                "workflow_state",
+                                json.dumps(
+                                    {
+                                        "workflow_id": "mass_document_analysis",
+                                        "stages": [stage.model_dump() for stage in direct_mass_doc_stages],
+                                        "message": f"Pipeline documental avançou em {route}",
+                                    }
+                                ),
+                            )
+                    while True:
+                        direct_route_attempts[current_route] = direct_route_attempts.get(current_route, 0) + 1
+                        dispatch_info = None
+                        dispatch_result = None
+                        dispatch_args = dict(current_func_args)
+                        if current_route == "deep_research":
+                            dispatch_args["_model"] = registry.get_model("deep_research") or supervisor_model
+                        elif current_route == "dynamic_skill":
+                            dispatch_args["_func_name"] = current_func_name
+                        async for event in dispatch_direct_route(
+                            route=current_route,
+                            func_args=dispatch_args,
+                            user_id=user_id,
+                            mode="react",
+                            step_label=f"Iteração {iteration}",
+                            execute_tool_fn=execute_tool,
+                            exec_with_heartbeat_fn=_exec_with_heartbeat,
+                            exec_browser_with_progress_fn=_exec_browser_with_progress,
+                            emit_file_artifacts_fn=_emit_file_artifacts,
+                            browser_handoff_payload_fn=_browser_handoff_payload,
+                            is_error_result_fn=_is_error_result,
+                            sse_fn=sse,
+                            logger=logger,
+                            search_timeout=_SEARCH_TIMEOUT,
+                            browser_timeout=_BROWSER_TIMEOUT,
+                            skill_timeout=_SKILL_TIMEOUT,
+                        ):
+                            if isinstance(event, dict) and "_dispatch" in event:
+                                dispatch_info = event["_dispatch"]
+                                if dispatch_info.get("result"):
+                                    dispatch_result = CapabilityResult.model_validate(dispatch_info["result"])
+                                    specialist_result = dispatch_result.content
+                                else:
+                                    specialist_result = dispatch_info.get("specialist_result")
                             else:
-                                specialist_result = dispatch_info.get("specialist_result")
-                        else:
-                            yield event
-                    if dispatch_info is None:
-                        specialist_result = specialist_result or f"Erro: route {route} não retornou resultado."
-                        dispatch_info = {
-                            "tool_name": func_name,
-                            "message": f"Execução concluída: {route}",
-                            "error": _is_error_result(specialist_result),
-                        }
-                    if dispatch_result is None:
-                        dispatch_result = CapabilityResult(
-                            capability_id=route,
-                            route=route,
-                            status="failed" if dispatch_info.get("error") else "completed",
-                            output_type="text",
-                            content=str(specialist_result or ""),
-                            handoff_required=bool(dispatch_info.get("handoff")),
-                            error_text=str(specialist_result or "") if dispatch_info.get("error") else None,
-                            metadata={"message": dispatch_info.get("message"), "tool_name": dispatch_info.get("tool_name")},
-                        )
+                                yield event
+                        if dispatch_info is None:
+                            specialist_result = specialist_result or f"Erro: route {current_route} não retornou resultado."
+                            dispatch_info = {
+                                "tool_name": current_func_name,
+                                "message": f"Execução concluída: {current_route}",
+                                "error": _is_error_result(specialist_result),
+                            }
+                        if dispatch_result is None:
+                            dispatch_result = CapabilityResult(
+                                capability_id=current_route,
+                                route=current_route,
+                                status="failed" if dispatch_info.get("error") else "completed",
+                                output_type="text",
+                                content=str(specialist_result or ""),
+                                handoff_required=bool(dispatch_info.get("handoff")),
+                                error_text=str(specialist_result or "") if dispatch_info.get("error") else None,
+                                metadata={"message": dispatch_info.get("message"), "tool_name": dispatch_info.get("tool_name")},
+                            )
+                        if dispatch_info.get("error"):
+                            failure_decision = decide_on_route_failure(
+                                task_type=direct_task_type,
+                                route=current_route,
+                                attempt_no=direct_route_attempts[current_route],
+                                error_text=str(specialist_result or ""),
+                            )
+                            if execution_logger:
+                                await _log_policy_decision(
+                                    execution_logger,
+                                    execution_id,
+                                    execution_agent_id=react_agent_id,
+                                    decision=failure_decision,
+                                )
+                            yield sse("policy_decision", json.dumps(failure_decision.model_dump()))
+                            if failure_decision.retry_same_route:
+                                yield sse("thought", f"{failure_decision.user_message} Tentando novamente {current_route}...")
+                                continue
+                            replan_decision = decide_route_replan(
+                                task_type=direct_task_type,
+                                failed_route=current_route,
+                                func_args=current_func_args,
+                                step_detail=user_intent,
+                                user_intent=user_intent,
+                                attempted_routes=attempted_routes_for_turn,
+                            )
+                            if replan_decision:
+                                attempted_routes_for_turn.add(replan_decision.to_route)
+                                current_route = replan_decision.to_route
+                                current_func_name = replan_decision.to_tool_name
+                                current_func_args = build_replanned_args(
+                                    failed_route=replan_decision.from_route,
+                                    target_route=replan_decision.to_route,
+                                    func_args=current_func_args,
+                                    step_detail=user_intent,
+                                    user_intent=user_intent,
+                                )
+                                if execution_logger:
+                                    await _log_replan_decision(
+                                        execution_logger,
+                                        execution_id,
+                                        execution_agent_id=react_agent_id,
+                                        decision=replan_decision,
+                                    )
+                                yield sse("step_replanned", json.dumps(replan_decision.model_dump()))
+                                yield sse("thought", replan_decision.user_message)
+                                continue
+                        break
                     if execution_logger:
                         await execution_logger.log_event(
                             execution_id,
@@ -2205,13 +2877,46 @@ async def orchestrate_and_stream(
                             event_type="browser_handoff_requested" if dispatch_info.get("handoff") else "tool_result",
                             message=dispatch_info.get("message"),
                             tool_name=dispatch_info.get("tool_name"),
-                            tool_args=func_args,
+                            tool_args=current_func_args,
                             tool_result=dispatch_result.content[:2000] if dispatch_result.content else None,
                             raw_payload={
                                 "dispatch_result": dispatch_result.model_dump(),
                                 "handoff_payload": dispatch_info.get("handoff_payload"),
                             },
                         )
+                    validation_result = validate_capability_execution(
+                        task_type=direct_task_type,
+                        route=current_route,
+                        capability_result=dispatch_result,
+                        input_payload=current_func_args,
+                        context_results=direct_capability_results,
+                    )
+                    if validation_result:
+                        direct_validation_trail.append(validation_result.model_dump())
+                        if execution_logger:
+                            await execution_logger.log_event(
+                                execution_id,
+                                execution_agent_id=react_agent_id,
+                                level="warning" if validation_result.status != "valid" else "info",
+                                event_type="validation_result",
+                                message=validation_result.summary,
+                                raw_payload=validation_result.model_dump(),
+                            )
+                            await _log_policy_decision(
+                                execution_logger,
+                                execution_id,
+                                execution_agent_id=react_agent_id,
+                                decision=decide_on_validation(
+                                    task_type=direct_task_type,
+                                    route=current_route,
+                                    validation_result=validation_result,
+                                ),
+                            )
+                        yield sse("policy_decision", json.dumps(decide_on_validation(
+                            task_type=direct_task_type,
+                            route=current_route,
+                            validation_result=validation_result,
+                        ).model_dump()))
                     if dispatch_info.get("handoff"):
                         if execution_logger:
                             await execution_logger.finish_agent(
@@ -2227,9 +2932,38 @@ async def orchestrate_and_stream(
                         "tool_call_id": tool["id"],
                         "content": specialist_result,
                     })
-                    if route == "session_file":
+                    direct_capability_results.append(dispatch_result)
+                    if execution_logger and direct_mass_doc_stages:
+                        stage_updates, stage_metadata = mass_document_updates_for_step_result(
+                            current_route,
+                            success=not _is_error_result(specialist_result),
+                        )
+                        if stage_updates or stage_metadata:
+                            direct_mass_doc_stages = update_workflow_stages(
+                                direct_mass_doc_stages,
+                                status_by_stage=stage_updates,
+                                metadata_by_stage=stage_metadata,
+                            )
+                            await _log_workflow_stages(
+                                execution_logger,
+                                execution_id,
+                                workflow_id="mass_document_analysis",
+                                stages=direct_mass_doc_stages,
+                                message=f"Pipeline documental atualizou {route}",
+                            )
+                            yield sse(
+                                "workflow_state",
+                                json.dumps(
+                                    {
+                                        "workflow_id": "mass_document_analysis",
+                                        "stages": [stage.model_dump() for stage in direct_mass_doc_stages],
+                                        "message": f"Pipeline documental atualizou {route}",
+                                    }
+                                ),
+                            )
+                    if current_route == "session_file":
                         yield sse("steps", "<step>Leitura do anexo concluída — integrando contexto...</step>")
-                    elif route == "web_search":
+                    elif current_route == "web_search":
                         if dispatch_info.get("error"):
                             current_messages.append({
                                 "role": "system",
@@ -2480,6 +3214,18 @@ async def orchestrate_and_stream(
                             status="completed",
                             output_payload={"preview": final_result[:2000], "capability_result": terminal_result.model_dump()},
                         )
+                        if direct_mass_doc_stages and direct_task_type == "mass_document_analysis":
+                            await _log_workflow_stages(
+                                execution_logger,
+                                execution_id,
+                                workflow_id="mass_document_analysis",
+                                stages=build_mass_document_stages(
+                                    session_items=_get_session_inventory_items(session_id),
+                                    awaiting_user_goal=False,
+                                    delivery_completed=True,
+                                ),
+                                message="Pipeline documental concluído em modo direto",
+                            )
                         await _log_pipeline_terminated(
                             execution_logger,
                             execution_id,
@@ -2618,6 +3364,18 @@ async def orchestrate_and_stream(
             )
             async for event in _yield_text_chunks(final_content):
                 yield event
+            if execution_logger and direct_mass_doc_stages and direct_task_type == "mass_document_analysis":
+                await _log_workflow_stages(
+                    execution_logger,
+                    execution_id,
+                    workflow_id="mass_document_analysis",
+                    stages=build_mass_document_stages(
+                        session_items=_get_session_inventory_items(session_id),
+                        awaiting_user_goal=False,
+                        delivery_completed=True,
+                    ),
+                    message="Pipeline documental concluído em resposta direta",
+                )
 
             return
 

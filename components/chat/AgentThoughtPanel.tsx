@@ -5,6 +5,8 @@ export interface ThoughtStep {
   status: 'done' | 'running' | 'pending';
   /** true = raciocínio do LLM em texto livre (não um step de ação) */
   isThought?: boolean;
+  kind?: 'step' | 'thought' | 'policy' | 'replan' | 'workflow';
+  meta?: any;
 }
 
 interface AgentThoughtPanelProps {

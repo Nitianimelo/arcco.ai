@@ -16,6 +16,7 @@ from typing import Any
 
 from backend.agents.capabilities import get_capability_by_tool_name
 from backend.agents.contracts import ArtifactRef, CapabilityResult
+from backend.agents.handoffs import build_browser_handoff_state
 from backend.skills import loader as skills_loader
 
 
@@ -275,6 +276,7 @@ async def dispatch_direct_route(
 
         if handoff_exc is not None:
             payload = browser_handoff_payload_fn(handoff_exc, url)
+            workflow_handoff = build_browser_handoff_state(payload=payload, resume_token=handoff_exc.resume_token)
             yield sse_fn("browser_action", json.dumps(payload["browser_action"]))
             yield sse_fn("needs_clarification", json.dumps(payload))
             yield {"_dispatch": _build_dispatch_payload(
@@ -284,7 +286,10 @@ async def dispatch_direct_route(
                 message=handoff_exc.message,
                 error=False,
                 handoff=True,
-                handoff_payload=payload,
+                handoff_payload={
+                    **payload,
+                    "workflow_handoff": workflow_handoff.model_dump() if workflow_handoff else None,
+                },
                 resume_token=handoff_exc.resume_token,
             )}
             return
@@ -299,6 +304,12 @@ async def dispatch_direct_route(
             content=specialist_result,
             message=f"Browser concluído para {url[:120]}",
             error=is_error_result_fn(specialist_result),
+            handoff_payload={
+                "workflow_state": {
+                    "status": "completed" if not is_error_result_fn(specialist_result) else "failed",
+                    "url": url,
+                }
+            },
         )}
         return
 

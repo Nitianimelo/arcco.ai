@@ -11,8 +11,8 @@ POST /api/agent/chat
   → Background task: salva mensagens no Supabase + atualiza memória
 
 Modos:
-  Chat Normal  → route 'chat': assistente direto, sem ferramentas, sem QA
-  Modo Agente  → route web_search | file_generator | design | dev
+  Chat Normal  → assistente direto, com contexto e sem orquestração pesada
+  Modo Agente  → planner + dispatcher + specialists/skills conforme task type
 
 No modo agente, os prompts dos agentes vivem em backend/agents/prompts.py.
 No chat normal, cada slot pode enviar seu próprio system_prompt configurado no admin.

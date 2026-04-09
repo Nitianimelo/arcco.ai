@@ -257,6 +257,76 @@ function extractCapabilityResult(payload: any) {
   return payload?.capability_result || payload?.dispatch_result || null;
 }
 
+function extractTaskType(detail: any) {
+  const executionTaskType = detail?.execution?.metadata?.task_type;
+  if (executionTaskType) return executionTaskType;
+
+  const executionContext = (detail?.logs || []).find((log: any) => log.event_type === 'execution_context_initialized');
+  return executionContext?.raw_payload?.task_type || executionContext?.raw_payload?.taskType || null;
+}
+
+function collectValidationTrail(detail: any) {
+  const validationLogs = (detail?.logs || []).filter((log: any) => log.event_type === 'validation_result');
+  return validationLogs.map((log: any) => ({
+    created_at: log.created_at,
+    execution_agent_id: log.execution_agent_id,
+    ...log.raw_payload,
+  }));
+}
+
+function collectClarificationTrail(detail: any) {
+  return (detail?.logs || [])
+    .filter((log: any) => ['clarification_requested', 'browser_handoff_requested'].includes(log.event_type))
+    .map((log: any) => ({
+      created_at: log.created_at,
+      event_type: log.event_type,
+      message: log.message,
+      raw_payload: log.raw_payload,
+    }));
+}
+
+function extractWorkflowState(payload: any) {
+  return (
+    payload?.workflow_state
+    || payload?.workflow_handoff
+    || payload?.handoff_payload?.workflow_handoff
+    || payload?.dispatch_result?.metadata?.handoff_payload?.workflow_handoff
+    || payload?.dispatch_result?.metadata?.handoff_payload?.workflow_state
+    || null
+  );
+}
+
+function collectWorkflowSnapshots(detail: any) {
+  return (detail?.logs || [])
+    .filter((log: any) => log.event_type === 'workflow_stage_snapshot')
+    .map((log: any) => ({
+      created_at: log.created_at,
+      message: log.message,
+      workflow_id: log.raw_payload?.workflow_id,
+      stages: log.raw_payload?.stages || [],
+    }));
+}
+
+function collectPolicyDecisions(detail: any) {
+  return (detail?.logs || [])
+    .filter((log: any) => log.event_type === 'workflow_policy_decision')
+    .map((log: any) => ({
+      created_at: log.created_at,
+      execution_agent_id: log.execution_agent_id,
+      ...log.raw_payload,
+    }));
+}
+
+function collectReplanDecisions(detail: any) {
+  return (detail?.logs || [])
+    .filter((log: any) => log.event_type === 'step_replanned')
+    .map((log: any) => ({
+      created_at: log.created_at,
+      execution_agent_id: log.execution_agent_id,
+      ...log.raw_payload,
+    }));
+}
+
 
 // â”€â”€ Componente: Dropdown de modelo pesquisÃ¡vel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 /**
@@ -2010,6 +2080,14 @@ export const AdminPage: React.FC = () => {
                         <div className="md:col-span-2"><span className="text-neutral-500">Pedido:</span> <span className="text-neutral-200">{executionDetail.execution?.request_text}</span></div>
                         <div><span className="text-neutral-500">Agentes:</span> <span className="text-neutral-200">{executionDetail.agents?.length || 0}</span></div>
                         <div><span className="text-neutral-500">Eventos:</span> <span className="text-neutral-200">{executionDetail.logs?.length || 0}</span></div>
+                        {extractTaskType(executionDetail) && (
+                          <div><span className="text-neutral-500">Task Type:</span> <span className="text-neutral-200">{extractTaskType(executionDetail)}</span></div>
+                        )}
+                        <div><span className="text-neutral-500">Validações:</span> <span className="text-neutral-200">{collectValidationTrail(executionDetail).length}</span></div>
+                        <div><span className="text-neutral-500">Clarificações:</span> <span className="text-neutral-200">{collectClarificationTrail(executionDetail).length}</span></div>
+                        <div><span className="text-neutral-500">Workflows:</span> <span className="text-neutral-200">{collectWorkflowSnapshots(executionDetail).length}</span></div>
+                        <div><span className="text-neutral-500">Policies:</span> <span className="text-neutral-200">{collectPolicyDecisions(executionDetail).length}</span></div>
+                        <div><span className="text-neutral-500">Replans:</span> <span className="text-neutral-200">{collectReplanDecisions(executionDetail).length}</span></div>
                         {executionDetail.execution?.metadata?.architecture_version && (
                           <div><span className="text-neutral-500">Arquitetura:</span> <span className="text-neutral-200">{executionDetail.execution.metadata.architecture_version}</span></div>
                         )}
@@ -2020,6 +2098,89 @@ export const AdminPage: React.FC = () => {
                           <div className="md:col-span-2 text-red-400"><span className="text-neutral-500">Erro final:</span> {executionDetail.execution.final_error}</div>
                         )}
                       </div>
+                      {(collectValidationTrail(executionDetail).length > 0 || collectClarificationTrail(executionDetail).length > 0) && (
+                        <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-3">
+                          {collectValidationTrail(executionDetail).length > 0 && (
+                            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+                              <div className="text-xs font-medium text-amber-300 mb-2">Validação</div>
+                              <div className="space-y-2">
+                                {collectValidationTrail(executionDetail).map((item: any, index: number) => (
+                                  <div key={`${item.validator_id || 'validator'}-${index}`} className="text-[11px]">
+                                    <div className="text-neutral-200">{item.summary}</div>
+                                    <div className="text-neutral-500">
+                                      {item.validator_id || 'validator'} • {item.status || '—'} • {item.capability_id || '—'}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {collectClarificationTrail(executionDetail).length > 0 && (
+                            <div className="rounded-lg border border-sky-500/20 bg-sky-500/5 p-3">
+                              <div className="text-xs font-medium text-sky-300 mb-2">Clarificação</div>
+                              <div className="space-y-2">
+                                {collectClarificationTrail(executionDetail).map((item: any, index: number) => (
+                                  <div key={`${item.event_type || 'clarification'}-${index}`} className="text-[11px]">
+                                    <div className="text-neutral-200">{item.message || item.event_type}</div>
+                                    <div className="text-neutral-500">{item.event_type}</div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {collectWorkflowSnapshots(executionDetail).length > 0 && (
+                        <div className="mt-4 rounded-lg border border-violet-500/20 bg-violet-500/5 p-3">
+                          <div className="text-xs font-medium text-violet-300 mb-2">Workflow Stages</div>
+                          <div className="space-y-3">
+                            {collectWorkflowSnapshots(executionDetail).map((snapshot: any, index: number) => (
+                              <div key={`${snapshot.workflow_id || 'workflow'}-${index}`} className="text-[11px]">
+                                <div className="text-neutral-200">{snapshot.message || snapshot.workflow_id}</div>
+                                <div className="text-neutral-500 mb-1">{snapshot.workflow_id || 'workflow'}</div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                  {(snapshot.stages || []).map((stage: any) => (
+                                    <div key={stage.stage_id} className="rounded border border-neutral-800 bg-[#101010] px-2 py-1">
+                                      <div className="text-neutral-200">{stage.label}</div>
+                                      <div className="text-neutral-500">{stage.status}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {collectPolicyDecisions(executionDetail).length > 0 && (
+                        <div className="mt-4 rounded-lg border border-rose-500/20 bg-rose-500/5 p-3">
+                          <div className="text-xs font-medium text-rose-300 mb-2">Workflow Policy</div>
+                          <div className="space-y-2">
+                            {collectPolicyDecisions(executionDetail).map((decision: any, index: number) => (
+                              <div key={`${decision.decision_id || 'policy'}-${index}`} className="text-[11px]">
+                                <div className="text-neutral-200">{decision.user_message || decision.decision_id}</div>
+                                <div className="text-neutral-500">
+                                  {decision.decision_id || 'policy'} • {decision.route || '—'} • abort={String(decision.should_abort)} • partial={String(decision.continue_partial)} • retry={String(decision.retry_same_route)}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {collectReplanDecisions(executionDetail).length > 0 && (
+                        <div className="mt-4 rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3">
+                          <div className="text-xs font-medium text-cyan-300 mb-2">Step Replan</div>
+                          <div className="space-y-2">
+                            {collectReplanDecisions(executionDetail).map((decision: any, index: number) => (
+                              <div key={`${decision.decision_id || 'replan'}-${index}`} className="text-[11px]">
+                                <div className="text-neutral-200">{decision.user_message || decision.reason}</div>
+                                <div className="text-neutral-500">
+                                  {decision.from_route || '—'} → {decision.to_route || '—'} • {decision.to_tool_name || '—'}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       {executionDetail.execution?.metadata && (
                         <details className="mt-4">
                           <summary className="text-xs text-indigo-300 cursor-pointer">Ver metadata consolidada da execução</summary>
@@ -2089,6 +2250,12 @@ export const AdminPage: React.FC = () => {
                                 <div><span className="text-neutral-500">Artifacts:</span> <span className="text-neutral-200">{extractCapabilityResult(log.raw_payload).artifacts?.length || 0}</span></div>
                               </div>
                             )}
+                            {extractWorkflowState(log.raw_payload) && (
+                              <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2 text-[11px]">
+                                <div><span className="text-neutral-500">Workflow:</span> <span className="text-neutral-200">{extractWorkflowState(log.raw_payload).handoff_type || extractWorkflowState(log.raw_payload).status || '—'}</span></div>
+                                <div><span className="text-neutral-500">Resume:</span> <span className="text-neutral-200">{extractWorkflowState(log.raw_payload).metadata?.resume_token || extractWorkflowState(log.raw_payload).resume_token || '—'}</span></div>
+                              </div>
+                            )}
                             {(log.tool_name || log.tool_args || log.tool_result || log.raw_payload) && (
                               <details className="mt-2">
                                 <summary className="text-[10px] text-indigo-300 cursor-pointer">Ver detalhes do log</summary>
@@ -2097,6 +2264,7 @@ export const AdminPage: React.FC = () => {
                                   tool_args: log.tool_args,
                                   tool_result: log.tool_result,
                                   capability_result: extractCapabilityResult(log.raw_payload),
+                                  workflow_state: extractWorkflowState(log.raw_payload),
                                   raw_payload: log.raw_payload,
                                 }, null, 2)}</pre>
                               </details>

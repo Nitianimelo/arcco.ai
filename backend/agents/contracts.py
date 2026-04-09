@@ -23,6 +23,33 @@ ExecutionStatus = Literal[
     "awaiting_clarification",
 ]
 
+TaskTypeId = Literal[
+    "general_request",
+    "entity_collection",
+    "spreadsheet_generation",
+    "document_generation",
+    "design_generation",
+    "file_transformation",
+    "deep_research",
+    "browser_workflow",
+    "mass_document_analysis",
+]
+
+ValidationStatus = Literal[
+    "valid",
+    "valid_with_warnings",
+    "insufficient_but_deliverable",
+    "clarification_recommended",
+]
+
+WorkflowStageStatus = Literal[
+    "pending",
+    "in_progress",
+    "waiting_user",
+    "completed",
+    "skipped",
+]
+
 PlanAction = Literal[
     "direct_answer",
     "session_file",
@@ -51,6 +78,57 @@ class ArtifactRef(BaseModel):
     label: str = Field(description="Nome curto ou descricao do artefato")
     url: str = Field(description="URL publica do artefato")
     artifact_type: str = Field(default="generic", description="Tipo do artefato")
+
+
+class ReferenceEntityContract(BaseModel):
+    name: str = Field(description="Nome principal da entidade.")
+    source_urls: list[str] = Field(default_factory=list, description="Fontes associadas à entidade.")
+    source_titles: list[str] = Field(default_factory=list, description="Titulos curtos das fontes associadas.")
+    confidence: str = Field(default="medium", description="Baixa, media ou alta, em linguagem operacional.")
+    notes: str = Field(default="", description="Observações curtas que ajudam a próxima capability.")
+
+
+class StepHandoffContract(BaseModel):
+    handoff_type: str = Field(description="Tipo canônico do handoff entre steps.")
+    from_capability_id: str = Field(description="Capability de origem.")
+    to_capability_id: str = Field(description="Capability de destino.")
+    task_type: TaskTypeId = Field(description="Tipo de tarefa associado ao handoff.")
+    summary: str = Field(description="Resumo curto do que deve ser preservado entre os passos.")
+    entities: list[ReferenceEntityContract] = Field(default_factory=list, description="Entidades estruturadas preparadas para o próximo passo.")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Dados auxiliares do handoff.")
+
+
+class WorkflowStageContract(BaseModel):
+    stage_id: str = Field(description="Identificador estável do estágio.")
+    label: str = Field(description="Nome curto para exibição humana.")
+    status: WorkflowStageStatus = Field(description="Estado atual do estágio.")
+    summary: str = Field(description="Resumo operacional do estágio.")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Dados auxiliares para logs e painel.")
+
+
+class PolicyDecisionContract(BaseModel):
+    decision_id: str = Field(description="Identificador estável da política aplicada.")
+    task_type: TaskTypeId = Field(description="Tipo de tarefa avaliado.")
+    route: str = Field(description="Route avaliada.")
+    should_abort: bool = Field(default=False, description="Indica se o pipeline deve ser interrompido.")
+    continue_partial: bool = Field(default=False, description="Indica se a execução pode seguir parcialmente.")
+    request_clarification: bool = Field(default=False, description="Indica se vale perguntar algo ao usuário.")
+    retry_same_route: bool = Field(default=False, description="Indica se vale tentar a mesma route mais uma vez.")
+    clarification_questions: list[ClarificationQuestionContract] = Field(default_factory=list)
+    user_message: str = Field(default="", description="Mensagem curta para contexto/log/frontend.")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Dados auxiliares da decisão.")
+
+
+class RouteReplanDecisionContract(BaseModel):
+    decision_id: str = Field(description="Identificador estável do replanejamento.")
+    task_type: TaskTypeId = Field(description="Tipo de tarefa avaliado.")
+    from_route: str = Field(description="Route que falhou.")
+    to_route: str = Field(description="Route alternativa escolhida.")
+    to_action: str = Field(description="Action canônica correspondente à nova route.")
+    to_tool_name: str = Field(description="Tool a ser chamada após o replanejamento.")
+    reason: str = Field(description="Motivo objetivo do replanejamento.")
+    user_message: str = Field(default="", description="Mensagem curta para trilha de execução.")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Dados auxiliares da decisão.")
 
 
 class CapabilityResult(BaseModel):
@@ -86,6 +164,20 @@ class ExecutionSummary(BaseModel):
     runtime_summary: dict[str, Any] = Field(default_factory=dict)
 
 
+class ValidationIssueContract(BaseModel):
+    code: str = Field(description="Codigo curto e estável do problema detectado.")
+    severity: Literal["info", "warning", "high"] = Field(description="Severidade do achado.")
+    message: str = Field(description="Descricao objetiva do achado.")
+    field_name: str | None = Field(default=None, description="Campo principal afetado, quando aplicavel.")
+    evidence: str | None = Field(default=None, description="Trecho curto de evidência, quando disponivel.")
+
+
+class ClarificationOptionContract(BaseModel):
+    label: str = Field(description="Texto curto da opcao.")
+    description: str = Field(default="", description="Impacto ou explicacao curta da opcao.")
+    recommended: bool = Field(default=False, description="Marca a opcao recomendada.")
+
+
 class PlanStepContract(BaseModel):
     step: int = Field(description="Numero sequencial do passo, iniciando em 1.")
     action: str = Field(
@@ -112,10 +204,34 @@ class ClarificationQuestionContract(BaseModel):
     type: str = Field(description="'choice' para opcoes fechadas ou 'open' para texto livre.")
     text: str = Field(description="Pergunta que sera exibida ao usuario.")
     options: list[str] = Field(default_factory=list, description="Opcoes para perguntas do tipo 'choice'.")
+    option_details: list[ClarificationOptionContract] = Field(
+        default_factory=list,
+        description="Versao estruturada das opcoes para interfaces e manutencao assistida.",
+    )
+    helper_text: str = Field(default="", description="Texto curto para orientar a resposta do usuario.")
+
+
+class ValidationResultContract(BaseModel):
+    validator_id: str = Field(description="Identificador estavel do validador executado.")
+    task_type: TaskTypeId = Field(description="Tipo de tarefa avaliado.")
+    capability_id: str = Field(description="Capability validada.")
+    status: ValidationStatus = Field(description="Resultado resumido da validacao.")
+    summary: str = Field(description="Resumo curto para logs, painel admin e contexto.")
+    issues: list[ValidationIssueContract] = Field(default_factory=list, description="Achados detalhados da validacao.")
+    clarification_needed: bool = Field(default=False, description="True quando vale perguntar algo ao usuario.")
+    suggested_questions: list[ClarificationQuestionContract] = Field(
+        default_factory=list,
+        description="Perguntas sugeridas para refinamento sem ambiguidades.",
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Dados auxiliares do validador.")
 
 
 class PlannerOutputContract(BaseModel):
     is_complex: bool = Field(description="True quando a solicitacao exige fluxo multi-step.")
+    task_type: TaskTypeId = Field(
+        default="general_request",
+        description="Classificacao canonica da tarefa para roteamento, validacao e logs.",
+    )
     steps: list[PlanStepContract] = Field(
         default_factory=list,
         description="Plano ordenado de execucao. Pode ficar vazio quando houver clarificacao.",

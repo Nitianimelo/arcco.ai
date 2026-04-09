@@ -16,6 +16,7 @@ from backend.agents.contracts import (
     PlanStepContract as PlanStep,
     infer_capability_id_from_action,
 )
+from backend.agents.task_types import infer_task_type
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}", re.DOTALL)
 def _fallback_direct_answer(user_intent: str) -> PlannerOutput:
     return PlannerOutput(
         is_complex=False,
+        task_type=infer_task_type(user_intent),
         acknowledgment="Ok, vou responder diretamente.",
         steps=[PlanStep(step=1, action="direct_answer", capability_id=None, detail=user_intent, is_terminal=True)],
     )
@@ -79,7 +81,12 @@ def _normalize_plan(plan: PlannerOutput, *, user_intent: str) -> PlannerOutput:
             )
         )
 
-    return plan.model_copy(update={"steps": normalized_steps})
+    return plan.model_copy(
+        update={
+            "steps": normalized_steps,
+            "task_type": plan.task_type or infer_task_type(user_intent, normalized_steps),
+        }
+    )
 
 
 async def _request_plan(messages: list[dict], model: str, *, user_intent: str) -> PlannerOutput:

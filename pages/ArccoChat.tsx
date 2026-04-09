@@ -162,6 +162,34 @@ interface BrowserClarificationPayload {
   originalPrompt?: string;
 }
 
+interface WorkflowStageView {
+  stage_id: string;
+  label: string;
+  status: 'pending' | 'in_progress' | 'waiting_user' | 'completed' | 'skipped';
+}
+
+interface WorkflowSnapshotView {
+  workflowId: string;
+  message: string;
+  stages: WorkflowStageView[];
+}
+
+interface PolicyDecisionView {
+  decision_id: string;
+  route: string;
+  user_message: string;
+  should_abort: boolean;
+  continue_partial: boolean;
+  retry_same_route: boolean;
+}
+
+interface ReplanDecisionView {
+  from_route: string;
+  to_route: string;
+  to_tool_name: string;
+  user_message: string;
+}
+
 const allSuggestions = [
   'Criar um post para Instagram',
   'Resumir este documento',
@@ -251,6 +279,9 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const [isAgentMode, setIsAgentMode] = useState(true);
 
   const [agentThoughts, setAgentThoughts] = useState<ThoughtStep[]>([]);
+  const [workflowSnapshots, setWorkflowSnapshots] = useState<WorkflowSnapshotView[]>([]);
+  const [policyDecisions, setPolicyDecisions] = useState<PolicyDecisionView[]>([]);
+  const [replanDecisions, setReplanDecisions] = useState<ReplanDecisionView[]>([]);
   const [isThoughtsExpanded, setIsThoughtsExpanded] = useState(true);
   const [browserAction, setBrowserAction] = useState<{ status: string; url: string; title: string; live_url?: string } | null>(null);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
@@ -1006,6 +1037,9 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     }
     setIsLoading(true);
     setAgentThoughts([]);
+    setWorkflowSnapshots([]);
+    setPolicyDecisions([]);
+    setReplanDecisions([]);
     setGeneratedFiles([]);
     setBrowserAction(null);
     setTextDocArtifact(null);
@@ -1150,6 +1184,76 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 });
                 pushNarrativeThinking(payload.message || 'Encontrei um bloqueio visual e preciso da sua ajuda para continuar.');
                 finalizeAgentExecutionUi(0);
+              }
+            } catch { /* ignore parse errors */ }
+            return;
+          }
+
+          if (type === 'workflow_state') {
+            try {
+              const payload = JSON.parse(content);
+              if (payload?.workflow_id && Array.isArray(payload?.stages)) {
+                setWorkflowSnapshots(prev => {
+                  const next = prev.filter(item => item.workflowId !== payload.workflow_id);
+                  return [...next, {
+                    workflowId: payload.workflow_id,
+                    message: payload.message || payload.workflow_id,
+                    stages: payload.stages,
+                  }];
+                });
+                if (payload?.message) {
+                  pushNarrativeThinking(payload.message);
+                }
+              }
+            } catch { /* ignore parse errors */ }
+            return;
+          }
+
+          if (type === 'policy_decision') {
+            try {
+              const payload = JSON.parse(content);
+              if (payload?.decision_id) {
+                setPolicyDecisions(prev => [...prev.slice(-3), {
+                  decision_id: payload.decision_id,
+                  route: payload.route || '',
+                  user_message: payload.user_message || '',
+                  should_abort: Boolean(payload.should_abort),
+                  continue_partial: Boolean(payload.continue_partial),
+                  retry_same_route: Boolean(payload.retry_same_route),
+                }]);
+                if (payload?.user_message) {
+                  setAgentThoughts(prev => {
+                    const updated = prev.map(s => s.status === 'running' ? { ...s, status: 'done' as const } : s);
+                    return [...updated, { label: payload.user_message, status: 'running', kind: 'policy', meta: payload }];
+                  });
+                }
+              }
+            } catch { /* ignore parse errors */ }
+            return;
+          }
+
+          if (type === 'step_replanned') {
+            try {
+              const payload = JSON.parse(content);
+              if (payload?.from_route && payload?.to_route) {
+                setReplanDecisions(prev => [...prev.slice(-3), {
+                  from_route: payload.from_route,
+                  to_route: payload.to_route,
+                  to_tool_name: payload.to_tool_name || '',
+                  user_message: payload.user_message || '',
+                }]);
+                setAgentThoughts(prev => {
+                  const updated = prev.map(s => s.status === 'running' ? { ...s, status: 'done' as const } : s);
+                  return [...updated, {
+                    label: payload.user_message || `${payload.from_route} → ${payload.to_route}`,
+                    status: 'running',
+                    kind: 'replan',
+                    meta: payload,
+                  }];
+                });
+                if (payload?.user_message) {
+                  pushNarrativeThinking(payload.user_message);
+                }
               }
             } catch { /* ignore parse errors */ }
             return;
@@ -1724,13 +1828,17 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     if (!isAgentMode) return null;
 
     const hasSteps = agentThoughts.length > 0;
+    const hasWorkflow = workflowSnapshots.length > 0;
+    const hasPolicies = policyDecisions.length > 0;
+    const hasReplans = replanDecisions.length > 0;
     const allDone = hasSteps && agentThoughts.every(s => s.status === 'done');
     const actionSteps = agentThoughts.filter(s => !s.isThought);
-    const stepsCollapsed = allDone && !isThoughtsExpanded;
+    const hasHarnessData = hasWorkflow || hasPolicies || hasReplans;
+    const stepsCollapsed = allDone && !isThoughtsExpanded && !hasHarnessData;
 
-    if (!hasSteps && !isLoading) return null;
+    if (!hasSteps && !hasHarnessData && !isLoading) return null;
 
-    if (!hasSteps && isLoading) {
+    if (!hasSteps && !hasHarnessData && isLoading) {
       return (
         <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px] py-1 animate-in fade-in duration-300">
           <div className="flex items-center gap-2.5">
@@ -1761,15 +1869,87 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
     return (
       <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px]">
-        <div className="py-0.5 space-y-1.5">
+        <div className="overflow-hidden rounded-2xl border border-[#25252d] bg-[linear-gradient(180deg,rgba(18,18,23,0.96),rgba(11,11,15,0.98))] shadow-[0_18px_48px_rgba(0,0,0,0.28)]">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-[#1e1e25]">
+            <div className="flex items-center gap-2.5">
+              <div className={`h-2 w-2 rounded-full ${isLoading ? 'bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.8)]' : 'bg-neutral-500'}`} />
+              <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Arcco Runtime</span>
+            </div>
+            <div className="text-[11px] text-neutral-500 tabular-nums">{elapsedSeconds}s</div>
+          </div>
+
+          {hasHarnessData && (
+            <div className="px-4 py-3 border-b border-[#191920] space-y-3">
+              {hasWorkflow && workflowSnapshots.map((snapshot, index) => (
+                <div key={`${snapshot.workflowId}-${index}`} className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[11px] text-neutral-200">{snapshot.message}</span>
+                    <span className="text-[10px] uppercase tracking-[0.18em] text-neutral-600">{snapshot.workflowId.replaceAll('_', ' ')}</span>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {snapshot.stages.map(stage => (
+                      <div key={stage.stage_id} className="rounded-xl border border-[#2a2a34] bg-[#14141b] px-2.5 py-2">
+                        <div className="text-[10px] uppercase tracking-[0.16em] text-neutral-600">{stage.label}</div>
+                        <div className={`mt-1 text-[11px] ${
+                          stage.status === 'completed'
+                            ? 'text-emerald-300'
+                            : stage.status === 'waiting_user'
+                              ? 'text-amber-300'
+                              : stage.status === 'in_progress'
+                                ? 'text-sky-300'
+                                : 'text-neutral-500'
+                        }`}>
+                          {stage.status}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+
+              {(hasPolicies || hasReplans) && (
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                  {hasPolicies && (
+                    <div className="rounded-xl border border-[#31213a] bg-[#18131d] px-3 py-3">
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-fuchsia-300/80 mb-2">Policy</div>
+                      <div className="space-y-2">
+                        {policyDecisions.map((decision, index) => (
+                          <div key={`${decision.decision_id}-${index}`} className="text-[11px]">
+                            <div className="text-neutral-200">{decision.user_message}</div>
+                            <div className="text-neutral-500">{decision.route || 'route'} • retry={String(decision.retry_same_route)} • partial={String(decision.continue_partial)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {hasReplans && (
+                    <div className="rounded-xl border border-[#203341] bg-[#12191f] px-3 py-3">
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-cyan-300/80 mb-2">Replan</div>
+                      <div className="space-y-2">
+                        {replanDecisions.map((decision, index) => (
+                          <div key={`${decision.from_route}-${decision.to_route}-${index}`} className="text-[11px]">
+                            <div className="text-neutral-200">{decision.user_message}</div>
+                            <div className="text-neutral-500">{decision.from_route} → {decision.to_route} • {decision.to_tool_name}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="px-4 py-3 space-y-1.5">
           {agentThoughts.map((step, i) => {
             const isStepRunning = step.status === 'running';
             const label = step.label.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\u200d\ufe0f]/gu, '').trim();
+            const stepKind = step.kind || (step.isThought ? 'thought' : 'step');
 
             if (step.isThought) {
               return (
                 <div key={i} className="pl-[22px] animate-step-enter" style={{ animationDelay: `${i * 35}ms` }}>
-                  <span className={`text-xs leading-relaxed italic ${isStepRunning ? 'text-neutral-600' : 'text-neutral-800'}`}>
+                  <span className={`text-xs leading-relaxed italic ${isStepRunning ? 'text-neutral-500' : 'text-neutral-700'}`}>
                     {label}
                   </span>
                 </div>
@@ -1779,7 +1959,11 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             return (
               <div key={i} className="flex items-center gap-2.5 animate-step-enter" style={{ animationDelay: `${i * 35}ms` }}>
                 <span className="flex-shrink-0 w-[14px] flex justify-center">
-                  {step.status === 'done' ? (
+                  {stepKind === 'policy' ? (
+                    <span className="text-[11px] text-fuchsia-300 leading-none">◆</span>
+                  ) : stepKind === 'replan' ? (
+                    <span className="text-[11px] text-cyan-300 leading-none">↺</span>
+                  ) : step.status === 'done' ? (
                     <span className="text-[11px] text-emerald-600/60 animate-check-pop leading-none">✓</span>
                   ) : isStepRunning ? (
                     <div className="w-[5px] h-[5px] rounded-full bg-indigo-400 animate-ring-pulse" />
@@ -1788,11 +1972,15 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   )}
                 </span>
                 <span className={`text-sm leading-snug ${
-                  isStepRunning
+                  stepKind === 'policy'
+                    ? 'text-fuchsia-200'
+                    : stepKind === 'replan'
+                      ? 'text-cyan-200'
+                      : isStepRunning
                     ? 'shimmer-text text-neutral-400'
                     : step.status === 'done'
-                    ? 'text-neutral-700'
-                    : 'text-neutral-800'
+                    ? 'text-neutral-500'
+                    : 'text-neutral-700'
                 }`}>
                   {label}
                 </span>
@@ -1808,6 +1996,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
               <span className="text-sm text-neutral-500 leading-snug">{chatThinkingMessage}</span>
             </div>
           )}
+          </div>
         </div>
 
         {allDone && (

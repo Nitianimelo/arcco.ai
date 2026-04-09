@@ -1,14 +1,15 @@
 """
-DefiniÃ§Ãµes de ferramentas por agente especialista.
+Definições de ferramentas por capability e especialista ativos.
 
-Isolamento estrito: cada especialista tem acesso APENAS Ã s suas ferramentas.
-  - Agente de Busca Web    â†’ WEB_SEARCH_TOOLS
-  - Agente Gerador         â†’ FILE_GENERATOR_TOOLS
-  - Agente de Design       â†’ [] (sem ferramentas â€” apenas geraÃ§Ã£o de JSON)
-  - Agente Dev             â†’ [] (sem ferramentas â€” apenas geraÃ§Ã£o de cÃ³digo)
+Fonte de verdade prática:
+- WEB_SEARCH_TOOLS
+- FILE_MODIFIER_TOOLS
+- TEXT_GENERATOR_TOOLS
+- DESIGN_GENERATOR_TOOLS
+- SUPERVISOR_TOOLS
 """
 
-# â”€â”€ Agente de Busca Web â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Web search
 WEB_SEARCH_TOOLS = [
     {
         "type": "function",
@@ -44,151 +45,6 @@ WEB_SEARCH_TOOLS = [
                 },
                 "required": [
                     "url"
-                ]
-            }
-        }
-    }
-]
-
-# â”€â”€ Agente Gerador de Arquivos â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-FILE_GENERATOR_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "generate_pdf",
-            "description": (
-                "Gera um PDF profissional e retorna o link de download. "
-                "MODO PLAYWRIGHT (recomendado para PDFs visuais): forneÃ§a 'html_content' com HTML completo e Tailwind CSS â€” o resultado visual Ã© infinitamente superior. "
-                "MODO TEXTO (fallback): forneÃ§a 'title' + 'content' em markdown simples."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {
-                        "type": "string",
-                        "description": "TÃ­tulo do documento (usado no modo texto)"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "ConteÃºdo em texto/markdown (usado no modo texto quando html_content nÃ£o Ã© fornecido)"
-                    },
-                    "html_content": {
-                        "type": "string",
-                        "description": (
-                            "HTML completo com estilos Tailwind CSS embutidos para gerar um PDF visualmente rico. "
-                            "Inclua <!DOCTYPE html>, <head> com <script src='https://cdn.tailwindcss.com'></script>, e todo o conteÃºdo no <body>. "
-                            "Use classes Tailwind para cores, tipografia, tabelas, grids. Fundo branco, fonte sans-serif."
-                        )
-                    },
-                    "filename": {
-                        "type": "string",
-                        "description": "Nome do arquivo sem extensÃ£o"
-                    }
-                },
-                "required": []
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "generate_pdf_template",
-            "description": (
-                "Gera um PDF usando um template HTML prÃ©-aprovado (Jinja2). "
-                "O LLM fornece apenas os dados (JSON); o design profissional vem do template. "
-                "Use para relatÃ³rios e propostas com visual padronizado e consistente."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "template_name": {
-                        "type": "string",
-                        "enum": ["relatorio", "proposta"],
-                        "description": (
-                            "'relatorio': RelatÃ³rio com KPIs, tabelas e seÃ§Ãµes. "
-                            "'proposta': Proposta comercial com capa, entregas e investimento."
-                        )
-                    },
-                    "data": {
-                        "type": "object",
-                        "description": (
-                            "JSON com os dados para injetar no template. "
-                            "Para 'relatorio': {titulo, subtitulo?, empresa?, data?, periodo?, resumo?, "
-                            "metricas?: [{label, valor, variacao?, positivo?}], "
-                            "secoes: [{titulo, texto?, tabela?: {colunas, linhas}, lista?}], conclusao?}. "
-                            "Para 'proposta': {titulo, subtitulo?, empresa_origem?, empresa_destino?, data?, validade?, "
-                            "contexto?, solucao?, "
-                            "entregas?: [{titulo, descricao?}], "
-                            "investimento?: {itens: [{servico, descricao?, valor}], total, condicoes?}, "
-                            "proximos_passos?: [...], cta?, contato?, email?}."
-                        )
-                    },
-                    "filename": {
-                        "type": "string",
-                        "description": "Nome do arquivo sem extensÃ£o"
-                    }
-                },
-                "required": ["template_name", "data"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "generate_excel",
-            "description": "Gera uma planilha Excel (.xlsx) com dados estruturados e retorna o link de download",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {
-                        "type": "string",
-                        "description": "Nome da aba (mÃ¡ximo 31 caracteres)"
-                    },
-                    "headers": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        },
-                        "description": "CabeÃ§alhos das colunas"
-                    },
-                    "rows": {
-                        "type": "array",
-                        "items": {
-                            "type": "array",
-                            "items": {
-                                "type": "string"
-                            }
-                        },
-                        "description": "Linhas de dados"
-                    },
-                    "filename": {
-                        "type": "string",
-                        "description": "Nome do arquivo (sem extensÃ£o)"
-                    }
-                },
-                "required": [
-                    "title",
-                    "headers",
-                    "rows"
-                ]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "execute_python",
-            "description": "Executa Python para processar e formatar dados complexos. Use print() para output.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "code": {
-                        "type": "string",
-                        "description": "CÃ³digo Python a executar"
-                    }
-                },
-                "required": [
-                    "code"
                 ]
             }
         }
