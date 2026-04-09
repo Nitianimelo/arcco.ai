@@ -23,6 +23,40 @@ def decide_on_validation(
     route: str,
     validation_result: ValidationResultContract,
 ) -> PolicyDecisionContract:
+    issue_codes = {issue.code for issue in validation_result.issues}
+    if "missing_required_user_inputs" in issue_codes:
+        return PolicyDecisionContract(
+            decision_id="validation_policy",
+            task_type=task_type,
+            route=route,
+            should_abort=False,
+            continue_partial=False,
+            request_clarification=True,
+            clarification_questions=validation_result.suggested_questions,
+            user_message=validation_result.summary,
+            metadata={
+                "validator_id": validation_result.validator_id,
+                "validation_status": validation_result.status,
+                "enforcement": "clarification_before_next_step",
+            },
+        )
+    if "browser_collection_recommended" in issue_codes:
+        return PolicyDecisionContract(
+            decision_id="validation_policy",
+            task_type=task_type,
+            route=route,
+            should_abort=False,
+            continue_partial=False,
+            request_clarification=False,
+            clarification_questions=[],
+            user_message="A execução precisa de uma rota mais operacional para coletar dados com precisão.",
+            metadata={
+                "validator_id": validation_result.validator_id,
+                "validation_status": validation_result.status,
+                "suggested_replan_route": "browser",
+                "enforcement": "replan_before_next_step",
+            },
+        )
     request_clarification = bool(validation_result.clarification_needed)
     return PolicyDecisionContract(
         decision_id="validation_policy",

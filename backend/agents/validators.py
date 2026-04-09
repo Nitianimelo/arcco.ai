@@ -21,13 +21,51 @@ from backend.agents.contracts import (
 
 
 _LINK_PATTERN = re.compile(r"\[[^\]]+\]\((https?://[^\)]+)\)", re.IGNORECASE)
+_PAREN_URL_PATTERN = re.compile(r"\((https?://[^\)]+)\)", re.IGNORECASE)
+_RAW_URL_PATTERN = re.compile(r"https?://[^\s\)\]]+", re.IGNORECASE)
 _SEARCH_SUMMARY_PATTERN = re.compile(r"\*\*Resumo:\*\*(.+?)(?:\n\n|\Z)", re.IGNORECASE | re.DOTALL)
 _BARBERSHOP_LIST_PATTERN = re.compile(r":\s*(.+)", re.DOTALL)
+_TRAVEL_INTENT_PATTERN = re.compile(r"\b(passagem|passagens|voo|voos|hotel|hotéis|hoteis|diária|diarias|tarifa|tarifas|reserva|reservar)\b", re.IGNORECASE)
+_PRICE_INTENT_PATTERN = re.compile(r"\b(preço|precos|valor|valores|cotação|cotacao|orçamento|orcamento|disponibilidade)\b", re.IGNORECASE)
+_INTERACTIVE_COLLECTION_PATTERN = re.compile(r"\b(cotar|cotação|cotacao|simular|comparar|buscar opções|ver opções|disponibilidade|tarifa|tarifas|passagem|passagens|voo|voos|hotel|hotéis|hoteis)\b", re.IGNORECASE)
+_BROAD_DESTINATION_PATTERN = re.compile(r"\b(europa|europe|américa|america|brasil|nordeste|sudeste|qualquer destino)\b", re.IGNORECASE)
+_EXACT_DATE_PATTERN = re.compile(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b")
+_MONTH_ONLY_PATTERN = re.compile(r"\b(janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\b", re.IGNORECASE)
 
 
 def _normalize_name(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", " ", (value or "").lower())
     return " ".join(normalized.split())
+
+
+def _extract_source_urls(content: str) -> list[str]:
+    urls: list[str] = []
+    for pattern in (_LINK_PATTERN, _PAREN_URL_PATTERN, _RAW_URL_PATTERN):
+        urls.extend(pattern.findall(content or ""))
+    seen: set[str] = set()
+    normalized_urls: list[str] = []
+    for url in urls:
+        clean = str(url).rstrip(").,")
+        if clean in seen:
+            continue
+        seen.add(clean)
+        normalized_urls.append(clean)
+    return normalized_urls
+
+
+def _looks_like_interactive_collection(user_intent: str) -> bool:
+    normalized = user_intent or ""
+    return bool(_INTERACTIVE_COLLECTION_PATTERN.search(normalized) and _PRICE_INTENT_PATTERN.search(normalized))
+
+
+def _has_travel_scope_gaps(user_intent: str) -> bool:
+    normalized = user_intent or ""
+    if not _TRAVEL_INTENT_PATTERN.search(normalized):
+        return False
+    broad_destination = bool(_BROAD_DESTINATION_PATTERN.search(normalized))
+    has_exact_date = bool(_EXACT_DATE_PATTERN.search(normalized))
+    month_only = bool(_MONTH_ONLY_PATTERN.search(normalized))
+    return broad_destination or (month_only and not has_exact_date)
 
 
 def _parse_search_entities(content: str) -> list[str]:
@@ -85,9 +123,10 @@ def validate_capability_execution(
     capability_result: CapabilityResult,
     input_payload: dict[str, Any] | None = None,
     context_results: list[CapabilityResult] | None = None,
+    user_intent: str | None = None,
 ) -> ValidationResultContract | None:
     if route == "web_search" and task_type in {"entity_collection", "spreadsheet_generation"}:
-        urls = _LINK_PATTERN.findall(capability_result.content or "")
+        urls = _extract_source_urls(capability_result.content or "")
         status = "valid" if len(urls) >= 4 else "valid_with_warnings"
         issues: list[ValidationIssueContract] = []
         if len(urls) < 4:
@@ -99,16 +138,45 @@ def validate_capability_execution(
                     field_name="sources",
                 )
             )
-        return ValidationResultContract(
+        if _has_travel_scope_gaps(user_intent or ""):
+            issues.append(
+                ValidationIssueContract(
+                    code="missing_required_user_inputs",
+                    severity="high",
+                    message="O pedido ainda não define destino específico ou datas exatas o bastante para uma coleta comparativa confiável.",
+                    field_name="scope",
+                )
+            )
+            status = "clarification_recommended"
+        elif _looks_like_interactive_collection(user_intent or ""):
+            issues.append(
+                ValidationIssueContract(
+                    code="browser_collection_recommended",
+                    severity="warning",
+                    message="A tarefa parece exigir filtros e interação em sites, não apenas busca textual.",
+                    field_name="route",
+                )
+            )
+            status = "clarification_recommended" if status == "valid" else "insufficient_but_deliverable"
+        result = ValidationResultContract(
             validator_id="search_result_quality",
             task_type=task_type,
             capability_id=capability_result.capability_id,
             status=status,
-            summary="Busca coletada com cobertura suficiente." if status == "valid" else "Busca coletada, mas com cobertura parcial.",
+            summary=(
+                "Busca coletada com cobertura suficiente."
+                if status == "valid"
+                else "Busca coletada, mas precisa de mais precisão antes do entregável final."
+                if status == "clarification_recommended"
+                else "Busca coletada, mas com cobertura parcial."
+            ),
             issues=issues,
-            clarification_needed=False,
+            clarification_needed=status == "clarification_recommended",
             metadata={"source_count": len(urls)},
         )
+        if result.clarification_needed:
+            result.suggested_questions = build_follow_up_questions(task_type=task_type, validation_result=result)
+        return result
 
     if route == "python" and task_type == "spreadsheet_generation":
         prior_search = next((item for item in reversed(context_results or []) if item.route == "web_search"), None)

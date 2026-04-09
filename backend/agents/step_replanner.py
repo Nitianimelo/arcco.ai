@@ -9,7 +9,7 @@ Primeiro escopo:
 
 from __future__ import annotations
 
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlparse
 
 from backend.agents.contracts import RouteReplanDecisionContract, TaskTypeId
 
@@ -21,7 +21,7 @@ _REPLAN_CANDIDATES: dict[TaskTypeId, dict[str, tuple[str, ...]]] = {
         "deep_research": ("web_search",),
     },
     "spreadsheet_generation": {
-        "web_search": ("deep_research",),
+        "web_search": ("browser", "deep_research"),
         "deep_research": ("web_search",),
     },
     "browser_workflow": {
@@ -66,8 +66,31 @@ def _build_query_from_context(
     return step_detail or user_intent
 
 
+def _infer_browser_url(*, task_type: TaskTypeId, user_intent: str, step_detail: str, func_args: dict) -> str:
+    existing_url = str(func_args.get("url") or "").strip()
+    if existing_url:
+        return existing_url
+
+    normalized = f"{user_intent} {step_detail}".lower()
+    query = quote_plus(_build_query_from_context(
+        failed_route="web_search",
+        func_args=func_args,
+        step_detail=step_detail,
+        user_intent=user_intent,
+    ))
+
+    if any(token in normalized for token in ("passagem", "passagens", "voo", "voos", "flight", "flights")):
+        return "https://www.google.com/travel/flights"
+    if any(token in normalized for token in ("hotel", "hotéis", "hoteis", "hospedagem", "diária", "diarias")):
+        return "https://www.google.com/travel/hotels"
+    if any(token in normalized for token in ("preço", "precos", "valor", "valores", "cotação", "cotacao", "orçamento", "orcamento", "comparar")):
+        return f"https://www.google.com/search?q={query}"
+    return ""
+
+
 def build_replanned_args(
     *,
+    task_type: TaskTypeId,
     failed_route: str,
     target_route: str,
     func_args: dict,
@@ -82,8 +105,14 @@ def build_replanned_args(
             user_intent=user_intent,
         )}
     if target_route == "browser":
+        inferred_url = _infer_browser_url(
+            task_type=task_type,
+            user_intent=user_intent,
+            step_detail=step_detail,
+            func_args=func_args,
+        )
         return {
-            "url": str(func_args.get("url") or ""),
+            "url": inferred_url,
             "goal": step_detail or user_intent,
         }
     return dict(func_args)
@@ -102,7 +131,12 @@ def decide_route_replan(
     for candidate in candidates:
         if candidate in attempted_routes:
             continue
-        if candidate == "browser" and not str(func_args.get("url") or "").strip():
+        if candidate == "browser" and not _infer_browser_url(
+            task_type=task_type,
+            user_intent=user_intent,
+            step_detail=step_detail,
+            func_args=func_args,
+        ):
             continue
         return RouteReplanDecisionContract(
             decision_id="step_route_replan",
@@ -117,6 +151,7 @@ def decide_route_replan(
                 "attempted_routes": sorted(attempted_routes),
                 "original_args": dict(func_args),
                 "replanned_args": build_replanned_args(
+                    task_type=task_type,
                     failed_route=failed_route,
                     target_route=candidate,
                     func_args=func_args,

@@ -613,6 +613,28 @@ async def _log_pipeline_terminated(
     )
 
 
+async def _emit_policy_clarification(
+    *,
+    decision: PolicyDecisionContract,
+    execution_logger,
+    execution_id: str | None,
+    execution_agent_id: str | None = None,
+) -> AsyncGenerator[str, None]:
+    if not decision.clarification_questions:
+        return
+    questions_payload = [q.model_dump() for q in decision.clarification_questions]
+    yield sse("clarification", json.dumps(questions_payload))
+    if execution_logger and execution_id:
+        await execution_logger.log_event(
+            execution_id,
+            execution_agent_id=execution_agent_id,
+            event_type="clarification_requested",
+            message=decision.user_message,
+            raw_payload={"questions": questions_payload, "decision": decision.model_dump()},
+        )
+        await execution_logger.finish_execution(execution_id, status="awaiting_clarification")
+
+
 async def _emit_file_artifacts(content: str) -> AsyncGenerator[str, None]:
     md_links = _extract_storage_markdown_links(content)
     if not md_links:
@@ -1926,6 +1948,7 @@ async def orchestrate_and_stream(
                                         current_route = replan_decision.to_route
                                         current_func_name = replan_decision.to_tool_name
                                         current_func_args = build_replanned_args(
+                                            task_type=inferred_task_type,
                                             failed_route=replan_decision.from_route,
                                             target_route=replan_decision.to_route,
                                             func_args=current_func_args,
@@ -1964,6 +1987,7 @@ async def orchestrate_and_stream(
                                 capability_result=dispatch_result,
                                 input_payload=current_func_args,
                                 context_results=capability_results,
+                                user_intent=user_intent,
                             )
                             if validation_result:
                                 validation_payload = validation_result.model_dump()
@@ -1994,6 +2018,46 @@ async def orchestrate_and_stream(
                                         decision=validation_decision,
                                     )
                                 yield sse("policy_decision", json.dumps(validation_decision.model_dump()))
+                                if validation_decision.request_clarification and validation_decision.clarification_questions:
+                                    async for clarification_event in _emit_policy_clarification(
+                                        decision=validation_decision,
+                                        execution_logger=execution_logger,
+                                        execution_id=execution_id,
+                                        execution_agent_id=tool_agent_id,
+                                    ):
+                                        yield clarification_event
+                                    return
+                                if validation_decision.metadata.get("suggested_replan_route"):
+                                    replan_decision = decide_route_replan(
+                                        task_type=inferred_task_type,
+                                        failed_route=current_route,
+                                        func_args=current_func_args,
+                                        step_detail=step.detail,
+                                        user_intent=user_intent,
+                                        attempted_routes=attempted_routes_for_step,
+                                    )
+                                    if replan_decision:
+                                        attempted_routes_for_step.add(replan_decision.to_route)
+                                        current_route = replan_decision.to_route
+                                        current_func_name = replan_decision.to_tool_name
+                                        current_func_args = build_replanned_args(
+                                            task_type=inferred_task_type,
+                                            failed_route=replan_decision.from_route,
+                                            target_route=replan_decision.to_route,
+                                            func_args=current_func_args,
+                                            step_detail=step.detail,
+                                            user_intent=user_intent,
+                                        )
+                                        if execution_logger:
+                                            await _log_replan_decision(
+                                                execution_logger,
+                                                execution_id,
+                                                execution_agent_id=tool_agent_id,
+                                                decision=replan_decision,
+                                            )
+                                        yield sse("step_replanned", json.dumps(replan_decision.model_dump()))
+                                        yield sse("thought", replan_decision.user_message)
+                                        continue
                             if dispatch_info.get("handoff"):
                                 if execution_logger:
                                     await execution_logger.finish_agent(
@@ -2789,6 +2853,7 @@ async def orchestrate_and_stream(
                                 current_route = replan_decision.to_route
                                 current_func_name = replan_decision.to_tool_name
                                 current_func_args = build_replanned_args(
+                                    task_type=direct_task_type,
                                     failed_route=replan_decision.from_route,
                                     target_route=replan_decision.to_route,
                                     func_args=current_func_args,
@@ -2827,8 +2892,14 @@ async def orchestrate_and_stream(
                         capability_result=dispatch_result,
                         input_payload=current_func_args,
                         context_results=direct_capability_results,
+                        user_intent=user_intent,
                     )
                     if validation_result:
+                        validation_decision = decide_on_validation(
+                            task_type=direct_task_type,
+                            route=current_route,
+                            validation_result=validation_result,
+                        )
                         direct_validation_trail.append(validation_result.model_dump())
                         if execution_logger:
                             await execution_logger.log_event(
@@ -2843,17 +2914,49 @@ async def orchestrate_and_stream(
                                 execution_logger,
                                 execution_id,
                                 execution_agent_id=react_agent_id,
-                                decision=decide_on_validation(
-                                    task_type=direct_task_type,
-                                    route=current_route,
-                                    validation_result=validation_result,
-                                ),
+                                decision=validation_decision,
                             )
-                        yield sse("policy_decision", json.dumps(decide_on_validation(
-                            task_type=direct_task_type,
-                            route=current_route,
-                            validation_result=validation_result,
-                        ).model_dump()))
+                        yield sse("policy_decision", json.dumps(validation_decision.model_dump()))
+                        if validation_decision.request_clarification and validation_decision.clarification_questions:
+                            async for clarification_event in _emit_policy_clarification(
+                                decision=validation_decision,
+                                execution_logger=execution_logger,
+                                execution_id=execution_id,
+                                execution_agent_id=react_agent_id,
+                            ):
+                                yield clarification_event
+                            return
+                        if validation_decision.metadata.get("suggested_replan_route"):
+                            replan_decision = decide_route_replan(
+                                task_type=direct_task_type,
+                                failed_route=current_route,
+                                func_args=current_func_args,
+                                step_detail=func_args.get("instructions") or user_intent,
+                                user_intent=user_intent,
+                                attempted_routes=attempted_routes_for_turn,
+                            )
+                            if replan_decision:
+                                attempted_routes_for_turn.add(replan_decision.to_route)
+                                current_route = replan_decision.to_route
+                                current_func_name = replan_decision.to_tool_name
+                                current_func_args = build_replanned_args(
+                                    task_type=direct_task_type,
+                                    failed_route=replan_decision.from_route,
+                                    target_route=replan_decision.to_route,
+                                    func_args=current_func_args,
+                                    step_detail=func_args.get("instructions") or user_intent,
+                                    user_intent=user_intent,
+                                )
+                                if execution_logger:
+                                    await _log_replan_decision(
+                                        execution_logger,
+                                        execution_id,
+                                        execution_agent_id=react_agent_id,
+                                        decision=replan_decision,
+                                    )
+                                yield sse("step_replanned", json.dumps(replan_decision.model_dump()))
+                                yield sse("thought", replan_decision.user_message)
+                                continue
                     if dispatch_info.get("handoff"):
                         if execution_logger:
                             await execution_logger.finish_agent(

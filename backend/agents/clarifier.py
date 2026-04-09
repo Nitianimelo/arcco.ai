@@ -62,6 +62,50 @@ def build_follow_up_questions(
             ),
         ]
 
+    if "missing_required_user_inputs" in issue_codes:
+        return [
+            _choice_question(
+                "Você quer um destino específico ou uma comparação mais ampla?",
+                helper_text="Isso define se a coleta deve focar precisão ou cobertura.",
+                options=[
+                    ("Destino específico", "Melhor para preços comparáveis e precisos.", True),
+                    ("Comparar capitais principais", "Mostra uma visão ampla da categoria.", False),
+                    ("Menor preço em qualquer destino", "Prioriza economia, não destino.", False),
+                ],
+            ),
+            _choice_question(
+                "Qual recorte de datas devo usar?",
+                helper_text="Buscar o mês inteiro pode deixar os resultados rasos demais.",
+                options=[
+                    ("Primeira quinzena", "Ajuda a filtrar melhor as tarifas.", True),
+                    ("Segunda quinzena", "Mantém foco na metade final do mês.", False),
+                    ("Mês inteiro", "Mais amplo, mas menos preciso.", False),
+                ],
+            ),
+            _choice_question(
+                "Qual padrão de viagem você quer comparar?",
+                helper_text="Isso muda bastante preço, duração e quantidade de opções.",
+                options=[
+                    ("Econômica com escalas", "Maior cobertura e menor preço.", True),
+                    ("Econômica com menos escalas", "Equilíbrio entre preço e conveniência.", False),
+                    ("Executiva", "Comparação premium.", False),
+                ],
+            ),
+        ]
+
+    if "browser_collection_recommended" in issue_codes:
+        return [
+            _choice_question(
+                "Para ficar mais preciso, posso abrir sites e preencher filtros de busca?",
+                helper_text="Isso melhora preços, datas e comparações quando a busca textual é rasa.",
+                options=[
+                    ("Sim, buscar com navegador", "Mais preciso para preço e disponibilidade.", True),
+                    ("Não, seguir só com busca textual", "Mais rápido, mas menos detalhado.", False),
+                    ("Entregar parcial agora", "Entrega o que já foi encontrado.", False),
+                ],
+            )
+        ]
+
     if task_type == "browser_workflow" or "browser_handoff_required" in issue_codes:
         return [
             _choice_question(
