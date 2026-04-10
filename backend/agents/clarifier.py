@@ -40,6 +40,32 @@ def build_follow_up_questions(
 ) -> list[ClarificationQuestionContract]:
     issue_codes = {issue.code for issue in validation_result.issues}
 
+    if "missing_required_session_files" in issue_codes:
+        return [
+            _choice_question(
+                "Para eu resolver isso, preciso dos arquivos citados. Como você quer seguir?",
+                helper_text="Sem os anexos corretos, eu não consigo extrair texto, imagens ou reconstruir o material com fidelidade.",
+                options=[
+                    ("Vou enviar os arquivos agora", "Melhor caminho para continuar com precisão.", True),
+                    ("Quero testar com um arquivo primeiro", "Permite validar o fluxo com uma amostra.", False),
+                    ("Prefiro alinhar o formato antes", "Define o entregável antes de subir os anexos.", False),
+                ],
+            )
+        ]
+
+    if "session_files_not_ready" in issue_codes:
+        return [
+            _choice_question(
+                "Os anexos ainda estão processando. O que você prefere?",
+                helper_text="OCR e extração podem levar alguns segundos dependendo do tamanho dos arquivos.",
+                options=[
+                    ("Esperar e continuar quando estiver pronto", "Mantém o fluxo com os arquivos reais.", True),
+                    ("Seguir só com estrutura preliminar", "Mais rápido, mas sem conteúdo fiel do anexo.", False),
+                    ("Cancelar por enquanto", "Interrompe o fluxo até os arquivos estarem prontos.", False),
+                ],
+            )
+        ]
+
     if "search_to_python_entity_mismatch" in issue_codes:
         return [
             _choice_question(

@@ -58,6 +58,8 @@ _SUPERVISOR_TIMEOUT = 60.0
 _SKILL_TIMEOUT = 60.0
 _SPECIALIST_TIMEOUT = 90.0
 _TERMINAL_TIMEOUT = 90.0
+_MAX_CONTEXT_ENTRY_CHARS = 4000
+_MAX_ACCUMULATED_CONTEXT_CHARS = 24000
 
 
 async def _exec_with_heartbeat(coro, heartbeat_fn, timeout: float, interval: float = _HEARTBEAT_INTERVAL):
@@ -164,6 +166,8 @@ _TOOL_CALL_LEAK_PATTERN = re.compile(
     r'^\s*(?:```(?:json)?\s*)?\{[\s\S]*"(?:tool|function|parameters)"\s*:',
     re.IGNORECASE,
 )
+_RAW_URL_CONTEXT_PATTERN = re.compile(r"https?://[^\s\)\]]+", re.IGNORECASE)
+_SEARCH_SUMMARY_CONTEXT_PATTERN = re.compile(r"\*\*Resumo:\*\*(.+?)(?:\n\n|\Z)", re.IGNORECASE | re.DOTALL)
 
 # ── Utilitários SSE ──────────────────────────────────────────────────────────
 
@@ -270,6 +274,19 @@ def _extract_storage_markdown_links(content: str) -> list[tuple[str, str]]:
     ]
 
 
+def _extract_source_urls_from_text(content: str) -> list[str]:
+    urls = [url.rstrip(").,") for _, url in _extract_markdown_links(content or "")]
+    urls.extend(url.rstrip(").,") for url in _RAW_URL_CONTEXT_PATTERN.findall(content or ""))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        deduped.append(url)
+    return deduped
+
+
 def _is_error_result(value: Any) -> bool:
     text = str(value or "").strip()
     if not text:
@@ -286,6 +303,11 @@ def _is_error_result(value: Any) -> bool:
         "timeout" in lowered and ("erro" in lowered or "falh" in lowered),
         "tool call obrigatório não emitido" in lowered,
         "falhou:" in lowered,
+        "não encontrado na sessão" in lowered,
+        "nao encontrado na sessao" in lowered,
+        "nenhum arquivo disponível" in lowered,
+        "nenhum arquivo disponivel" in lowered,
+        "nenhum arquivo anexado" in lowered,
     )
     return any(error_markers)
 
@@ -332,6 +354,82 @@ def _select_referenced_session_file(user_intent: str, session_id: str | None) ->
         return inventory[0]
 
     return None
+
+
+def _intent_requires_session_files(user_intent: str) -> bool:
+    normalized = (user_intent or "").lower()
+    file_markers = (
+        "pdf",
+        "arquivo",
+        "arquivos",
+        "anexo",
+        "anexos",
+        "documento",
+        "documentos",
+    )
+    file_ops = (
+        "extrair",
+        "reorganizar",
+        "converter",
+        "transformar",
+        "gerar outro",
+        "novo pdf",
+        "crie outro design",
+        "mantendo as mesmas informacoes",
+        "mantendo as mesmas informações",
+    )
+    return any(token in normalized for token in file_markers) and any(token in normalized for token in file_ops)
+
+
+def _build_missing_session_files_validation(summary: str) -> ValidationResultContract:
+    return ValidationResultContract(
+        validator_id="open_solver_intake",
+        task_type="open_problem_solving",
+        capability_id="session_file_read",
+        status="clarification_recommended",
+        summary=summary,
+        issues=[
+            ValidationIssueContract(
+                code="missing_required_session_files",
+                severity="high",
+                message="O pedido depende explicitamente de anexos, mas não há arquivos válidos disponíveis no inventário da sessão.",
+                field_name="session_files",
+            )
+        ],
+        clarification_needed=True,
+    )
+
+
+def _resolve_session_file_request(
+    *,
+    session_id: str | None,
+    requested_file_name: str | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    inventory = _get_session_inventory_items(session_id)
+    if not inventory:
+        return None, "Nenhum arquivo anexado está disponível nesta sessão."
+
+    inventory_by_name: dict[str, dict[str, Any]] = {}
+    for item in inventory:
+        file_name = str(item.get("original_name") or item.get("file_name") or "").strip()
+        if file_name:
+            inventory_by_name[file_name] = item
+
+    normalized_request = str(requested_file_name or "").strip()
+    if normalized_request and normalized_request in inventory_by_name:
+        return inventory_by_name[normalized_request], None
+
+    if len(inventory) == 1 and not normalized_request:
+        return inventory[0], None
+
+    available_names = [name for name in inventory_by_name.keys() if name]
+    if normalized_request:
+        return None, (
+            f"O arquivo '{normalized_request}' não existe no inventário atual da sessão. "
+            f"Arquivos disponíveis: {', '.join(available_names) if available_names else 'nenhum'}."
+        )
+
+    return None, "Há mais de um anexo disponível e nenhum arquivo exato foi selecionado para leitura."
 
 
 def _normalize_plan_for_session_files(plan_output, *, user_intent: str, session_id: str | None):
@@ -507,6 +605,20 @@ def _normalize_plan_for_open_problem_solving(plan_output, *, user_intent: str, s
     plan_output.task_type = "open_problem_solving"
     plan_output.is_complex = True
 
+    if _intent_requires_session_files(user_intent) and not inventory:
+        validation_result = _build_missing_session_files_validation(
+            "Preciso dos arquivos citados antes de iniciar a resolução aberta."
+        )
+        plan_output.needs_clarification = True
+        plan_output.acknowledgment = "Preciso dos anexos corretos antes de extrair texto, imagens ou reconstruir o material."
+        plan_output.questions = build_follow_up_questions(
+            task_type="open_problem_solving",
+            validation_result=validation_result,
+        )
+        plan_output.steps = []
+        logger.info("[ORCHESTRATOR] Open problem solving bloqueado por ausência de anexos obrigatórios.")
+        return plan_output
+
     has_clear_output = any(token in normalized for token in output_signals)
     if not has_clear_output and not getattr(plan_output, "needs_clarification", False):
         plan_output.needs_clarification = True
@@ -537,12 +649,22 @@ def _normalize_plan_for_open_problem_solving(plan_output, *, user_intent: str, s
 
     steps = []
     if inventory:
-        first_file = str(inventory[0].get("original_name") or inventory[0].get("file_name") or "arquivo anexado").strip()
+        available_files = [
+            str(item.get("original_name") or item.get("file_name") or "").strip()
+            for item in inventory
+            if str(item.get("original_name") or item.get("file_name") or "").strip()
+        ]
+        file_label = ", ".join(available_files[:3])
+        if len(available_files) > 3:
+            file_label += f" e mais {len(available_files) - 3}"
         steps.append(
             PlanStep(
                 step=1,
                 action="session_file",
-                detail=f"Ler o anexo '{first_file}' e extrair somente os insumos necessários para resolver o objetivo final.",
+                detail=(
+                    f"Ler os anexos necessários da sessão ({file_label or 'arquivos anexados'}) "
+                    "e extrair somente os insumos necessários para resolver o objetivo final."
+                ),
                 is_terminal=False,
             )
         )
@@ -801,6 +923,93 @@ def _extract_template_payload_from_any_messages(messages: list[dict]) -> str:
             if trimmed.startswith("{") and '"template_id"' in trimmed:
                 return trimmed
     return ""
+
+
+def _truncate_semantic_text(text: str, *, max_chars: int = _MAX_CONTEXT_ENTRY_CHARS) -> str:
+    normalized = (text or "").strip()
+    if len(normalized) <= max_chars:
+        return normalized
+    head = max(600, int(max_chars * 0.35))
+    tail = max(900, max_chars - head - 80)
+    return (
+        normalized[:head].rstrip()
+        + "\n\n...[conteúdo intermediário compactado para preservar contexto]...\n\n"
+        + normalized[-tail:].lstrip()
+    )
+
+
+def _compact_context_entry(*, route: str, content: Any) -> str:
+    text = str(content or "").strip()
+    if not text:
+        return ""
+
+    if route == "validation":
+        return _truncate_semantic_text(text, max_chars=1200)
+
+    if route == "design_generator" or _looks_like_design_html(text):
+        title = re.search(r"<title[^>]*>([^<]+)</title>", text, re.IGNORECASE)
+        title_text = title.group(1).strip() if title else "Design gerado"
+        return f"Artefato visual gerado: {title_text}."
+
+    if route == "session_file":
+        return _truncate_semantic_text(text, max_chars=2200)
+
+    if route == "web_search":
+        urls = _extract_source_urls_from_text(text)
+        summary_match = _SEARCH_SUMMARY_CONTEXT_PATTERN.search(text)
+        summary = summary_match.group(1).strip() if summary_match else text
+        compact = _truncate_semantic_text(summary, max_chars=1800)
+        if urls:
+            compact += "\n\nFontes principais:\n" + "\n".join(urls[:5])
+        return compact
+
+    if route == "python":
+        file_links = _extract_storage_markdown_links(text)
+        if file_links:
+            links_only = "\n".join(f"[{label}]({url})" for label, url in file_links[:5])
+            return f"Python gerou artefatos:\n{links_only}"
+        return _truncate_semantic_text(text, max_chars=2200)
+
+    if route == "browser":
+        return _truncate_semantic_text(text, max_chars=1800)
+
+    if route == "spy_pages":
+        return _truncate_semantic_text(text, max_chars=1800)
+
+    if route == "file_modifier":
+        file_links = _extract_storage_markdown_links(text)
+        if file_links:
+            return "Arquivo modificado com sucesso:\n" + "\n".join(f"[{label}]({url})" for label, url in file_links[:5])
+        return _truncate_semantic_text(text, max_chars=1800)
+
+    return _truncate_semantic_text(text, max_chars=_MAX_CONTEXT_ENTRY_CHARS)
+
+
+def _clamp_accumulated_context(text: str) -> str:
+    normalized = text or ""
+    if len(normalized) <= _MAX_ACCUMULATED_CONTEXT_CHARS:
+        return normalized
+    head = 3000
+    tail = _MAX_ACCUMULATED_CONTEXT_CHARS - head - 90
+    return (
+        normalized[:head].rstrip()
+        + "\n\n...[contexto intermediário compactado para manter foco operacional]...\n\n"
+        + normalized[-tail:].lstrip()
+    )
+
+
+def _append_to_accumulated_context(
+    accumulated_context: str,
+    *,
+    step: int,
+    route: str,
+    content: Any,
+    error: bool = False,
+) -> str:
+    label = f"ERRO {route}" if error else route
+    compact = _compact_context_entry(route=route, content=content)
+    entry = f"\n[Passo {step} - {label}]: {compact}"
+    return _clamp_accumulated_context(accumulated_context + entry)
 
 
 def _render_local_design_if_possible(raw_context: str) -> str | None:
@@ -2038,6 +2247,35 @@ async def orchestrate_and_stream(
                                 dispatch_info = None
                                 dispatch_result = None
                                 dispatch_args = dict(current_func_args)
+                                if current_route == "session_file":
+                                    resolved_file, session_file_error = _resolve_session_file_request(
+                                        session_id=session_id,
+                                        requested_file_name=current_func_args.get("file_name"),
+                                    )
+                                    if session_file_error:
+                                        specialist_result = session_file_error
+                                        dispatch_info = {
+                                            "tool_name": current_func_name,
+                                            "message": "Leitura de arquivo da sessão bloqueada por inventário inválido",
+                                            "error": True,
+                                        }
+                                        dispatch_result = CapabilityResult(
+                                            capability_id=getattr(step, "capability_id", None) or current_route,
+                                            route=current_route,
+                                            status="failed",
+                                            output_type="session_file_result",
+                                            content=session_file_error,
+                                            error_text=session_file_error,
+                                            metadata={"message": dispatch_info["message"], "tool_name": current_func_name},
+                                        )
+                                        break
+                                    if resolved_file:
+                                        dispatch_args["file_name"] = (
+                                            resolved_file.get("original_name")
+                                            or resolved_file.get("file_name")
+                                            or current_func_args.get("file_name")
+                                            or ""
+                                        )
                                 if current_route == "deep_research":
                                     dispatch_args["_model"] = registry.get_model("deep_research") or supervisor_model
                                     dispatch_args["context"] = accumulated_context
@@ -2172,9 +2410,11 @@ async def orchestrate_and_stream(
                             if validation_result:
                                 validation_payload = validation_result.model_dump()
                                 validation_trail.append(validation_payload)
-                                accumulated_context += (
-                                    "\n"
-                                    + _validation_summary_for_context(validation_result)
+                                accumulated_context = _append_to_accumulated_context(
+                                    accumulated_context,
+                                    step=step.step,
+                                    route="validation",
+                                    content=_validation_summary_for_context(validation_result),
                                 )
                                 if execution_logger:
                                     await execution_logger.log_event(
@@ -2311,7 +2551,13 @@ async def orchestrate_and_stream(
                                 else:
                                     failure_msg = f"Falha ao acessar {func_args.get('url', '')} no navegador."
                                 failure_summaries.append(failure_msg)
-                                accumulated_context += f"\n[Passo {step.step} - ERRO {route}]: {specialist_result}"
+                                accumulated_context = _append_to_accumulated_context(
+                                    accumulated_context,
+                                    step=step.step,
+                                    route=route,
+                                    content=specialist_result,
+                                    error=True,
+                                )
                                 if execution_logger:
                                     await _log_policy_decision(
                                         execution_logger,
@@ -2395,7 +2641,12 @@ async def orchestrate_and_stream(
                                                 }
                                             ),
                                         )
-                                accumulated_context += f"\n[Passo {step.step} - {current_route}]: {specialist_result}"
+                                accumulated_context = _append_to_accumulated_context(
+                                    accumulated_context,
+                                    step=step.step,
+                                    route=current_route,
+                                    content=specialist_result,
+                                )
                                 if current_route == "session_file":
                                     yield sse("thought", f"Arquivo de sessão consultado: {func_args.get('file_name', '')}")
                                 elif current_route == "web_search":
@@ -2456,7 +2707,12 @@ async def orchestrate_and_stream(
                             spy_result = await execute_tool("analyze_web_pages", func_args, user_id=user_id)
                             # Emite evento especial para o frontend renderizar o card
                             yield f'data: {json.dumps({"type": "spy_pages_result", "data": spy_result})}\n\n'
-                            accumulated_context += f"\n[Passo {step.step} - spy_pages]: {spy_result}"
+                            accumulated_context = _append_to_accumulated_context(
+                                accumulated_context,
+                                step=step.step,
+                                route="spy_pages",
+                                content=spy_result,
+                            )
                             yield sse("thought", "Dados SimilarWeb obtidos com sucesso.")
 
 
@@ -2512,7 +2768,13 @@ async def orchestrate_and_stream(
                                 tool_failed = True
                                 failure_msg = f"Falha na etapa terminal {route}."
                                 failure_summaries.append(failure_msg)
-                                accumulated_context += f"\n[Passo {step.step} - ERRO {route}]: {final_result}"
+                                accumulated_context = _append_to_accumulated_context(
+                                    accumulated_context,
+                                    step=step.step,
+                                    route=route,
+                                    content=final_result,
+                                    error=True,
+                                )
                                 yield sse("thought", failure_msg)
                             elif step.is_terminal:
                                 # ── TERMINAL: envia direto ao frontend e para o pipeline ──
@@ -2585,7 +2847,12 @@ async def orchestrate_and_stream(
                                             "content": doc_match.group(2).strip(),
                                         }))
 
-                                accumulated_context += f"\n[Passo {step.step} - {route}]: {final_result}"
+                                accumulated_context = _append_to_accumulated_context(
+                                    accumulated_context,
+                                    step=step.step,
+                                    route=route,
+                                    content=final_result,
+                                )
                                 yield sse("thought", f"Passo {step.step} ({route}) concluído. Resultado acumulado para o próximo passo.")
                                 if execution_logger:
                                     await execution_logger.finish_agent(
@@ -2658,7 +2925,12 @@ async def orchestrate_and_stream(
                                     links_only = "\n".join(f"[{label}]({url})" for label, url in md_links)
                                     specialist_result = f"Arquivo gerado.\n\n{links_only}"
 
-                            accumulated_context += f"\n[Passo {step.step} - file_modifier]: {specialist_result}"
+                            accumulated_context = _append_to_accumulated_context(
+                                accumulated_context,
+                                step=step.step,
+                                route="file_modifier",
+                                content=specialist_result,
+                            )
                             if execution_logger:
                                 await execution_logger.finish_agent(
                                     tool_agent_id,
@@ -2682,7 +2954,13 @@ async def orchestrate_and_stream(
                         had_failures = True
                         tool_failed = True
                         failure_summaries.append(error_msg)
-                        accumulated_context += f"\n[Passo {step.step} - ERRO {route}]: {error_msg}"
+                        accumulated_context = _append_to_accumulated_context(
+                            accumulated_context,
+                            step=step.step,
+                            route=route,
+                            content=error_msg,
+                            error=True,
+                        )
                         yield sse("thought", f"Erro no passo {step.step}: {error_msg}")
                         if execution_logger:
                             await execution_logger.log_event(
@@ -2716,34 +2994,54 @@ async def orchestrate_and_stream(
                 # O LLM decidiu não usar TOOL, apenas gerou texto
                 fallback_content = message.get("content", "")
                 if _forced_tool_name:
+                    error_msg = (
+                        f"Falha crítica: o modelo não emitiu a tool obrigatória '{_forced_tool_name}'. "
+                        f"Resposta recebida: {fallback_content[:160]}"
+                    )
                     logger.error(
                         "[ORCHESTRATOR] Passo %s exigia tool '%s', mas o supervisor respondeu sem tool_call. Conteúdo: %s",
                         step.step,
                         _forced_tool_name,
                         fallback_content[:300],
                     )
-                    yield sse(
-                        "thought",
-                        f"O passo {step.step} exigia a ferramenta '{_forced_tool_name}', mas o modelo não a chamou.",
-                    )
-                    accumulated_context += (
-                        f"\n[Passo {step.step} - ERRO {_forced_tool_name}]: "
-                        f"Tool call obrigatório não emitido. Resposta do modelo: {fallback_content}"
+                    yield sse("thought", f"Erro crítico no passo {step.step}: o modelo falhou ao acionar a ferramenta obrigatória.")
+                    yield sse("error", "Houve uma falha interna de roteamento da IA. O processo foi interrompido para evitar erro em cascata.")
+                    had_failures = True
+                    failure_summaries.append(error_msg)
+                    accumulated_context = _append_to_accumulated_context(
+                        accumulated_context,
+                        step=step.step,
+                        route=_forced_tool_name,
+                        content=error_msg,
+                        error=True,
                     )
                     if execution_logger:
                         await execution_logger.log_event(
                             execution_id,
                             level="error",
-                            event_type="step_skipped",
-                            message=f"Step {step.step} ignorado: supervisor não chamou '{_forced_tool_name}'. Respondeu em texto.",
+                            event_type="pipeline_aborted",
+                            message=error_msg,
                             raw_payload={
                                 "step": step.step,
                                 "expected_tool": _forced_tool_name,
                                 "supervisor_response": fallback_content[:500],
+                                "failure_class": "tool_contract_violation",
                             },
                         )
+                        await execution_logger.finish_execution(
+                            execution_id,
+                            status="failed",
+                            final_error=error_msg,
+                        )
+                    abort_pipeline = True
+                    break
                 else:
-                    accumulated_context += f"\n[Passo {step.step} - raciocínio]: {fallback_content}"
+                    accumulated_context = _append_to_accumulated_context(
+                        accumulated_context,
+                        step=step.step,
+                        route="raciocínio",
+                        content=fallback_content,
+                    )
                 
         # Fim do loop do Planner
         # Agora geramos a resposta final conversacional consolidando o accumulated_context
@@ -3008,6 +3306,35 @@ async def orchestrate_and_stream(
                         dispatch_info = None
                         dispatch_result = None
                         dispatch_args = dict(current_func_args)
+                        if current_route == "session_file":
+                            resolved_file, session_file_error = _resolve_session_file_request(
+                                session_id=session_id,
+                                requested_file_name=current_func_args.get("file_name"),
+                            )
+                            if session_file_error:
+                                specialist_result = session_file_error
+                                dispatch_info = {
+                                    "tool_name": current_func_name,
+                                    "message": "Leitura de arquivo da sessão bloqueada por inventário inválido",
+                                    "error": True,
+                                }
+                                dispatch_result = CapabilityResult(
+                                    capability_id=current_route,
+                                    route=current_route,
+                                    status="failed",
+                                    output_type="session_file_result",
+                                    content=session_file_error,
+                                    error_text=session_file_error,
+                                    metadata={"message": dispatch_info["message"], "tool_name": current_func_name},
+                                )
+                                break
+                            if resolved_file:
+                                dispatch_args["file_name"] = (
+                                    resolved_file.get("original_name")
+                                    or resolved_file.get("file_name")
+                                    or current_func_args.get("file_name")
+                                    or ""
+                                )
                         if current_route == "deep_research":
                             dispatch_args["_model"] = registry.get_model("deep_research") or supervisor_model
                         elif current_route == "dynamic_skill":

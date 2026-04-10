@@ -31,6 +31,14 @@ _INTERACTIVE_COLLECTION_PATTERN = re.compile(r"\b(cotar|cotação|cotacao|simula
 _BROAD_DESTINATION_PATTERN = re.compile(r"\b(europa|europe|américa|america|brasil|nordeste|sudeste|qualquer destino)\b", re.IGNORECASE)
 _EXACT_DATE_PATTERN = re.compile(r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b")
 _MONTH_ONLY_PATTERN = re.compile(r"\b(janeiro|fevereiro|março|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)\b", re.IGNORECASE)
+_SESSION_FILE_NOT_FOUND_PATTERN = re.compile(
+    r"(arquivo\s+'.+?'\s+n[aã]o encontrado na sess[aã]o|nenhum arquivo dispon[ií]vel|nenhum arquivo anexado)",
+    re.IGNORECASE,
+)
+_SESSION_FILE_PROCESSING_PATTERN = re.compile(
+    r"(ainda est[aá] em processamento|ocr/leitura ainda est[aá] rodando|n[aã]o foi poss[ií]vel ler o arquivo)",
+    re.IGNORECASE,
+)
 
 
 def _normalize_name(value: str) -> str:
@@ -316,5 +324,52 @@ def validate_capability_execution(
         if clarification_needed:
             result.suggested_questions = build_follow_up_questions(task_type=task_type, validation_result=result)
         return result
+
+    if route == "session_file" and task_type in {"open_problem_solving", "mass_document_analysis", "file_transformation"}:
+        content = str(capability_result.content or capability_result.error_text or "")
+        issues: list[ValidationIssueContract] = []
+        status = "valid"
+
+        if _SESSION_FILE_NOT_FOUND_PATTERN.search(content):
+            issues.append(
+                ValidationIssueContract(
+                    code="missing_required_session_files",
+                    severity="high",
+                    message="O fluxo depende de anexos da sessão, mas os arquivos citados não estão disponíveis.",
+                    field_name="session_files",
+                    evidence=content[:220] or None,
+                )
+            )
+            status = "clarification_recommended"
+        elif _SESSION_FILE_PROCESSING_PATTERN.search(content):
+            issues.append(
+                ValidationIssueContract(
+                    code="session_files_not_ready",
+                    severity="warning",
+                    message="Os anexos existem, mas ainda não estão prontos para leitura confiável.",
+                    field_name="session_files",
+                    evidence=content[:220] or None,
+                )
+            )
+            status = "clarification_recommended"
+
+        if issues:
+            result = ValidationResultContract(
+                validator_id="session_file_readiness",
+                task_type=task_type,
+                capability_id=capability_result.capability_id,
+                status=status,
+                summary=(
+                    "Os anexos necessários ainda não estão disponíveis para o solver."
+                    if status == "clarification_recommended"
+                    else "Leitura de anexos concluída."
+                ),
+                issues=issues,
+                clarification_needed=status == "clarification_recommended",
+                metadata={"content_preview": content[:300]},
+            )
+            if result.clarification_needed:
+                result.suggested_questions = build_follow_up_questions(task_type=task_type, validation_result=result)
+            return result
 
     return None

@@ -35,6 +35,22 @@ def decide_on_validation(
     validation_result: ValidationResultContract,
 ) -> PolicyDecisionContract:
     issue_codes = {issue.code for issue in validation_result.issues}
+    if "missing_required_session_files" in issue_codes or "session_files_not_ready" in issue_codes:
+        return PolicyDecisionContract(
+            decision_id="validation_policy",
+            task_type=task_type,
+            route=route,
+            should_abort=False,
+            continue_partial=False,
+            request_clarification=True,
+            clarification_questions=validation_result.suggested_questions,
+            user_message=validation_result.summary,
+            metadata={
+                "validator_id": validation_result.validator_id,
+                "validation_status": validation_result.status,
+                "enforcement": "clarification_before_file_dependent_steps",
+            },
+        )
     if "missing_required_user_inputs" in issue_codes:
         return PolicyDecisionContract(
             decision_id="validation_policy",

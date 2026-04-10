@@ -11,7 +11,6 @@ import { ThoughtStep } from '../components/chat/AgentThoughtPanel';
 import { BrowserAgentCard } from '../components/chat/BrowserAgentCard';
 import TextDocCard from '../components/chat/TextDocCard';
 import ClarificationCard from '../components/chat/ClarificationCard';
-import PresentationCard from '../components/chat/PresentationCard';
 import DesignGallery from '../components/chat/DesignGallery';
 import DocumentPreviewModal from '../components/chat/DocumentPreviewModal';
 import DesignPreviewModal from '../components/chat/DesignPreviewModal';
@@ -25,6 +24,7 @@ import { withBackendUrl } from '../lib/backendUrl';
 
 const DESIGN_ARTIFACT_SENTINEL = '__ARCCO_DESIGN_ARTIFACT__';
 const MAX_CHAT_FILE_SIZE_BYTES = 100 * 1024 * 1024;
+const DESIGN_SEPARATOR = '<!-- ARCCO_DESIGN_SEPARATOR -->';
 
 interface FilePreviewCardProps {
   url: string;
@@ -170,6 +170,24 @@ interface ReplanDecisionView {
   to_tool_name: string;
   user_message: string;
 }
+
+const splitDesignsFromHtml = (rawHtml: string): string[] => {
+  const normalized = (rawHtml || '').trim();
+  if (!normalized) return [];
+  return normalized.split(DESIGN_SEPARATOR).map(d => d.trim()).filter(Boolean);
+};
+
+const mergeUniqueDesigns = (current: string[] | null, next: string[]): string[] => {
+  const merged = [...(current || [])];
+  const seen = new Set(merged);
+  for (const item of next) {
+    const normalized = item.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    merged.push(normalized);
+  }
+  return merged;
+};
 
 const allSuggestions = [
   'Criar um post para Instagram',
@@ -1168,7 +1186,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             try {
               const payload = JSON.parse(content);
               if (Array.isArray(payload?.designs) && payload.designs.length > 0) {
-                setDesignArtifact(payload.designs);
+                const nextDesigns = payload.designs.flatMap((item: string) => splitDesignsFromHtml(String(item)));
+                setDesignArtifact(prev => mergeUniqueDesigns(prev, nextDesigns));
                 setMessages(prev => prev.map(msg =>
                   msg.id === assistantMsgId ? { ...msg, content: DESIGN_ARTIFACT_SENTINEL } : msg
                 ));
@@ -1613,28 +1632,18 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     // Detecta resposta que é uma apresentação HTML completa (terminal tool generate_web_page)
     const trimmedContent = content.trim();
     if (trimmedContent.startsWith('<!DOCTYPE') || trimmedContent.toLowerCase().startsWith('<html')) {
-      const DESIGN_SEPARATOR = '<!-- ARCCO_DESIGN_SEPARATOR -->';
-      const designs = trimmedContent.split(DESIGN_SEPARATOR).map(d => d.trim()).filter(Boolean);
-      const openSingleDesign = () => setDesignPreview({ designs, initialIndex: 0 });
+      const designs = splitDesignsFromHtml(trimmedContent);
       const openDesignByIndex = (index: number) => setDesignPreview({ designs, initialIndex: index });
-      if (designs.length > 1) {
-        return <DesignGallery designs={designs} isStreaming={isLoading} onOpenPreview={openDesignByIndex} />;
-      }
-      return <PresentationCard html={designs[0] || trimmedContent} isStreaming={isLoading} onOpenPreview={openSingleDesign} />;
+      return <DesignGallery designs={designs.length > 0 ? designs : [trimmedContent]} isStreaming={isLoading} onOpenPreview={openDesignByIndex} />;
     }
 
     const fencedDesignMatch = trimmedContent.match(/^```(?:html)?\s*([\s\S]*?)\s*```$/i);
     if (fencedDesignMatch) {
       const html = fencedDesignMatch[1].trim();
       if (html.startsWith('<!DOCTYPE') || html.toLowerCase().startsWith('<html')) {
-        const DESIGN_SEPARATOR = '<!-- ARCCO_DESIGN_SEPARATOR -->';
-        const designs = html.split(DESIGN_SEPARATOR).map(d => d.trim()).filter(Boolean);
-        const openSingleDesign = () => setDesignPreview({ designs, initialIndex: 0 });
+        const designs = splitDesignsFromHtml(html);
         const openDesignByIndex = (index: number) => setDesignPreview({ designs, initialIndex: index });
-        if (designs.length > 1) {
-          return <DesignGallery designs={designs} isStreaming={isLoading} onOpenPreview={openDesignByIndex} />;
-        }
-        return <PresentationCard html={designs[0] || html} isStreaming={isLoading} onOpenPreview={openSingleDesign} />;
+        return <DesignGallery designs={designs.length > 0 ? designs : [html]} isStreaming={isLoading} onOpenPreview={openDesignByIndex} />;
       }
     }
 
@@ -2434,19 +2443,11 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                       <React.Fragment key={msg.id}>
                         {shouldRenderAgentPanel && renderAgentActivityPanel()}
                         <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%]">
-                          {designArtifact.length > 1 ? (
-                            <DesignGallery
-                              designs={designArtifact}
-                              isStreaming={false}
-                              onOpenPreview={(index) => setDesignPreview({ designs: designArtifact, initialIndex: index })}
-                            />
-                          ) : (
-                            <PresentationCard
-                              html={designArtifact[0]}
-                              isStreaming={false}
-                              onOpenPreview={() => setDesignPreview({ designs: designArtifact, initialIndex: 0 })}
-                            />
-                          )}
+                          <DesignGallery
+                            designs={designArtifact}
+                            isStreaming={false}
+                            onOpenPreview={(index) => setDesignPreview({ designs: designArtifact, initialIndex: index })}
+                          />
                         </div>
                       </React.Fragment>
                     );
@@ -2569,19 +2570,11 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
                 {designArtifact && designArtifact.length > 0 && !isLoading && !messages.some(msg => msg.content === DESIGN_ARTIFACT_SENTINEL) && (
                   <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%]">
-                    {designArtifact.length > 1 ? (
-                      <DesignGallery
-                        designs={designArtifact}
-                        isStreaming={false}
-                        onOpenPreview={(index) => setDesignPreview({ designs: designArtifact, initialIndex: index })}
-                      />
-                    ) : (
-                      <PresentationCard
-                        html={designArtifact[0]}
-                        isStreaming={false}
-                        onOpenPreview={() => setDesignPreview({ designs: designArtifact, initialIndex: 0 })}
-                      />
-                    )}
+                    <DesignGallery
+                      designs={designArtifact}
+                      isStreaming={false}
+                      onOpenPreview={(index) => setDesignPreview({ designs: designArtifact, initialIndex: index })}
+                    />
                   </div>
                 )}
 
