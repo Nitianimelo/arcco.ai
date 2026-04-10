@@ -24,6 +24,7 @@ import { conversationApi } from '../lib/conversationApi';
 import { withBackendUrl } from '../lib/backendUrl';
 
 const DESIGN_ARTIFACT_SENTINEL = '__ARCCO_DESIGN_ARTIFACT__';
+const MAX_CHAT_FILE_SIZE_BYTES = 100 * 1024 * 1024;
 
 interface FilePreviewCardProps {
   url: string;
@@ -1489,6 +1490,18 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || []);
     if (selectedFiles.length === 0) return;
+
+    const oversizedFiles = selectedFiles.filter(file => file.size > MAX_CHAT_FILE_SIZE_BYTES);
+    if (oversizedFiles.length > 0) {
+      showToast(
+        oversizedFiles.length === 1
+          ? `O arquivo ${oversizedFiles[0].name} excede o limite de 100MB.`
+          : `${oversizedFiles.length} arquivos excedem o limite de 100MB.`,
+        'error',
+      );
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
 
     setIsFileLoading(true);
 

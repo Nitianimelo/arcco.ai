@@ -277,6 +277,10 @@ export const agentApi = {
 
             xhr.onload = () => {
                 if (xhr.status < 200 || xhr.status >= 300) {
+                    if (xhr.status === 413) {
+                        reject(new Error('Arquivo excede o limite de upload de 100MB.'));
+                        return;
+                    }
                     reject(new Error(`Upload failed (${xhr.status}): ${xhr.responseText}`));
                     return;
                 }

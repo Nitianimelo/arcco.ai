@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 SESSION_ROOT = Path("/tmp/arcco_chat")
 MANIFEST_FILENAME = "manifest.json"
 MAX_FILES_PER_SESSION = 10
-MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
+MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 FILENAME_SANITIZE_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -150,7 +150,7 @@ def validate_upload_limits(session_id: str, file_size: int) -> None:
         raise SessionLimitError("Arquivo vazio não é permitido.")
 
     if file_size > MAX_FILE_SIZE_BYTES:
-        raise SessionLimitError("Arquivo excede o limite de 25MB.")
+        raise SessionLimitError("Arquivo excede o limite de 100MB.")
 
     current_count = count_session_files(session_id)
     if current_count >= MAX_FILES_PER_SESSION:
