@@ -47,6 +47,10 @@ export interface SessionFileUploadResponse {
     message: string;
 }
 
+export interface SessionFileUploadOptions {
+    onProgress?: (progressPercent: number, loadedBytes: number, totalBytes: number) => void;
+}
+
 export interface AgentActionResponse {
     type: 'action' | 'reasoning' | 'error';
     intent?: string;
@@ -249,21 +253,45 @@ export const agentApi = {
         return data.text || '';
     },
 
-    async uploadSessionFile(sessionId: string, file: File): Promise<SessionFileUploadResponse> {
+    async uploadSessionFile(
+        sessionId: string,
+        file: File,
+        options?: SessionFileUploadOptions,
+    ): Promise<SessionFileUploadResponse> {
         const formData = new FormData();
         formData.append('file', file);
 
-        const res = await fetch(`${API_BASE}/session-files?session_id=${encodeURIComponent(sessionId)}`, {
-            method: 'POST',
-            body: formData,
+        return await new Promise<SessionFileUploadResponse>((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', `${API_BASE}/session-files?session_id=${encodeURIComponent(sessionId)}`);
+
+            xhr.upload.onprogress = (event) => {
+                if (!event.lengthComputable) return;
+                const progressPercent = Math.max(1, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+                options?.onProgress?.(progressPercent, event.loaded, event.total);
+            };
+
+            xhr.onerror = () => {
+                reject(new Error('Upload failed: network error'));
+            };
+
+            xhr.onload = () => {
+                if (xhr.status < 200 || xhr.status >= 300) {
+                    reject(new Error(`Upload failed (${xhr.status}): ${xhr.responseText}`));
+                    return;
+                }
+
+                try {
+                    const payload = JSON.parse(xhr.responseText) as SessionFileUploadResponse;
+                    options?.onProgress?.(100, file.size, file.size);
+                    resolve(payload);
+                } catch (error: any) {
+                    reject(new Error(`Upload failed: invalid server response (${error?.message || 'unknown error'})`));
+                }
+            };
+
+            xhr.send(formData);
         });
-
-        if (!res.ok) {
-            const errorText = await res.text();
-            throw new Error(`Upload failed (${res.status}): ${errorText}`);
-        }
-
-        return res.json();
     },
 
     async listSessionFiles(sessionId: string): Promise<SessionFileItem[]> {

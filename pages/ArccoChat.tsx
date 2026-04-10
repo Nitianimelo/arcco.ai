@@ -123,10 +123,14 @@ interface ChatModeConfig {
 
 interface SessionAttachment {
   fileId: string;
+  clientId?: string;
   name: string;
   sizeBytes: number;
-  status: SessionFileStatus;
+  status: SessionFileStatus | 'uploading';
   error?: string | null;
+  progressPercent?: number;
+  loadedBytes?: number;
+  source?: 'local' | 'server';
 }
 
 interface BrowserClarificationPayload {
@@ -750,14 +754,41 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     sizeBytes: file.size_bytes,
     status: file.status,
     error: file.error,
+    progressPercent: file.status === 'ready' ? 100 : file.status === 'failed' ? 100 : 92,
+    loadedBytes: file.size_bytes,
+    source: 'server',
   });
 
-  const attachmentStatusLabel = (status: SessionFileStatus) => {
+  const mergeSessionAttachments = useCallback(
+    (serverFiles: SessionFileItem[], currentAttachments: SessionAttachment[]) => {
+      const serverMapped = serverFiles.map(mapSessionFile);
+      const mergedById = new Map<string, SessionAttachment>();
+
+      currentAttachments.forEach((attachment) => {
+        if (attachment.status === 'uploading' && attachment.clientId) {
+          mergedById.set(`client:${attachment.clientId}`, attachment);
+          return;
+        }
+        mergedById.set(`file:${attachment.fileId}`, attachment);
+      });
+
+      serverMapped.forEach((attachment) => {
+        mergedById.set(`file:${attachment.fileId}`, attachment);
+      });
+
+      return Array.from(mergedById.values()).sort((left, right) => left.name.localeCompare(right.name));
+    },
+    [],
+  );
+
+  const attachmentStatusLabel = (status: SessionAttachment['status']) => {
     switch (status) {
       case 'ready':
         return 'pronto';
       case 'failed':
         return 'falhou';
+      case 'uploading':
+        return 'enviando';
       case 'processing':
       case 'uploaded':
       default:
@@ -765,17 +796,34 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     }
   };
 
-  const attachmentStatusClass = (status: SessionFileStatus) => {
+  const attachmentStatusClass = (status: SessionAttachment['status']) => {
     switch (status) {
       case 'ready':
         return 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300';
       case 'failed':
         return 'bg-red-500/10 border-red-500/30 text-red-300';
+      case 'uploading':
+        return 'bg-indigo-500/10 border-indigo-500/30 text-indigo-300';
       case 'processing':
       case 'uploaded':
       default:
         return 'bg-amber-500/10 border-amber-500/30 text-amber-300';
     }
+  };
+
+  const attachmentProgressValue = (attachment: SessionAttachment) => {
+    if (attachment.status === 'ready' || attachment.status === 'failed') return 100;
+    if (attachment.status === 'uploading') return Math.max(1, Math.min(100, attachment.progressPercent || 0));
+    return Math.max(96, Math.min(99, attachment.progressPercent || 96));
+  };
+
+  const formatAttachmentProgress = (attachment: SessionAttachment) => {
+    const loaded = attachment.loadedBytes || 0;
+    const total = attachment.sizeBytes || 0;
+    if (!total) return `${attachmentProgressValue(attachment)}%`;
+    const loadedMb = (loaded / (1024 * 1024)).toFixed(1);
+    const totalMb = (total / (1024 * 1024)).toFixed(1);
+    return `${loadedMb} / ${totalMb} MB`;
   };
 
   // Single Source of Truth: busca a chave do Supabase (tabela ApiKeys) a cada mount.
@@ -884,12 +932,11 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
       try {
         const files = await agentApi.listSessionFiles(effectiveSessionId);
         if (!cancelled) {
-          setAttachments(files.map(mapSessionFile));
+          setAttachments(prev => mergeSessionAttachments(files, prev));
         }
       } catch (error) {
         if (!cancelled) {
           console.warn('Falha ao carregar anexos da sessão:', error);
-          setAttachments([]);
         }
       }
     };
@@ -910,14 +957,14 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
     const interval = setInterval(async () => {
       const hasPending = attachmentsRef.current.some(
-        att => att.status === 'processing' || att.status === 'uploaded'
+        att => att.status === 'processing' || att.status === 'uploaded' || att.status === 'uploading'
       );
       if (!hasPending) return;
 
       try {
         const files = await agentApi.listSessionFiles(effectiveSessionId);
         if (!cancelled) {
-          setAttachments(files.map(mapSessionFile));
+          setAttachments(prev => mergeSessionAttachments(files, prev));
         }
       } catch (error) {
         if (!cancelled) {
@@ -1440,26 +1487,98 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const selectedFiles = Array.from(e.target.files || []);
+    if (selectedFiles.length === 0) return;
+
+    setIsFileLoading(true);
 
     try {
-      setIsFileLoading(true);
-      const uploaded = await agentApi.uploadSessionFile(effectiveSessionId, file);
-      setAttachments(prev => {
-        const withoutSameId = prev.filter(att => att.fileId !== uploaded.file_id);
-        return [...withoutSameId, {
-          fileId: uploaded.file_id,
-          name: uploaded.original_name,
-          sizeBytes: uploaded.size_bytes,
-          status: uploaded.status,
-          error: null,
-        }];
+      const uploadTasks = selectedFiles.map(async (file) => {
+        const clientId = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+        setAttachments(prev => [
+          ...prev,
+          {
+            fileId: `uploading:${clientId}`,
+            clientId,
+            name: file.name,
+            sizeBytes: file.size,
+            status: 'uploading',
+            error: null,
+            progressPercent: 1,
+            loadedBytes: 0,
+            source: 'local',
+          },
+        ]);
+
+        try {
+          const uploaded = await agentApi.uploadSessionFile(effectiveSessionId, file, {
+            onProgress: (progressPercent, loadedBytes, totalBytes) => {
+              setAttachments(prev => prev.map(att => (
+                att.clientId === clientId
+                  ? {
+                      ...att,
+                      progressPercent,
+                      loadedBytes,
+                      sizeBytes: totalBytes || att.sizeBytes,
+                    }
+                  : att
+              )));
+            },
+          });
+
+          setAttachments(prev => prev.map(att => (
+            att.clientId === clientId
+              ? {
+                  ...att,
+                  fileId: uploaded.file_id,
+                  name: uploaded.original_name,
+                  sizeBytes: uploaded.size_bytes,
+                  status: uploaded.status,
+                  progressPercent: uploaded.status === 'ready' ? 100 : 96,
+                  loadedBytes: uploaded.size_bytes,
+                  error: null,
+                  source: 'server',
+                }
+              : att
+          )));
+          return { ok: true as const, fileName: file.name };
+        } catch (err: any) {
+          console.error('Erro no upload da sessão:', err);
+          setAttachments(prev => prev.map(att => (
+            att.clientId === clientId
+              ? {
+                  ...att,
+                  status: 'failed',
+                  error: err.message,
+                  progressPercent: 100,
+                }
+              : att
+          )));
+          return { ok: false as const, fileName: file.name, error: err.message };
+        }
       });
-      showToast('Arquivo anexado. Processamento iniciado em background.', 'success');
-    } catch (err: any) {
-      console.error('Erro no upload da sessão:', err);
-      showToast(`Erro ao processar arquivo: ${err.message} `, 'error');
+
+      const results = await Promise.all(uploadTasks);
+      const successCount = results.filter(result => result.ok).length;
+      const failed = results.filter(result => !result.ok);
+
+      if (successCount > 0) {
+        showToast(
+          successCount === 1
+            ? 'Arquivo anexado. Processamento iniciado em background.'
+            : `${successCount} arquivos anexados. Processamento iniciado em background.`,
+          'success',
+        );
+      }
+      if (failed.length > 0) {
+        showToast(
+          failed.length === 1
+            ? `Falha no upload de ${failed[0].fileName}.`
+            : `${failed.length} arquivos falharam no upload.`,
+          'error',
+        );
+      }
     } finally {
       setIsFileLoading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -1663,7 +1782,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
         <div className="mt-2 flex items-center gap-1.5">
           <div className="relative flex items-center gap-1">
-            <input type="file" hidden ref={fileInputRef} onChange={handleFileUpload} />
+            <input type="file" hidden multiple ref={fileInputRef} onChange={handleFileUpload} />
             <div className="relative group/add">
             <button
               onClick={() => setShowAddMenu(!showAddMenu)}
@@ -1676,7 +1795,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
               }
             </button>
             <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 bg-[#1a1a1d] border border-[#2a2a2a] rounded-lg text-[11px] text-neutral-400 whitespace-nowrap opacity-0 invisible group-hover/add:opacity-100 group-hover/add:visible transition-all duration-150 pointer-events-none z-50">
-              {isFileLoading ? 'Enviando...' : 'Anexar arquivo ou link'}
+              {isFileLoading ? 'Enviando arquivos...' : 'Anexar arquivo(s) ou link'}
             </div>
             </div>
 
@@ -1773,18 +1892,46 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
       </div>
 
       {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-2 mt-2 px-1">
+        <div className="mt-3 px-1 space-y-2">
           {attachments.map((att, i) => (
             <div
-              key={att.fileId || i}
-              className={`flex items-center gap-2 border text-xs px-2.5 py-1 rounded-full ${attachmentStatusClass(att.status)}`}
+              key={att.clientId || att.fileId || i}
+              className={`rounded-2xl border px-3 py-2 ${attachmentStatusClass(att.status)}`}
               title={att.error || `${att.name} • ${attachmentStatusLabel(att.status)}`}
             >
-              {att.status === 'processing' || att.status === 'uploaded' ? (
-                <Loader2 size={12} className="animate-spin" />
-              ) : null}
-              <span className="truncate max-w-[150px]">{att.name}</span>
-              <span className="uppercase text-[10px] opacity-80">{attachmentStatusLabel(att.status)}</span>
+              <div className="flex items-center gap-2">
+                {att.status === 'uploading' || att.status === 'processing' || att.status === 'uploaded' ? (
+                  <Loader2 size={12} className="animate-spin flex-shrink-0" />
+                ) : att.status === 'ready' ? (
+                  <Check size={12} className="flex-shrink-0" />
+                ) : (
+                  <AlertTriangle size={12} className="flex-shrink-0" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="truncate text-xs font-medium">{att.name}</span>
+                    <span className="uppercase text-[10px] opacity-80 flex-shrink-0">{attachmentStatusLabel(att.status)}</span>
+                  </div>
+                  <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-black/20">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        att.status === 'failed'
+                          ? 'bg-red-400'
+                          : att.status === 'ready'
+                            ? 'bg-emerald-400'
+                            : att.status === 'uploading'
+                              ? 'bg-indigo-400'
+                              : 'bg-amber-400'
+                      }`}
+                      style={{ width: `${attachmentProgressValue(att)}%` }}
+                    />
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-3 text-[10px] opacity-80">
+                    <span>{formatAttachmentProgress(att)}</span>
+                    {att.error ? <span className="truncate text-right">{att.error}</span> : null}
+                  </div>
+                </div>
+              </div>
             </div>
           ))}
         </div>
