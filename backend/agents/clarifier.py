@@ -142,4 +142,35 @@ def build_follow_up_questions(
             )
         ]
 
+    if task_type == "open_problem_solving":
+        return [
+            _choice_question(
+                "Qual é o entregável final que você quer primeiro?",
+                helper_text="Isso ajuda o agente a decidir entre Python, design, edição de arquivo ou combinação dessas rotas.",
+                options=[
+                    ("Novo PDF", "Prioriza reconstrução e exportação final do documento.", True),
+                    ("HTML editável", "Bom para validar layout e estrutura antes de exportar.", False),
+                    ("Resumo estruturado", "Útil para validar o conteúdo antes do artefato final.", False),
+                ],
+            ),
+            _choice_question(
+                "O que eu devo preservar com mais fidelidade?",
+                helper_text="Isso define o que pode ser transformado e o que precisa ficar mais próximo do original.",
+                options=[
+                    ("Texto e imagens", "Mantém o conteúdo principal mesmo com reorganização.", True),
+                    ("Layout original", "Prioriza aparência e posição dos elementos.", False),
+                    ("Só o conteúdo essencial", "Permite simplificar e reconstruir.", False),
+                ],
+            ),
+            _choice_question(
+                "Posso usar etapas intermediárias para resolver melhor?",
+                helper_text="Exemplo: extrair, gerar código Python, montar HTML e depois exportar o arquivo final.",
+                options=[
+                    ("Sim, pode iterar livremente", "Melhor para tarefas singulares e compostas.", True),
+                    ("Prefiro o caminho mais direto", "Menos etapas, mesmo com menos flexibilidade.", False),
+                    ("Quero validar antes do arquivo final", "Mostra uma etapa intermediária primeiro.", False),
+                ],
+            ),
+        ]
+
     return []

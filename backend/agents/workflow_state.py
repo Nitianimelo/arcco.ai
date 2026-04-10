@@ -111,6 +111,45 @@ def build_browser_workflow_stages(
     ]
 
 
+def build_open_solver_stages(
+    *,
+    awaiting_user_goal: bool,
+    delivery_completed: bool = False,
+    steps_used: int = 0,
+    step_budget: int = 0,
+) -> list[WorkflowStageContract]:
+    return [
+        WorkflowStageContract(
+            stage_id="intake",
+            label="Intake",
+            status="waiting_user" if awaiting_user_goal else "completed",
+            summary="Objetivo e restrições do problema singular.",
+            metadata={"awaiting_user_goal": awaiting_user_goal},
+        ),
+        WorkflowStageContract(
+            stage_id="strategy",
+            label="Strategy",
+            status="pending" if awaiting_user_goal else "completed",
+            summary="Escolha livre entre rotas fixas, Python, browser, design e transformação de arquivos.",
+            metadata={"step_budget": step_budget},
+        ),
+        WorkflowStageContract(
+            stage_id="execution",
+            label="Execution",
+            status="pending" if awaiting_user_goal else ("completed" if delivery_completed else "in_progress"),
+            summary="Execução iterativa e orientada a objetivo com scratchpad intermediário.",
+            metadata={"steps_used": steps_used, "step_budget": step_budget},
+        ),
+        WorkflowStageContract(
+            stage_id="delivery",
+            label="Delivery",
+            status="completed" if delivery_completed else ("pending" if awaiting_user_goal else "in_progress"),
+            summary="Consolidação do artefato final ou da melhor saída disponível.",
+            metadata={},
+        ),
+    ]
+
+
 def update_workflow_stages(
     stages: list[WorkflowStageContract],
     *,

@@ -33,6 +33,7 @@ TaskTypeId = Literal[
     "deep_research",
     "browser_workflow",
     "mass_document_analysis",
+    "open_problem_solving",
 ]
 
 ValidationStatus = Literal[

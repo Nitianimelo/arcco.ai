@@ -25,10 +25,12 @@ from typing import Any, AsyncGenerator
 from backend.core.llm import call_openrouter, stream_openrouter
 from backend.agents import registry
 from backend.agents.capabilities import get_capability_by_route, get_direct_dispatch_routes, get_runtime_semantics, route_requires_link_only
-from backend.agents.contracts import CapabilityResult, PolicyDecisionContract, RouteReplanDecisionContract, ValidationResultContract
+from backend.agents.contracts import CapabilityResult, PolicyDecisionContract, RouteReplanDecisionContract, ValidationIssueContract, ValidationResultContract
+from backend.agents.clarifier import build_follow_up_questions
 from backend.agents.handoffs import build_browser_handoff_state, build_mass_document_handoff, build_search_to_spreadsheet_handoff
 from backend.agents.planner import ClarificationQuestion
 from backend.agents.dispatcher import dispatch_direct_route, planner_action_to_tool_name, resolve_runtime_target
+from backend.agents.open_solver import build_open_solver_prompt, init_open_solver_context, update_open_solver_context
 from backend.agents.task_types import get_task_type_definition, infer_task_type
 from backend.agents.validators import validate_capability_execution
 from backend.agents.workflow_policy import decide_on_route_failure, decide_on_validation
@@ -36,6 +38,7 @@ from backend.agents.step_replanner import build_replanned_args, decide_route_rep
 from backend.agents.workflow_state import (
     build_browser_workflow_stages,
     build_mass_document_stages,
+    build_open_solver_stages,
     mass_document_updates_for_step_result,
     mass_document_updates_for_step_start,
     update_workflow_stages,
@@ -472,6 +475,104 @@ def _normalize_plan_for_mass_document_requests(plan_output, *, user_intent: str,
     ]
     plan_output.steps = []
     logger.info("[ORCHESTRATOR] Lote de documentos convertido em clarificação antes de OCR/RAG.")
+    return plan_output
+
+
+def _normalize_plan_for_open_problem_solving(plan_output, *, user_intent: str, session_id: str | None):
+    normalized = (user_intent or "").lower()
+    inventory = _get_session_inventory_items(session_id)
+
+    transform_signals = (
+        "extrair",
+        "converter",
+        "transformar",
+        "reorganizar",
+        "recombinar",
+        "gerar outro",
+        "novo pdf",
+        "html",
+        "python",
+        "script",
+        "misturar",
+    )
+    file_signals = ("pdf", "docx", "xlsx", "planilha", "documento", "arquivo", "anexo", "imagem")
+    output_signals = ("pdf", "html", "docx", "planilha", "excel", "png", "imagem", "apresentação", "apresentacao")
+    asks_visual_output = any(token in normalized for token in ("html", "layout", "design", "visual", "apresentação", "apresentacao", "slide"))
+
+    has_transform_intent = sum(1 for token in transform_signals if token in normalized) >= 2
+    has_file_context = bool(inventory) or any(token in normalized for token in file_signals)
+    if not (has_transform_intent and has_file_context):
+        return plan_output
+
+    plan_output.task_type = "open_problem_solving"
+    plan_output.is_complex = True
+
+    has_clear_output = any(token in normalized for token in output_signals)
+    if not has_clear_output and not getattr(plan_output, "needs_clarification", False):
+        plan_output.needs_clarification = True
+        plan_output.acknowledgment = "Preciso alinhar o entregável final antes de montar a solução."
+        plan_output.questions = build_follow_up_questions(
+            task_type="open_problem_solving",
+            validation_result=ValidationResultContract(
+                validator_id="open_problem_solver_intake",
+                task_type="open_problem_solving",
+                capability_id="planner",
+                status="clarification_recommended",
+                summary="Pedido singular identificado, mas o entregável final ainda não está explícito.",
+                issues=[
+                    ValidationIssueContract(
+                        code="open_solver_missing_output_target",
+                        severity="warning",
+                        message="O objetivo sugere composição livre de capabilities, mas o formato final ainda não está nítido.",
+                    )
+                ],
+                clarification_needed=True,
+            ),
+        )
+        plan_output.steps = []
+        logger.info("[ORCHESTRATOR] Pedido singular convertido em clarificação para open_problem_solving.")
+        return plan_output
+
+    from backend.agents.planner import PlanStep
+
+    steps = []
+    if inventory:
+        first_file = str(inventory[0].get("original_name") or inventory[0].get("file_name") or "arquivo anexado").strip()
+        steps.append(
+            PlanStep(
+                step=1,
+                action="session_file",
+                detail=f"Ler o anexo '{first_file}' e extrair somente os insumos necessários para resolver o objetivo final.",
+                is_terminal=False,
+            )
+        )
+
+    steps.append(
+        PlanStep(
+            step=len(steps) + 1,
+            action="python",
+            detail=(
+                "Resolver o problema de forma aberta usando código Python e artefatos intermediários quando necessário. "
+                "É permitido extrair texto, imagens, estruturar dados, gerar novos arquivos e preparar insumos para o passo final."
+            ),
+            is_terminal=not asks_visual_output,
+        )
+    )
+
+    if asks_visual_output:
+        steps.append(
+            PlanStep(
+                step=len(steps) + 1,
+                action="design_generator",
+                detail="Transformar a estrutura intermediária em um artefato visual editável e pronto para preview ou exportação.",
+                is_terminal=True,
+            )
+        )
+
+    plan_output.steps = steps
+    if not plan_output.acknowledgment:
+        plan_output.acknowledgment = "Vou montar a solução por etapas e escolher as capacidades necessárias para resolver isso com flexibilidade."
+    logger.info("[ORCHESTRATOR] Plano convertido para open_problem_solving.")
     return plan_output
 
 
@@ -1483,11 +1584,18 @@ async def orchestrate_and_stream(
         user_intent=user_intent,
         session_id=session_id,
     )
+    plan_output = _normalize_plan_for_open_problem_solving(
+        plan_output,
+        user_intent=user_intent,
+        session_id=session_id,
+    )
     inferred_task_type = getattr(plan_output, "task_type", None) or infer_task_type(user_intent, plan_output.steps)
     plan_output.task_type = inferred_task_type
     task_type_definition = get_task_type_definition(inferred_task_type) or {}
     mass_doc_handoff = None
     mass_doc_stages = None
+    open_solver_context = None
+    open_solver_stages = None
     if inferred_task_type == "mass_document_analysis":
         mass_doc_items = _get_session_inventory_items(session_id)
         mass_doc_handoff = build_mass_document_handoff(
@@ -1498,6 +1606,19 @@ async def orchestrate_and_stream(
             session_items=mass_doc_items,
             awaiting_user_goal=bool(plan_output.needs_clarification),
             delivery_completed=False,
+        )
+    elif inferred_task_type == "open_problem_solving":
+        open_solver_items = _get_session_inventory_items(session_id)
+        open_solver_context = init_open_solver_context(
+            user_intent=user_intent,
+            session_items=open_solver_items,
+            step_budget=max(len(plan_output.steps), 1) + 2,
+        )
+        open_solver_stages = build_open_solver_stages(
+            awaiting_user_goal=bool(plan_output.needs_clarification),
+            delivery_completed=False,
+            steps_used=0,
+            step_budget=int(open_solver_context.get("step_budget") or 0),
         )
     if execution_logger:
         await execution_logger.log_event(
@@ -1532,6 +1653,33 @@ async def orchestrate_and_stream(
                         "workflow_id": "mass_document_analysis",
                         "stages": [stage.model_dump() for stage in mass_doc_stages],
                         "message": "Pipeline documental inicializado",
+                    }
+                ),
+            )
+        if open_solver_context and open_solver_stages:
+            await execution_logger.log_event(
+                execution_id,
+                event_type="open_solver_initialized",
+                message="Modo open problem solver inicializado",
+                raw_payload={
+                    "scratchpad": open_solver_context,
+                    "workflow_id": "open_problem_solving",
+                },
+            )
+            await _log_workflow_stages(
+                execution_logger,
+                execution_id,
+                workflow_id="open_problem_solving",
+                stages=open_solver_stages,
+                message="Open solver inicializado",
+            )
+            yield sse(
+                "workflow_state",
+                json.dumps(
+                    {
+                        "workflow_id": "open_problem_solving",
+                        "stages": [stage.model_dump() for stage in open_solver_stages],
+                        "message": "Open solver inicializado",
                     }
                 ),
             )
@@ -1597,6 +1745,24 @@ async def orchestrate_and_stream(
                             "workflow_id": "mass_document_analysis",
                             "stages": [stage.model_dump() for stage in mass_doc_stages],
                             "message": "Pipeline documental aguardando objetivo do usuário",
+                        }
+                    ),
+                )
+            if open_solver_stages:
+                await _log_workflow_stages(
+                    execution_logger,
+                    execution_id,
+                    workflow_id="open_problem_solving",
+                    stages=open_solver_stages,
+                    message="Open solver aguardando contexto do usuário",
+                )
+                yield sse(
+                    "workflow_state",
+                    json.dumps(
+                        {
+                            "workflow_id": "open_problem_solving",
+                            "stages": [stage.model_dump() for stage in open_solver_stages],
+                            "message": "Open solver aguardando contexto do usuário",
                         }
                     ),
                 )
@@ -1691,6 +1857,11 @@ async def orchestrate_and_stream(
             execution_prompt = f"Seu objetivo atual: {step.detail}\n"
             if accumulated_context:
                 execution_prompt += f"\nContexto prévio de passos anteriores (USE ESTES DADOS):\n{accumulated_context}"
+            if inferred_task_type == "open_problem_solving" and open_solver_context:
+                execution_prompt += "\n\n" + build_open_solver_prompt(
+                    step_detail=step.detail,
+                    scratchpad=open_solver_context,
+                )
             step_handoff = None
             if step.action == "python" and inferred_task_type == "spreadsheet_generation":
                 step_handoff = build_search_to_spreadsheet_handoff(context_results=capability_results)
@@ -2079,6 +2250,22 @@ async def orchestrate_and_stream(
                                 return
                             if _is_error_result(specialist_result):
                                 had_failures = True
+                                if inferred_task_type == "open_problem_solving" and open_solver_context:
+                                    open_solver_context = update_open_solver_context(
+                                        scratchpad=open_solver_context,
+                                        route=current_route,
+                                        success=False,
+                                        result_preview=str(specialist_result or ""),
+                                        artifacts=[],
+                                    )
+                                    if execution_logger:
+                                        await execution_logger.log_event(
+                                            execution_id,
+                                            execution_agent_id=tool_agent_id,
+                                            event_type="open_solver_scratchpad_updated",
+                                            message=f"Scratchpad atualizado com falha em {current_route}",
+                                            raw_payload=open_solver_context,
+                                        )
                                 failure_decision = decide_on_route_failure(
                                     task_type=inferred_task_type,
                                     route=current_route,
@@ -2144,6 +2331,45 @@ async def orchestrate_and_stream(
                                 yield sse("thought", failure_decision.user_message or failure_msg)
                             else:
                                 capability_results.append(dispatch_result)
+                                if inferred_task_type == "open_problem_solving" and open_solver_context:
+                                    open_solver_context = update_open_solver_context(
+                                        scratchpad=open_solver_context,
+                                        route=current_route,
+                                        success=True,
+                                        result_preview=str(specialist_result or ""),
+                                        artifacts=[artifact.model_dump() for artifact in dispatch_result.artifacts],
+                                    )
+                                    if execution_logger:
+                                        await execution_logger.log_event(
+                                            execution_id,
+                                            execution_agent_id=tool_agent_id,
+                                            event_type="open_solver_scratchpad_updated",
+                                            message=f"Scratchpad atualizado após {current_route}",
+                                            raw_payload=open_solver_context,
+                                        )
+                                        open_solver_stages = build_open_solver_stages(
+                                            awaiting_user_goal=False,
+                                            delivery_completed=bool(step.is_terminal),
+                                            steps_used=int(open_solver_context.get("steps_used") or 0),
+                                            step_budget=int(open_solver_context.get("step_budget") or 0),
+                                        )
+                                        await _log_workflow_stages(
+                                            execution_logger,
+                                            execution_id,
+                                            workflow_id="open_problem_solving",
+                                            stages=open_solver_stages,
+                                            message=f"Open solver avançou com {current_route}",
+                                        )
+                                        yield sse(
+                                            "workflow_state",
+                                            json.dumps(
+                                                {
+                                                    "workflow_id": "open_problem_solving",
+                                                    "stages": [stage.model_dump() for stage in open_solver_stages],
+                                                    "message": f"Open solver avançou com {current_route}",
+                                                }
+                                            ),
+                                        )
                                 if execution_logger and active_mass_doc_stages:
                                     stage_updates, stage_metadata = mass_document_updates_for_step_result(current_route, success=True)
                                     if stage_updates or stage_metadata:

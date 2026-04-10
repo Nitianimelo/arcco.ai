@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import io
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from backend.services.session_file_service import (
     get_extracted_file_path,
+    list_session_files,
     get_stored_file_path,
     mark_file_failed,
     mark_file_processing,
@@ -25,6 +27,7 @@ from backend.services.session_file_service import (
 logger = logging.getLogger(__name__)
 
 PDF_NATIVE_MIN_CHARS = 80
+STUCK_PROCESSING_AFTER_SECONDS = 20
 
 
 def process_uploaded_file(session_id: str, file_id: str) -> None:
@@ -49,6 +52,58 @@ def process_uploaded_file(session_id: str, file_id: str) -> None:
             exc,
         )
         mark_file_failed(session_id, file_id, str(exc))
+
+
+def recover_pending_session_files(session_id: str) -> list[str]:
+    """
+    Recupera anexos presos em `uploaded` ou `processing`.
+
+    Isso protege o front contra spinner infinito quando a background task
+    não inicia, cai no meio do caminho, ou extrai o texto mas não chega a
+    atualizar o manifesto final.
+    """
+    recovered_file_ids: list[str] = []
+
+    for entry in list_session_files(session_id):
+        file_id = str(entry.get("file_id") or "").strip()
+        status = str(entry.get("status") or "uploaded").strip().lower()
+        if not file_id or status not in {"uploaded", "processing"}:
+            continue
+
+        extracted_path = get_extracted_file_path(session_id, file_id)
+        if extracted_path.exists():
+            mark_file_ready(session_id, file_id)
+            recovered_file_ids.append(file_id)
+            continue
+
+        if status == "uploaded" or _is_stale_processing(entry):
+            logger.warning(
+                "Arquivo %s da sessão %s ficou preso em %s. Tentando reprocessar.",
+                file_id,
+                session_id,
+                status,
+            )
+            process_uploaded_file(session_id, file_id)
+            recovered_file_ids.append(file_id)
+
+    return recovered_file_ids
+
+
+def _is_stale_processing(entry: dict) -> bool:
+    created_at = str(entry.get("created_at") or "").strip()
+    if not created_at:
+        return True
+
+    try:
+        created_dt = datetime.fromisoformat(created_at)
+        if created_dt.tzinfo is None:
+            created_dt = created_dt.replace(tzinfo=timezone.utc)
+        created_dt = created_dt.astimezone(timezone.utc)
+    except Exception:
+        return True
+
+    age_seconds = (datetime.now(timezone.utc) - created_dt).total_seconds()
+    return age_seconds >= STUCK_PROCESSING_AFTER_SECONDS
 
 
 def extract_text_for_file(file_path: Path, mime_type: str = "") -> str:

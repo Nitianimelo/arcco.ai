@@ -90,6 +90,21 @@ _TASK_TYPES: tuple[TaskTypeDefinition, ...] = (
         uses_text_generator=True,
         notes="Fluxo pensado para OCR massivo, armazenamento temporário e cleanup no fim.",
     ),
+    TaskTypeDefinition(
+        task_type="open_problem_solving",
+        display_name="Resolução Aberta de Problemas",
+        description="Composição livre de capabilities para tarefas singulares, compostas ou pouco padronizadas.",
+        preferred_capabilities=(
+            "session_file_read",
+            "python_execute",
+            "design_generate",
+            "web_browse",
+            "file_modify",
+            "text_document_generate",
+        ),
+        uses_text_generator=True,
+        notes="O agente pode combinar leitura de anexos, Python, browser, design e modificação de arquivos para resolver o objetivo final.",
+    ),
 )
 
 
@@ -109,7 +124,25 @@ def infer_task_type(user_intent: str, steps: list[PlanStepContract] | None = Non
     normalized = (user_intent or "").lower()
     actions = {str(step.action) for step in (steps or [])}
     capability_ids = {str(step.capability_id) for step in (steps or []) if getattr(step, "capability_id", None)}
+    open_solver_signals = (
+        "extra",
+        "imagen",
+        "texto",
+        "ger",
+        "novo pdf",
+        "reorgan",
+        "recombin",
+        "convert",
+        "transform",
+        "python",
+        "script python",
+        "html",
+    )
+    file_like_signals = ("pdf", "docx", "xlsx", "planilha", "documento", "arquivo", "anexo", "imagem")
 
+    open_signal_count = sum(1 for signal in open_solver_signals if signal in normalized)
+    if open_signal_count >= 3 and any(signal in normalized for signal in file_like_signals):
+        return "open_problem_solving"
     if (
         "captcha" in normalized
         or "formul" in normalized

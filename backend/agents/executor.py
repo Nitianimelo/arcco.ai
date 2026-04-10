@@ -619,6 +619,7 @@ async def _read_session_file(
         format_chunk_results,
         search_relevant_chunks,
     )
+    from backend.services.session_extraction_service import recover_pending_session_files
     from backend.services.session_file_service import (
         SessionFileError,
         SessionFileNotFoundError,
@@ -633,6 +634,7 @@ async def _read_session_file(
             return "Erro: file_name não informado para leitura do arquivo da sessão."
 
         touch_session(session_id)
+        await asyncio.to_thread(recover_pending_session_files, session_id)
         entry = get_session_file_by_name(session_id, file_name)
         status = entry.get("status", "uploaded")
         extracted_path = entry.get("extracted_text_path", "")

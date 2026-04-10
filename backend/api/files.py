@@ -2,6 +2,7 @@ import logging
 import io
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks
+from starlette.concurrency import run_in_threadpool
 
 from backend.models.schemas import FileGenerateRequest, FileGenerateResponse
 from backend.models.schemas import (
@@ -10,7 +11,7 @@ from backend.models.schemas import (
     SessionFileUploadResponse,
 )
 from backend.services.file_service import generate_file
-from backend.services.session_extraction_service import process_uploaded_file
+from backend.services.session_extraction_service import process_uploaded_file, recover_pending_session_files
 from backend.services.session_gc_service import cleanup_expired_sessions
 from backend.services.session_file_service import (
     SessionFileError,
@@ -88,6 +89,7 @@ async def get_session_files(session_id: str):
         validated_session_id = validate_session_id(session_id)
         if not session_exists(validated_session_id):
             return SessionFileListResponse(session_id=validated_session_id, files=[])
+        await run_in_threadpool(recover_pending_session_files, validated_session_id)
         touch_session(validated_session_id)
         return SessionFileListResponse(
             session_id=validated_session_id,

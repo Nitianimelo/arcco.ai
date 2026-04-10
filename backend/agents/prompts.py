@@ -83,6 +83,8 @@ QUANDO USAR:
     SEMPRE use print() para exibir resultados — sem print(), o output não aparece
     SEMPRE salve arquivos físicos em /tmp/nome_arquivo.ext — nunca em caminhos locais do sistema
     O Arcco detecta arquivos salvos em /tmp/ e os publica automaticamente como artefatos
+    Em tarefas singulares/compostas, você pode usar execute_python como ambiente de resolução:
+    extrair texto, imagens, gerar JSON intermediário, montar HTML, produzir novo arquivo e iterar até resolver
 
 RACIOCÍNIO OBRIGATÓRIO ANTES DE CHAMAR (Chain of Thought):
   Antes de chamar execute_python, escreva UM parágrafo curto em texto corrido explicando:
