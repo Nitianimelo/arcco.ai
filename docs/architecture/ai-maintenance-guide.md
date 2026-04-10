@@ -3,6 +3,10 @@
 ## Objetivo
 Este guia existe para reduzir ambiguidade para qualquer IA que precise alterar o backend.
 
+Leitura complementar obrigatória para contexto operacional:
+- [CONTEXT_ENGINEERING.md](/Users/nitianimelofreire/Library/Mobile%20Documents/com~apple~CloudDocs/Arquivos%20das%20empresas/Grupo%20Arcco%20/Projeto%20Arcco%20agent/arcco.ai.agentV1-master/CONTEXT_ENGINEERING.md)
+- [docs/context-engineering/README.md](/Users/nitianimelofreire/Library/Mobile%20Documents/com~apple~CloudDocs/Arquivos%20das%20empresas/Grupo%20Arcco%20/Projeto%20Arcco%20agent/arcco.ai.agentV1-master/docs/context-engineering/README.md)
+
 ## Fonte de verdade
 - Agentes ativos: `backend/agents/registry.py`
 - Prompts de sistema: `backend/agents/prompts.py`
