@@ -1932,6 +1932,15 @@ async def orchestrate_and_stream(
                                             decision=failure_decision,
                                         )
                                     yield sse("policy_decision", json.dumps(failure_decision.model_dump()))
+                                    if failure_decision.request_clarification and failure_decision.clarification_questions:
+                                        async for clarification_event in _emit_policy_clarification(
+                                            decision=failure_decision,
+                                            execution_logger=execution_logger,
+                                            execution_id=execution_id,
+                                            execution_agent_id=tool_agent_id,
+                                        ):
+                                            yield clarification_event
+                                        return
                                     if failure_decision.retry_same_route:
                                         yield sse("thought", f"{failure_decision.user_message} Tentando novamente {current_route}...")
                                         continue
@@ -2840,6 +2849,15 @@ async def orchestrate_and_stream(
                             if failure_decision.retry_same_route:
                                 yield sse("thought", f"{failure_decision.user_message} Tentando novamente {current_route}...")
                                 continue
+                            if failure_decision.request_clarification and failure_decision.clarification_questions:
+                                async for clarification_event in _emit_policy_clarification(
+                                    decision=failure_decision,
+                                    execution_logger=execution_logger,
+                                    execution_id=execution_id,
+                                    execution_agent_id=react_agent_id,
+                                ):
+                                    yield clarification_event
+                                return
                             replan_decision = decide_route_replan(
                                 task_type=direct_task_type,
                                 failed_route=current_route,
@@ -3037,7 +3055,7 @@ async def orchestrate_and_stream(
                                     "O navegador falhou ou está indisponível. "
                                     "NÃO tente usar ask_browser novamente. "
                                     "NÃO invente dados da página nem diga que conseguiu acessar algo que falhou. "
-                                    "Se precisar de dados da web, use ask_web_search. "
+                                    "Aguarde a rota de recuperação definida pelo harness ou responda apenas com as informações realmente disponíveis. "
                                     "Caso contrário, responda ao usuário com as informações disponíveis."
                                 ),
                             })

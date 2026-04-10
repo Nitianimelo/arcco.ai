@@ -26,6 +26,7 @@ _REPLAN_CANDIDATES: dict[TaskTypeId, dict[str, tuple[str, ...]]] = {
     },
     "browser_workflow": {
         "browser": ("web_search",),
+        "web_search": ("browser",),
     },
     "mass_document_analysis": {
         "deep_research": ("web_search",),
@@ -58,6 +59,9 @@ def _build_query_from_context(
     if func_args.get("query"):
         return str(func_args["query"])
     if failed_route == "browser":
+        browser_goal = str(func_args.get("goal") or "").strip()
+        if browser_goal:
+            return browser_goal
         url = str(func_args.get("url") or "")
         parsed = urlparse(url)
         host = parsed.netloc.replace("www.", "").strip()
@@ -146,7 +150,7 @@ def decide_route_replan(
             to_action=_ROUTE_TO_ACTION[candidate],
             to_tool_name=_ROUTE_TO_TOOL[candidate],
             reason="A rota original falhou e existe uma capability compatível para tentar o mesmo objetivo por outro caminho.",
-            user_message=f"Rota {failed_route} falhou. Tentando {candidate} para manter a execução avançando.",
+            user_message=f"Rota {failed_route} falhou. Tentando {candidate} para recuperar a coleta sem inventar dados.",
             metadata={
                 "attempted_routes": sorted(attempted_routes),
                 "original_args": dict(func_args),

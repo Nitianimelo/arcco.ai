@@ -424,7 +424,7 @@ IF o pedido envolver preços ao vivo, disponibilidade, passagens, hotéis, cota�
    comparadores, formulários, origem/destino, datas, classe ou qualquer input obrigatório
   IF faltarem parâmetros essenciais
     THEN needs_clarification=true
-  ELSE THEN passo inicial = browser
+  ELSE THEN passo 1 = web_search para descobrir fontes fortes e passo 2 = browser para preencher filtros e coletar o resultado final
 
 // ── CONTEÚDO VISUAL ──
 IF pedido menciona: post, banner, flyer, apresentação, slide, pitch, carrossel, landing page, e-mail marketing

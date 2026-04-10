@@ -250,6 +250,24 @@ def _is_retryable_browser_result(result: str) -> bool:
     return "target page, context or browser has been closed" in text or "page.wait_for_timeout: target page, context or browser has been closed" in text
 
 
+def _is_infra_browser_exception(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "connect_over_cdp",
+            "502 bad gateway",
+            "websocket error",
+            "unexpected response",
+            "connect.steel.dev",
+            "connection reset",
+            "connection closed",
+            "econnreset",
+            "timeout 45000ms exceeded",
+        )
+    )
+
+
 def _call_openrouter_sync(*, messages: list[dict[str, Any]], model: str, max_tokens: int, temperature: float) -> dict[str, Any]:
     from backend.core.config import get_config
 
@@ -419,6 +437,9 @@ async def execute_browserbase_task(
             logger.error("[BROWSER] Falha ao criar sessão Steel: %s", exc)
             return f"Erro ao criar sessão na Steel: {exc}"
 
+    infra_retry_count = 0
+    max_infra_retries = 2
+
     try:
         async def _run_once(*, resume_mode: bool) -> str:
             return await asyncio.wait_for(
@@ -439,7 +460,32 @@ async def execute_browserbase_task(
                 timeout=_BROWSER_LOOP_TIMEOUT_SECONDS,
             )
 
-        result = await _run_once(resume_mode=bool(resume_token))
+        while True:
+            try:
+                result = await _run_once(resume_mode=bool(resume_token))
+                break
+            except Exception as exc:
+                if not _is_infra_browser_exception(exc) or infra_retry_count >= max_infra_retries:
+                    raise
+                infra_retry_count += 1
+                _emit_progress(
+                    progress_callback,
+                    "thought",
+                    content="O navegador remoto falhou ao conectar. Abrindo uma nova sessão e tentando novamente...",
+                )
+                logger.warning(
+                    "[BROWSER] Falha de infraestrutura ao conectar sessão %s (%s). Tentativa %s/%s.",
+                    session_id,
+                    exc,
+                    infra_retry_count,
+                    max_infra_retries,
+                )
+                try:
+                    if session_id:
+                        await asyncio.to_thread(lambda: steel.sessions.release(session_id))
+                except Exception:
+                    pass
+                session_id, connect_url, debug_url, session_viewer_url = await asyncio.to_thread(_open_fresh_session)
         if _is_retryable_browser_result(result):
             _emit_progress(progress_callback, "thought", content="A sessão do navegador fechou inesperadamente. Tentando reconectar...")
             logger.warning("[BROWSER] Sessão %s fechou no meio do fluxo. Tentando reconexão.", session_id)
@@ -493,6 +539,12 @@ async def execute_browserbase_task(
     except asyncio.TimeoutError:
         logger.error("[BROWSER] Timeout global de %ss na sessão %s -> %s", _BROWSER_LOOP_TIMEOUT_SECONDS, session_id, url)
         return f"Erro: Timeout de {int(_BROWSER_LOOP_TIMEOUT_SECONDS)}s durante navegação em {url}. O site pode estar lento ou a Steel sobrecarregada."
+    except Exception as exc:
+        logger.error("[BROWSER] Falha de infraestrutura na sessão %s -> %s: %s", session_id, url, exc)
+        return (
+            "Erro de infraestrutura do navegador remoto: "
+            f"{exc}. A sessão não conseguiu ser estabelecida na Steel."
+        )
     finally:
         if session_id and not handoff_pending:
             try:

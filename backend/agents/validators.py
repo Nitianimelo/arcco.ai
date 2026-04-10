@@ -125,7 +125,7 @@ def validate_capability_execution(
     context_results: list[CapabilityResult] | None = None,
     user_intent: str | None = None,
 ) -> ValidationResultContract | None:
-    if route == "web_search" and task_type in {"entity_collection", "spreadsheet_generation"}:
+    if route == "web_search" and task_type in {"entity_collection", "spreadsheet_generation", "browser_workflow"}:
         urls = _extract_source_urls(capability_result.content or "")
         status = "valid" if len(urls) >= 4 else "valid_with_warnings"
         issues: list[ValidationIssueContract] = []
@@ -277,6 +277,44 @@ def validate_capability_execution(
             metadata=capability_result.metadata,
         )
         result.suggested_questions = build_follow_up_questions(task_type=task_type, validation_result=result)
+        return result
+
+    if route == "browser" and capability_result.error_text:
+        error_text = str(capability_result.error_text or "")
+        lower_error = error_text.lower()
+        failure_code = "browser_runtime_failure"
+        failure_summary = "O navegador falhou durante a execução."
+        clarification_needed = False
+
+        if any(marker in lower_error for marker in ("captcha", "verify you are human", "security check", "cloudflare")):
+            failure_code = "browser_handoff_required"
+            failure_summary = "O navegador encontrou um bloqueio visual e precisa de ação humana."
+            clarification_needed = True
+        elif any(marker in lower_error for marker in ("steel", "connect_over_cdp", "502 bad gateway", "websocket error", "connect.steel.dev")):
+            failure_code = "browser_infra_failure"
+            failure_summary = "A infraestrutura remota do navegador falhou antes de concluir a coleta."
+
+        result = ValidationResultContract(
+            validator_id="browser_failure_classification",
+            task_type=task_type,
+            capability_id=capability_result.capability_id,
+            status="clarification_recommended" if clarification_needed else "valid_with_warnings",
+            summary=failure_summary,
+            issues=[
+                ValidationIssueContract(
+                    code=failure_code,
+                    severity="high" if clarification_needed else "warning",
+                    message=error_text[:300] or failure_summary,
+                )
+            ],
+            clarification_needed=clarification_needed,
+            metadata={
+                **capability_result.metadata,
+                "failure_class": failure_code,
+            },
+        )
+        if clarification_needed:
+            result.suggested_questions = build_follow_up_questions(task_type=task_type, validation_result=result)
         return result
 
     return None

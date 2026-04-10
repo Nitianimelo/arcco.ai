@@ -17,6 +17,17 @@ from backend.agents.contracts import (
 )
 
 
+def _classify_browser_failure(error_text: str) -> str:
+    normalized = (error_text or "").lower()
+    if any(marker in normalized for marker in ("captcha", "verify you are human", "security check", "cloudflare", "acesso negado")):
+        return "human_gate"
+    if any(marker in normalized for marker in ("connect_over_cdp", "502 bad gateway", "websocket error", "connect.steel.dev", "steel")):
+        return "infra_failure"
+    if "timeout" in normalized:
+        return "timeout"
+    return "runtime_failure"
+
+
 def decide_on_validation(
     *,
     task_type: TaskTypeId,
@@ -98,6 +109,24 @@ def decide_on_route_failure(
         )
 
     if task_type == "browser_workflow":
+        failure_class = _classify_browser_failure(error_text)
+        if route == "browser" and failure_class == "infra_failure":
+            return PolicyDecisionContract(
+                decision_id="browser_failure_policy",
+                task_type=task_type,
+                route=route,
+                should_abort=False,
+                continue_partial=False,
+                request_clarification=False,
+                retry_same_route=retry_same_route,
+                clarification_questions=[],
+                user_message="A infraestrutura do navegador remoto falhou. Vou tentar recuperar a coleta por uma rota auxiliar antes de resumir qualquer dado.",
+                metadata={
+                    "attempt_no": attempt_no,
+                    "error_text": error_text[:300],
+                    "failure_class": failure_class,
+                },
+            )
         questions = build_follow_up_questions(
             task_type=task_type,
             validation_result=ValidationResultContract(
@@ -115,12 +144,16 @@ def decide_on_route_failure(
             task_type=task_type,
             route=route,
             should_abort=False,
-            continue_partial=True,
+            continue_partial=False,
             request_clarification=True,
             retry_same_route=False,
             clarification_questions=questions,
             user_message="O site bloqueou parte da automação. Posso seguir parcialmente ou tentar outra abordagem.",
-            metadata={"attempt_no": attempt_no, "error_text": error_text[:300]},
+            metadata={
+                "attempt_no": attempt_no,
+                "error_text": error_text[:300],
+                "failure_class": failure_class,
+            },
         )
 
     if task_type == "spreadsheet_generation" and route == "web_search":

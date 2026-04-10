@@ -333,11 +333,14 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     }
   };
 
-  const finalizeAgentExecutionUi = useCallback((collapseDelay = 300) => {
+  const finalizeAgentExecutionUi = useCallback((collapseDelay = 300, options?: { clearBrowserCard?: boolean }) => {
     setIsLoading(false);
     setAgentThoughts(prev =>
       prev.map(s => (s.status === 'running' ? { ...s, status: 'done' as const } : s))
     );
+    if (options?.clearBrowserCard !== false) {
+      setBrowserAction(null);
+    }
     clearNarrativeThinking();
     window.setTimeout(() => setIsThoughtsExpanded(false), collapseDelay);
   }, [clearNarrativeThinking]);
@@ -1137,7 +1140,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   questions,
                   originalPrompt: latestUserPrompt || clarificationBasePromptRef.current || undefined,
                 });
-                finalizeAgentExecutionUi(0);
+                finalizeAgentExecutionUi(0, { clearBrowserCard: false });
               }
             } catch { /* ignore parse errors */ }
             return;
@@ -1158,7 +1161,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                   originalPrompt: latestUserPrompt || clarificationBasePromptRef.current || undefined,
                 });
                 pushNarrativeThinking(payload.message || 'Encontrei um bloqueio visual e preciso da sua ajuda para continuar.');
-                finalizeAgentExecutionUi(0);
+                finalizeAgentExecutionUi(0, { clearBrowserCard: false });
               }
             } catch { /* ignore parse errors */ }
             return;
@@ -1211,6 +1214,9 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             try {
               const payload = JSON.parse(content);
               if (payload?.from_route && payload?.to_route) {
+                if (payload.from_route === 'browser') {
+                  setBrowserAction(null);
+                }
                 setReplanDecisions(prev => [...prev.slice(-3), {
                   from_route: payload.from_route,
                   to_route: payload.to_route,
@@ -1273,6 +1279,13 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             try {
               const data = JSON.parse(content);
               setBrowserAction(data);
+              if (data?.status === 'done' || data?.status === 'error') {
+                window.setTimeout(() => {
+                  setBrowserAction(current => (
+                    current?.status === data.status && current?.url === data.url ? null : current
+                  ));
+                }, 1200);
+              }
               const narrativeThought = narrativeThinkingFromBrowserAction(data);
               if (narrativeThought) {
                 pushNarrativeThinking(narrativeThought);

@@ -79,8 +79,8 @@ _TASK_TYPES: tuple[TaskTypeDefinition, ...] = (
         task_type="browser_workflow",
         display_name="Fluxo de Navegador",
         description="Interação com sites, formulários, captcha e retomada com handoff humano.",
-        preferred_capabilities=("web_browse", "skill_web_form_operator"),
-        notes="Aceita handoff e retomada com resume token.",
+        preferred_capabilities=("web_search", "web_browse", "skill_web_form_operator"),
+        notes="Quando possível, começa com descoberta de fontes e depois navegação guiada com handoff e resume token.",
     ),
     TaskTypeDefinition(
         task_type="mass_document_analysis",
@@ -110,7 +110,12 @@ def infer_task_type(user_intent: str, steps: list[PlanStepContract] | None = Non
     actions = {str(step.action) for step in (steps or [])}
     capability_ids = {str(step.capability_id) for step in (steps or []) if getattr(step, "capability_id", None)}
 
-    if "captcha" in normalized or "formul" in normalized or "site" in normalized and "preench" in normalized:
+    if (
+        "captcha" in normalized
+        or "formul" in normalized
+        or "site" in normalized and "preench" in normalized
+        or any(token in normalized for token in ("passagem", "passagens", "voo", "voos", "hotel", "hospedagem", "cotação", "cotacao", "disponibilidade"))
+    ):
         return "browser_workflow"
     if any(token in normalized for token in ("ocr", "rag", "lote de documentos", "muitos pdf", "vários pdf", "varios pdf")):
         return "mass_document_analysis"
