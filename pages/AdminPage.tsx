@@ -260,6 +260,22 @@ function extractTaskType(detail: any) {
   return executionContext?.raw_payload?.task_type || executionContext?.raw_payload?.taskType || null;
 }
 
+function extractExecutionEngine(detail: any) {
+  const executionEngine = detail?.execution?.metadata?.execution_engine;
+  if (executionEngine) return executionEngine;
+
+  const strategyLog = (detail?.logs || []).find((log: any) => log.event_type === 'strategy_selected');
+  if (strategyLog?.raw_payload?.execution_engine) return strategyLog.raw_payload.execution_engine;
+
+  const executionContext = (detail?.logs || []).find((log: any) => log.event_type === 'execution_context_initialized');
+  return executionContext?.raw_payload?.execution_engine || null;
+}
+
+function extractPreconditions(detail: any) {
+  const preconditionLog = (detail?.logs || []).find((log: any) => log.event_type === 'preconditions_evaluated');
+  return preconditionLog?.raw_payload || null;
+}
+
 function collectValidationTrail(detail: any) {
   const validationLogs = (detail?.logs || []).filter((log: any) => log.event_type === 'validation_result');
   return validationLogs.map((log: any) => ({
@@ -2078,6 +2094,9 @@ export const AdminPage: React.FC = () => {
                         {extractTaskType(executionDetail) && (
                           <div><span className="text-neutral-500">Task Type:</span> <span className="text-neutral-200">{extractTaskType(executionDetail)}</span></div>
                         )}
+                        {extractExecutionEngine(executionDetail) && (
+                          <div><span className="text-neutral-500">Execution Engine:</span> <span className="text-neutral-200">{extractExecutionEngine(executionDetail)}</span></div>
+                        )}
                         <div><span className="text-neutral-500">Validações:</span> <span className="text-neutral-200">{collectValidationTrail(executionDetail).length}</span></div>
                         <div><span className="text-neutral-500">Clarificações:</span> <span className="text-neutral-200">{collectClarificationTrail(executionDetail).length}</span></div>
                         <div><span className="text-neutral-500">Workflows:</span> <span className="text-neutral-200">{collectWorkflowSnapshots(executionDetail).length}</span></div>
@@ -2093,6 +2112,17 @@ export const AdminPage: React.FC = () => {
                           <div className="md:col-span-2 text-red-400"><span className="text-neutral-500">Erro final:</span> {executionDetail.execution.final_error}</div>
                         )}
                       </div>
+                      {extractPreconditions(executionDetail) && (
+                        <div className="mt-4 rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3">
+                          <div className="text-xs font-medium text-cyan-300 mb-2">Pré-condições</div>
+                          <div className="grid grid-cols-1 xl:grid-cols-2 gap-2 text-[11px]">
+                            <div><span className="text-neutral-500">Status:</span> <span className="text-neutral-200">{extractPreconditions(executionDetail).status || '—'}</span></div>
+                            <div><span className="text-neutral-500">Arquivos prontos:</span> <span className="text-neutral-200">{extractPreconditions(executionDetail).metadata?.ready_file_count ?? '—'}</span></div>
+                            <div className="xl:col-span-2"><span className="text-neutral-500">Resumo:</span> <span className="text-neutral-200">{extractPreconditions(executionDetail).summary || '—'}</span></div>
+                            <div className="xl:col-span-2"><span className="text-neutral-500">Bloqueios:</span> <span className="text-neutral-200">{(extractPreconditions(executionDetail).blocking_reasons || []).join(', ') || '—'}</span></div>
+                          </div>
+                        </div>
+                      )}
                       {(collectValidationTrail(executionDetail).length > 0 || collectClarificationTrail(executionDetail).length > 0) && (
                         <div className="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-3">
                           {collectValidationTrail(executionDetail).length > 0 && (

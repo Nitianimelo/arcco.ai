@@ -11,12 +11,13 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
-from backend.agents.contracts import PlanStepContract, TaskTypeId
+from backend.agents.contracts import ExecutionEngineId, PlanStepContract, TaskTypeId
 
 
 @dataclass(frozen=True)
 class TaskTypeDefinition:
     task_type: TaskTypeId
+    execution_engine: ExecutionEngineId
     display_name: str
     description: str
     preferred_capabilities: tuple[str, ...]
@@ -29,6 +30,7 @@ class TaskTypeDefinition:
 _TASK_TYPES: tuple[TaskTypeDefinition, ...] = (
     TaskTypeDefinition(
         task_type="general_request",
+        execution_engine="direct_answer",
         display_name="Pedido Geral",
         description="Pedido sem padrão operacional específico.",
         preferred_capabilities=(),
@@ -36,6 +38,7 @@ _TASK_TYPES: tuple[TaskTypeDefinition, ...] = (
     ),
     TaskTypeDefinition(
         task_type="entity_collection",
+        execution_engine="structured_run",
         display_name="Coleta de Entidades",
         description="Busca e organização de empresas, pessoas, leads ou itens semelhantes.",
         preferred_capabilities=("web_search", "web_browse"),
@@ -43,6 +46,7 @@ _TASK_TYPES: tuple[TaskTypeDefinition, ...] = (
     ),
     TaskTypeDefinition(
         task_type="spreadsheet_generation",
+        execution_engine="structured_run",
         display_name="Geração de Planilha",
         description="Busca, estruturação e exportação de dados tabulares.",
         preferred_capabilities=("web_search", "python_execute", "file_modify"),
@@ -50,6 +54,7 @@ _TASK_TYPES: tuple[TaskTypeDefinition, ...] = (
     ),
     TaskTypeDefinition(
         task_type="document_generation",
+        execution_engine="direct_answer",
         display_name="Geração de Documento",
         description="Produção de relatório, resumo, proposta ou documento textual.",
         preferred_capabilities=("text_document_generate", "file_modify"),
@@ -57,6 +62,7 @@ _TASK_TYPES: tuple[TaskTypeDefinition, ...] = (
     ),
     TaskTypeDefinition(
         task_type="design_generation",
+        execution_engine="structured_run",
         display_name="Geração de Design",
         description="Produção de artefatos visuais ou apresentações.",
         preferred_capabilities=("design_generate",),
@@ -64,12 +70,14 @@ _TASK_TYPES: tuple[TaskTypeDefinition, ...] = (
     ),
     TaskTypeDefinition(
         task_type="file_transformation",
+        execution_engine="structured_run",
         display_name="Transformação de Arquivo",
         description="Leitura, ajuste e regravação de arquivos enviados pelo usuário.",
         preferred_capabilities=("session_file_read", "file_modify"),
     ),
     TaskTypeDefinition(
         task_type="deep_research",
+        execution_engine="structured_run",
         display_name="Pesquisa Profunda",
         description="Fluxo analítico de maior duração com pesquisa e síntese.",
         preferred_capabilities=("deep_research", "text_document_generate"),
@@ -77,6 +85,7 @@ _TASK_TYPES: tuple[TaskTypeDefinition, ...] = (
     ),
     TaskTypeDefinition(
         task_type="browser_workflow",
+        execution_engine="structured_run",
         display_name="Fluxo de Navegador",
         description="Interação com sites, formulários, captcha e retomada com handoff humano.",
         preferred_capabilities=("web_search", "web_browse", "skill_web_form_operator"),
@@ -84,6 +93,7 @@ _TASK_TYPES: tuple[TaskTypeDefinition, ...] = (
     ),
     TaskTypeDefinition(
         task_type="mass_document_analysis",
+        execution_engine="open_run",
         display_name="Análise Massiva de Documentos",
         description="OCR, indexação temporária, RAG seletivo e descarte posterior.",
         preferred_capabilities=("session_file_read", "deep_research", "text_document_generate"),
@@ -92,6 +102,7 @@ _TASK_TYPES: tuple[TaskTypeDefinition, ...] = (
     ),
     TaskTypeDefinition(
         task_type="open_problem_solving",
+        execution_engine="open_run",
         display_name="Resolução Aberta de Problemas",
         description="Composição livre de capabilities para tarefas singulares, compostas ou pouco padronizadas.",
         preferred_capabilities=(
@@ -118,6 +129,16 @@ def get_task_type_definition(task_type: TaskTypeId | str | None) -> dict | None:
         if item.task_type == normalized:
             return asdict(item)
     return None
+
+
+def resolve_execution_engine(task_type: TaskTypeId | str | None, steps: list[PlanStepContract] | None = None) -> ExecutionEngineId:
+    normalized = str(task_type or "").strip()
+    definition = get_task_type_definition(normalized)
+    if definition and definition.get("execution_engine"):
+        return definition["execution_engine"]
+    if steps:
+        return "structured_run"
+    return "direct_answer"
 
 
 def infer_task_type(user_intent: str, steps: list[PlanStepContract] | None = None) -> TaskTypeId:

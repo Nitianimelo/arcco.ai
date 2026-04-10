@@ -31,7 +31,8 @@ from backend.agents.handoffs import build_browser_handoff_state, build_mass_docu
 from backend.agents.planner import ClarificationQuestion
 from backend.agents.dispatcher import dispatch_direct_route, planner_action_to_tool_name, resolve_runtime_target
 from backend.agents.open_solver import build_open_solver_prompt, init_open_solver_context, update_open_solver_context
-from backend.agents.task_types import get_task_type_definition, infer_task_type
+from backend.agents.preconditions import evaluate_preconditions
+from backend.agents.task_types import get_task_type_definition, infer_task_type, resolve_execution_engine
 from backend.agents.validators import validate_capability_execution
 from backend.agents.workflow_policy import decide_on_route_failure, decide_on_validation
 from backend.agents.step_replanner import build_replanned_args, decide_route_replan
@@ -695,6 +696,38 @@ def _normalize_plan_for_open_problem_solving(plan_output, *, user_intent: str, s
     if not plan_output.acknowledgment:
         plan_output.acknowledgment = "Vou montar a solução por etapas e escolher as capacidades necessárias para resolver isso com flexibilidade."
     logger.info("[ORCHESTRATOR] Plano convertido para open_problem_solving.")
+    return plan_output
+
+
+def _question_is_file_selection_prompt(question: Any) -> bool:
+    text = str(getattr(question, "text", "") or "").lower()
+    return any(marker in text for marker in ("qual arquivo", "qual fonte", "forneça o arquivo", "forneca o arquivo", "forneça o link", "forneca o link"))
+
+
+def _reconcile_plan_clarification_with_inventory(plan_output, *, session_id: str | None):
+    inventory = _get_session_inventory_items(session_id)
+    ready_files = [
+        item for item in inventory
+        if str(item.get("status") or "").strip() == "ready"
+    ]
+    if len(ready_files) != 1 or not getattr(plan_output, "needs_clarification", False):
+        return plan_output
+
+    questions = list(getattr(plan_output, "questions", []) or [])
+    filtered_questions = [question for question in questions if not _question_is_file_selection_prompt(question)]
+    if len(filtered_questions) == len(questions):
+        return plan_output
+
+    plan_output.questions = filtered_questions
+    selected_name = str(ready_files[0].get("original_name") or ready_files[0].get("file_name") or "arquivo anexado").strip()
+    if filtered_questions:
+        plan_output.acknowledgment = (
+            f"Vou usar o anexo '{selected_name}' e preciso alinhar só os detalhes finais antes de executar."
+        )
+    else:
+        plan_output.needs_clarification = False
+        plan_output.acknowledgment = f"Vou usar o anexo '{selected_name}' como fonte principal."
+    logger.info("[ORCHESTRATOR] Clarificação reconciliada com inventário real da sessão.")
     return plan_output
 
 
@@ -1700,10 +1733,15 @@ async def orchestrate_and_stream(
     supervisor_prompt = registry.get_prompt("chat")
     supervisor_model = registry.get_model("chat") or model
     session_inventory_message = _build_session_inventory_message(session_id)
+    session_inventory_items = _get_session_inventory_items(session_id)
 
     # Extrai o intent antes de tudo — necessário para filtro de skills
     user_intent = next(
         (str(m["content"]) for m in reversed(messages) if m.get("role") == "user"), ""
+    )
+    precondition_check = evaluate_preconditions(
+        user_intent=user_intent,
+        session_items=session_inventory_items,
     )
 
     # Para o planner, constrói contexto completo em conversas multi-turno.
@@ -1764,6 +1802,39 @@ async def orchestrate_and_stream(
             message="Orquestração iniciada",
             raw_payload={"session_id": session_id, "model": model},
         )
+        await execution_logger.log_event(
+            execution_id,
+            event_type="preconditions_evaluated",
+            message=precondition_check.summary,
+            raw_payload=precondition_check.model_dump(),
+        )
+
+    if precondition_check.status == "clarification_required" and precondition_check.questions:
+        yield sse("pre_action", precondition_check.summary)
+        questions_payload = [q.model_dump() for q in precondition_check.questions]
+        yield sse("clarification", json.dumps(questions_payload))
+        if execution_logger:
+            await execution_logger.log_event(
+                execution_id,
+                event_type="clarification_requested",
+                message=f"Aguardando clarificação do usuário ({len(precondition_check.questions)} perguntas)",
+                raw_payload={
+                    "questions": questions_payload,
+                    "task_type": precondition_check.task_type,
+                    "execution_engine": precondition_check.execution_engine,
+                    "preconditions": precondition_check.model_dump(),
+                },
+            )
+            await execution_logger.finish_execution(
+                execution_id,
+                status="awaiting_clarification",
+                metadata={
+                    "task_type": precondition_check.task_type,
+                    "execution_engine": precondition_check.execution_engine,
+                    "preconditions": precondition_check.model_dump(),
+                },
+            )
+        return
 
     # ── 1. Planejamento (Planner Output Estruturado — modelo leve) ──
     yield sse("steps", "<step>Definindo estratégia de execução...</step>")
@@ -1798,9 +1869,14 @@ async def orchestrate_and_stream(
         user_intent=user_intent,
         session_id=session_id,
     )
+    plan_output = _reconcile_plan_clarification_with_inventory(
+        plan_output,
+        session_id=session_id,
+    )
     inferred_task_type = getattr(plan_output, "task_type", None) or infer_task_type(user_intent, plan_output.steps)
     plan_output.task_type = inferred_task_type
     task_type_definition = get_task_type_definition(inferred_task_type) or {}
+    execution_engine = resolve_execution_engine(inferred_task_type, plan_output.steps)
     mass_doc_handoff = None
     mass_doc_stages = None
     open_solver_context = None
@@ -1836,8 +1912,20 @@ async def orchestrate_and_stream(
             message=f"Tarefa classificada como {inferred_task_type}",
             raw_payload={
                 "task_type": inferred_task_type,
+                "execution_engine": execution_engine,
                 "task_type_definition": task_type_definition,
                 "step_count": len(plan_output.steps),
+            },
+        )
+        await execution_logger.log_event(
+            execution_id,
+            event_type="strategy_selected",
+            message=f"Estratégia principal selecionada: {execution_engine}",
+            raw_payload={
+                "task_type": inferred_task_type,
+                "execution_engine": execution_engine,
+                "step_count": len(plan_output.steps),
+                "preconditions": precondition_check.model_dump(),
             },
         )
         if mass_doc_handoff:
@@ -3072,9 +3160,17 @@ async def orchestrate_and_stream(
                     message="Resumo de task type, validação e trilha do pipeline",
                     raw_payload={
                         "task_type": inferred_task_type,
+                        "execution_engine": execution_engine,
+                        "preconditions": precondition_check.model_dump(),
                         "task_type_definition": task_type_definition,
                         "validation_trail": validation_trail,
                         "capability_results_count": len(capability_results),
+                        "quality_summary": {
+                            "had_failures": had_failures,
+                            "failure_count": len(failure_summaries),
+                            "validation_count": len(validation_trail),
+                            "ended_with_clarification": False,
+                        },
                     },
                 )
                 if inferred_task_type == "mass_document_analysis":

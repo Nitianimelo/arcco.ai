@@ -30,15 +30,33 @@ No Arcco, contexto não é só "prompt". Contexto inclui:
 ## Regras centrais
 1. Toda capability deve receber um contexto mínimo suficiente, não um contexto máximo possível.
 2. Contexto factual deve preferir contratos estruturados a resumos narrativos.
-3. O planner decide sequência; o dispatcher executa; validators conferem; policy decide a continuação; replan troca a rota quando necessário.
+3. O supervisor/orquestrador é o único decisor de fluxo. Planner sugere estratégia; validators observam; policy arbitra continuação, clarificação, retry, replan ou aborto.
 4. Clarificação existe para reduzir inferência arriscada, não para travar o usuário desnecessariamente.
 5. O sistema pode entregar parcial, mas não deve mascarar incerteza.
 6. Logs e painel admin fazem parte da engenharia de contexto, porque são a trilha auditável da execução.
+
+## Simplificação operacional
+O Arcco foi consolidado em um núcleo mais simples para produção:
+- um único decisor: o supervisor/orquestrador
+- três engines de execução:
+  - `direct_answer`
+  - `structured_run`
+  - `open_run`
+- pré-condições explícitas antes do planner
+- policy como árbitro único para governança de falhas
+
+Na prática:
+- `direct_answer` resolve pedidos curtos ou puramente textuais
+- `structured_run` executa fluxos previsíveis com ferramentas conhecidas
+- `open_run` resolve problemas singulares com loop mais livre, usando Python/E2B, arquivos, browser e design quando necessário
+
+As pré-condições existem para impedir que o sistema planeje sobre insumos inexistentes. Se faltar arquivo, input crítico ou recurso necessário, a execução deve parar em clarificação antes de gerar steps.
 
 ## Onde isso aparece no código
 - Capabilities: [backend/agents/capabilities.py](/Users/nitianimelofreire/Library/Mobile%20Documents/com~apple~CloudDocs/Arquivos%20das%20empresas/Grupo%20Arcco%20/Projeto%20Arcco%20agent/arcco.ai.agentV1-master/backend/agents/capabilities.py)
 - Contracts: [backend/agents/contracts.py](/Users/nitianimelofreire/Library/Mobile%20Documents/com~apple~CloudDocs/Arquivos%20das%20empresas/Grupo%20Arcco%20/Projeto%20Arcco%20agent/arcco.ai.agentV1-master/backend/agents/contracts.py)
 - Task typing: [backend/agents/task_types.py](/Users/nitianimelofreire/Library/Mobile%20Documents/com~apple~CloudDocs/Arquivos%20das%20empresas/Grupo%20Arcco%20/Projeto%20Arcco%20agent/arcco.ai.agentV1-master/backend/agents/task_types.py)
+- Preconditions: [backend/agents/preconditions.py](/Users/nitianimelofreire/Library/Mobile%20Documents/com~apple~CloudDocs/Arquivos%20das%20empresas/Grupo%20Arcco%20/Projeto%20Arcco%20agent/arcco.ai.agentV1-master/backend/agents/preconditions.py)
 - Validators: [backend/agents/validators.py](/Users/nitianimelofreire/Library/Mobile%20Documents/com~apple~CloudDocs/Arquivos%20das%20empresas/Grupo%20Arcco%20/Projeto%20Arcco%20agent/arcco.ai.agentV1-master/backend/agents/validators.py)
 - Clarifier: [backend/agents/clarifier.py](/Users/nitianimelofreire/Library/Mobile%20Documents/com~apple~CloudDocs/Arquivos%20das%20empresas/Grupo%20Arcco%20/Projeto%20Arcco%20agent/arcco.ai.agentV1-master/backend/agents/clarifier.py)
 - Policy: [backend/agents/workflow_policy.py](/Users/nitianimelofreire/Library/Mobile%20Documents/com~apple~CloudDocs/Arquivos%20das%20empresas/Grupo%20Arcco%20/Projeto%20Arcco%20agent/arcco.ai.agentV1-master/backend/agents/workflow_policy.py)
@@ -66,4 +84,6 @@ Atualize esta pasta sempre que houver mudança em pelo menos um dos pontos abaix
 - Passar um resumo narrativo como única fonte factual para o step seguinte.
 - Misturar estado de runtime com memória de usuário.
 - Fazer fallback automático para saída bonita quando a coleta factual falhou.
+- Planejar steps antes de validar pré-condições básicas.
+- Deixar múltiplas camadas decidirem o mesmo fluxo com precedências implícitas.
 - Adicionar exceções no orquestrador sem documentar a nova regra de contexto.

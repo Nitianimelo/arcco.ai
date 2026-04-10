@@ -36,6 +36,12 @@ TaskTypeId = Literal[
     "open_problem_solving",
 ]
 
+ExecutionEngineId = Literal[
+    "direct_answer",
+    "structured_run",
+    "open_run",
+]
+
 ValidationStatus = Literal[
     "valid",
     "valid_with_warnings",
@@ -225,6 +231,16 @@ class ValidationResultContract(BaseModel):
         description="Perguntas sugeridas para refinamento sem ambiguidades.",
     )
     metadata: dict[str, Any] = Field(default_factory=dict, description="Dados auxiliares do validador.")
+
+
+class PreconditionCheckContract(BaseModel):
+    task_type: TaskTypeId = Field(description="Tipo de tarefa avaliado nas pré-condições.")
+    execution_engine: ExecutionEngineId = Field(description="Engine operacional sugerida após intake.")
+    status: Literal["ok", "clarification_required"] = Field(description="Resultado resumido das pré-condições.")
+    summary: str = Field(description="Resumo curto para log, admin e frontend.")
+    blocking_reasons: list[str] = Field(default_factory=list, description="Razões objetivas que impedem seguir.")
+    questions: list[ClarificationQuestionContract] = Field(default_factory=list, description="Perguntas para resolver os bloqueios.")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Dados auxiliares do intake.")
 
 
 class PlannerOutputContract(BaseModel):
