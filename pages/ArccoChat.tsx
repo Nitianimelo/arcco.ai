@@ -262,7 +262,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 }) => {
   const { showToast } = useToast();
   const [localSessionId] = useState(() => Date.now().toString());
-  const effectiveSessionId = chatSessionId || localSessionId;
+  const [activeSessionId, setActiveSessionId] = useState(() => chatSessionId || localSessionId);
+  const effectiveSessionId = activeSessionId;
   const [conversationId, setConversationId] = useState<string | null>(null);
 
   const [isApiKeyReady, setIsApiKeyReady] = useState(false);
@@ -890,6 +891,17 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   }, []);
 
   // Carrega mensagens do Supabase quando chatSessionId for um UUID
+  useEffect(() => {
+    if (!chatSessionId) return;
+    const hasLocalWork = attachmentsRef.current.length > 0 || messagesRef.current.length > 0;
+    const currentIsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(activeSessionId);
+    const currentIsEphemeral = activeSessionId === localSessionId || !currentIsUuid;
+    if (currentIsEphemeral && hasLocalWork) {
+      return;
+    }
+    setActiveSessionId(chatSessionId);
+  }, [chatSessionId, activeSessionId, localSessionId]);
+
   useEffect(() => {
     const currentSessionId = chatSessionId || '';
     const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(currentSessionId);

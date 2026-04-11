@@ -110,13 +110,17 @@ def _build_session_inventory_prompt(session_id: str | None) -> str:
         if not inventory:
             return ""
         items = ", ".join(
-            f"{item['file_name']} ({item['status']})"
+            (
+                f"{item['file_name']} "
+                f"(status={item['status']}, workspace={item.get('workspace_status', 'pending')}, "
+                f"texto={item.get('text_char_count', 0)} chars, imagens={item.get('image_count', 0)})"
+            )
             for item in inventory
             if item.get("file_name")
         )
         return (
             f"Arquivos anexados nesta sessão ({session_id}): {items}. "
-            "Para consultar o conteúdo, use exclusivamente a ferramenta read_session_file."
+            "O conteúdo bruto não deve entrar no prompt. Use o inventário para decidir a estratégia e consulte o conteúdo com read_session_file somente quando necessário."
         )
     except Exception as exc:
         logger.error("Falha ao montar prompt de inventário da sessão %s: %s", session_id, exc)

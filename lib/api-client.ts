@@ -30,9 +30,14 @@ export interface SessionFileItem {
     original_name: string;
     stored_path: string;
     extracted_text_path?: string | null;
+    workspace_manifest_path?: string | null;
     mime_type: string;
     size_bytes: number;
     status: SessionFileStatus;
+    workspace_status?: 'pending' | 'processing' | 'ready' | 'failed' | null;
+    text_char_count?: number | null;
+    image_count?: number | null;
+    chunk_count?: number | null;
     created_at: string;
     processed_at?: string | null;
     error?: string | null;

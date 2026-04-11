@@ -11,12 +11,17 @@ Estratégia:
 from __future__ import annotations
 
 import io
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from backend.services.ephemeral_rag_service import chunk_text
 from backend.services.session_file_service import (
+    get_file_workspace_dir,
     get_extracted_file_path,
+    get_workspace_images_dir,
+    get_workspace_manifest_path,
     list_session_files,
     get_stored_file_path,
     mark_file_failed,
@@ -37,12 +42,31 @@ def process_uploaded_file(session_id: str, file_id: str) -> None:
         extracted_text = extract_text_for_file(file_path, entry.get("mime_type", ""))
         output_path = get_extracted_file_path(session_id, file_id)
         write_extracted_text(output_path, extracted_text)
-        mark_file_ready(session_id, file_id)
+        image_paths = extract_workspace_images(file_path, session_id=session_id, file_id=file_id)
+        chunk_count = len(chunk_text(extracted_text))
+        write_workspace_manifest(
+            session_id=session_id,
+            file_id=file_id,
+            original_name=str(entry.get("original_name") or file_path.name),
+            mime_type=str(entry.get("mime_type") or "application/octet-stream"),
+            extracted_text_path=output_path,
+            image_paths=image_paths,
+            text_char_count=len(extracted_text),
+            chunk_count=chunk_count,
+        )
+        mark_file_ready(
+            session_id,
+            file_id,
+            text_char_count=len(extracted_text),
+            image_count=len(image_paths),
+            chunk_count=chunk_count,
+        )
         logger.info(
-            "Extração concluída para arquivo %s da sessão %s (%s chars)",
+            "Workspace documental concluído para arquivo %s da sessão %s (%s chars, %s imagens)",
             file_id,
             session_id,
             len(extracted_text),
+            len(image_paths),
         )
     except Exception as exc:
         logger.error(
@@ -133,6 +157,74 @@ def extract_text_for_file(file_path: Path, mime_type: str = "") -> str:
         return extract_image_text_with_ocr(file_path)
 
     return extract_plain_text(file_path)
+
+
+def extract_workspace_images(file_path: Path, *, session_id: str, file_id: str) -> list[str]:
+    if file_path.suffix.lower() != ".pdf":
+        return []
+
+    try:
+        import fitz
+    except ImportError:
+        logger.warning("PyMuPDF não instalado. Extração de imagens desabilitada para %s", file_path.name)
+        return []
+
+    images_dir = get_workspace_images_dir(session_id, file_id)
+    workspace_dir = get_file_workspace_dir(session_id, file_id)
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    extracted: list[str] = []
+    seen_xrefs: set[int] = set()
+    try:
+        with fitz.open(file_path) as document:
+            for page_index, page in enumerate(document, start=1):
+                for image_index, image_info in enumerate(page.get_images(full=True), start=1):
+                    xref = int(image_info[0])
+                    if xref in seen_xrefs:
+                        continue
+                    seen_xrefs.add(xref)
+                    image_data = document.extract_image(xref)
+                    image_bytes = image_data.get("image")
+                    image_ext = image_data.get("ext") or "png"
+                    if not image_bytes:
+                        continue
+                    image_path = images_dir / f"page_{page_index:03d}_image_{image_index:03d}.{image_ext}"
+                    image_path.write_bytes(image_bytes)
+                    extracted.append(str(image_path))
+    except Exception as exc:
+        logger.warning("Falha ao extrair imagens do PDF %s: %s", file_path.name, exc)
+        return []
+
+    return extracted
+
+
+def write_workspace_manifest(
+    *,
+    session_id: str,
+    file_id: str,
+    original_name: str,
+    mime_type: str,
+    extracted_text_path: Path,
+    image_paths: list[str],
+    text_char_count: int,
+    chunk_count: int,
+) -> None:
+    manifest_path = get_workspace_manifest_path(session_id, file_id)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "file_id": file_id,
+        "original_name": original_name,
+        "mime_type": mime_type,
+        "workspace_status": "ready",
+        "extracted_text_path": str(extracted_text_path),
+        "image_paths": image_paths,
+        "image_count": len(image_paths),
+        "text_char_count": text_char_count,
+        "chunk_count": chunk_count,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    manifest_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
 def extract_pdf_text_native(file_path: Path) -> str:

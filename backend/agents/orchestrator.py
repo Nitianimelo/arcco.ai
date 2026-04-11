@@ -331,9 +331,11 @@ def _get_session_inventory_items(session_id: str | None) -> list[dict[str, Any]]
     if not session_id:
         return []
     try:
+        from backend.services.session_extraction_service import recover_pending_session_files
         from backend.services.session_file_service import list_session_files, touch_session
 
         touch_session(session_id)
+        recover_pending_session_files(session_id)
         return list_session_files(session_id)
     except Exception as exc:
         logger.error("Falha ao ler inventário da sessão %s: %s", session_id, exc)
@@ -417,6 +419,15 @@ def _resolve_session_file_request(
             inventory_by_name[file_name] = item
 
     normalized_request = str(requested_file_name or "").strip()
+    lowered_request = normalized_request.lower()
+    placeholder_markers = (
+        "[nome_do_arquivo",
+        "[nenhum arquivo",
+        "forneça o arquivo",
+        "forneca o arquivo",
+    )
+    if any(marker in lowered_request for marker in placeholder_markers):
+        normalized_request = ""
     if normalized_request and normalized_request in inventory_by_name:
         return inventory_by_name[normalized_request], None
 

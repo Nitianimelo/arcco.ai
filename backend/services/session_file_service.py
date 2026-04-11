@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 SESSION_ROOT = Path("/tmp/arcco_chat")
 MANIFEST_FILENAME = "manifest.json"
+WORKSPACE_DIRNAME = "workspace"
 MAX_FILES_PER_SESSION = 10
 MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -80,6 +81,22 @@ def get_session_dir(session_id: str) -> Path:
 
 def get_manifest_path(session_id: str) -> Path:
     return get_session_dir(session_id) / MANIFEST_FILENAME
+
+
+def get_workspace_root(session_id: str) -> Path:
+    return get_session_dir(session_id) / WORKSPACE_DIRNAME
+
+
+def get_file_workspace_dir(session_id: str, file_id: str) -> Path:
+    return get_workspace_root(session_id) / file_id
+
+
+def get_workspace_manifest_path(session_id: str, file_id: str) -> Path:
+    return get_file_workspace_dir(session_id, file_id) / "document_workspace.json"
+
+
+def get_workspace_images_dir(session_id: str, file_id: str) -> Path:
+    return get_file_workspace_dir(session_id, file_id) / "images"
 
 
 def _default_manifest(session_id: str) -> dict[str, Any]:
@@ -177,6 +194,7 @@ def save_uploaded_file(
     stored_path = session_dir / stored_filename
     extracted_filename = f"{stored_path.stem}_extracted.txt"
     extracted_path = session_dir / extracted_filename
+    workspace_manifest_path = get_workspace_manifest_path(session_id, file_id)
 
     try:
         stored_path.write_bytes(content)
@@ -190,9 +208,14 @@ def save_uploaded_file(
         "original_name": original_basename,
         "stored_path": str(stored_path),
         "extracted_text_path": str(extracted_path),
+        "workspace_manifest_path": str(workspace_manifest_path),
         "mime_type": mime_type or "application/octet-stream",
         "size_bytes": len(content),
         "status": "uploaded",
+        "workspace_status": "pending",
+        "text_char_count": 0,
+        "image_count": 0,
+        "chunk_count": 0,
         "created_at": utc_now_iso(),
         "processed_at": None,
         "error": None,
@@ -216,6 +239,7 @@ def _update_file_entry(
     status: str,
     processed_at: str | None = None,
     error: str | None = None,
+    extra_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     manifest = load_manifest(session_id)
     files = manifest.get("files", [])
@@ -226,6 +250,8 @@ def _update_file_entry(
         entry["status"] = status
         entry["processed_at"] = processed_at
         entry["error"] = error
+        if extra_fields:
+            entry.update(extra_fields)
         save_manifest(session_id, manifest)
         return entry
 
@@ -234,10 +260,23 @@ def _update_file_entry(
 
 def mark_file_processing(session_id: str, file_id: str) -> dict[str, Any]:
     logger.info("Marcando arquivo %s da sessão %s como processing", file_id, session_id)
-    return _update_file_entry(session_id, file_id, status="processing", error=None)
+    return _update_file_entry(
+        session_id,
+        file_id,
+        status="processing",
+        error=None,
+        extra_fields={"workspace_status": "processing"},
+    )
 
 
-def mark_file_ready(session_id: str, file_id: str) -> dict[str, Any]:
+def mark_file_ready(
+    session_id: str,
+    file_id: str,
+    *,
+    text_char_count: int | None = None,
+    image_count: int | None = None,
+    chunk_count: int | None = None,
+) -> dict[str, Any]:
     logger.info("Marcando arquivo %s da sessão %s como ready", file_id, session_id)
     return _update_file_entry(
         session_id,
@@ -245,6 +284,12 @@ def mark_file_ready(session_id: str, file_id: str) -> dict[str, Any]:
         status="ready",
         processed_at=utc_now_iso(),
         error=None,
+        extra_fields={
+            "workspace_status": "ready",
+            **({"text_char_count": text_char_count} if text_char_count is not None else {}),
+            **({"image_count": image_count} if image_count is not None else {}),
+            **({"chunk_count": chunk_count} if chunk_count is not None else {}),
+        },
     )
 
 
@@ -261,6 +306,7 @@ def mark_file_failed(session_id: str, file_id: str, error: str) -> dict[str, Any
         status="failed",
         processed_at=utc_now_iso(),
         error=error[:500],
+        extra_fields={"workspace_status": "failed"},
     )
 
 
@@ -289,12 +335,16 @@ def get_session_file_by_name(session_id: str, file_name: str) -> dict[str, Any]:
 
 def get_session_inventory(session_id: str) -> list[dict[str, str]]:
     manifest = load_manifest(session_id)
-    inventory: list[dict[str, str]] = []
+    inventory: list[dict[str, str | int]] = []
     for entry in manifest.get("files", []):
         inventory.append(
             {
                 "file_name": str(entry.get("original_name", "")),
                 "status": str(entry.get("status", "uploaded")),
+                "workspace_status": str(entry.get("workspace_status", "pending")),
+                "text_char_count": int(entry.get("text_char_count") or 0),
+                "image_count": int(entry.get("image_count") or 0),
+                "chunk_count": int(entry.get("chunk_count") or 0),
             }
         )
     return inventory

@@ -2118,6 +2118,7 @@ export const AdminPage: React.FC = () => {
                           <div className="grid grid-cols-1 xl:grid-cols-2 gap-2 text-[11px]">
                             <div><span className="text-neutral-500">Status:</span> <span className="text-neutral-200">{extractPreconditions(executionDetail).status || '—'}</span></div>
                             <div><span className="text-neutral-500">Arquivos prontos:</span> <span className="text-neutral-200">{extractPreconditions(executionDetail).metadata?.ready_file_count ?? '—'}</span></div>
+                            <div><span className="text-neutral-500">Workspace pronto:</span> <span className="text-neutral-200">{extractPreconditions(executionDetail).metadata?.workspace_ready_count ?? '—'}</span></div>
                             <div className="xl:col-span-2"><span className="text-neutral-500">Resumo:</span> <span className="text-neutral-200">{extractPreconditions(executionDetail).summary || '—'}</span></div>
                             <div className="xl:col-span-2"><span className="text-neutral-500">Bloqueios:</span> <span className="text-neutral-200">{(extractPreconditions(executionDetail).blocking_reasons || []).join(', ') || '—'}</span></div>
                           </div>

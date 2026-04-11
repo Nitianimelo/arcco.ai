@@ -52,6 +52,17 @@ Na prática:
 
 As pré-condições existem para impedir que o sistema planeje sobre insumos inexistentes. Se faltar arquivo, input crítico ou recurso necessário, a execução deve parar em clarificação antes de gerar steps.
 
+## Document Workspace
+Para arquivos anexados, o Arcco usa um `document workspace` por sessão em vez de colocar o conteúdo bruto no contexto da IA.
+
+Esse workspace guarda:
+- texto extraído
+- chunks para RAG lexical
+- imagens extraídas
+- metadados compactos do documento
+
+O supervisor recebe apenas o inventário resumido desse workspace. O conteúdo só é consultado quando realmente necessário.
+
 ## Onde isso aparece no código
 - Capabilities: [backend/agents/capabilities.py](/Users/nitianimelofreire/Library/Mobile%20Documents/com~apple~CloudDocs/Arquivos%20das%20empresas/Grupo%20Arcco%20/Projeto%20Arcco%20agent/arcco.ai.agentV1-master/backend/agents/capabilities.py)
 - Contracts: [backend/agents/contracts.py](/Users/nitianimelofreire/Library/Mobile%20Documents/com~apple~CloudDocs/Arquivos%20das%20empresas/Grupo%20Arcco%20/Projeto%20Arcco%20agent/arcco.ai.agentV1-master/backend/agents/contracts.py)

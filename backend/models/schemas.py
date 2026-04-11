@@ -91,9 +91,14 @@ class SessionFileItem(BaseModel):
     original_name: str
     stored_path: str
     extracted_text_path: Optional[str] = None
+    workspace_manifest_path: Optional[str] = None
     mime_type: str
     size_bytes: int
     status: Literal["uploaded", "processing", "ready", "failed"]
+    workspace_status: Optional[Literal["pending", "processing", "ready", "failed"]] = None
+    text_char_count: Optional[int] = None
+    image_count: Optional[int] = None
+    chunk_count: Optional[int] = None
     created_at: str
     processed_at: Optional[str] = None
     error: Optional[str] = None

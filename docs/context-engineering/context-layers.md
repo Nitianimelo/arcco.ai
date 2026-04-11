@@ -61,6 +61,19 @@ Exemplos:
 
 Essa camada deve preferir contrato estruturado.
 
+## Camada 5.1: Document Workspace
+Para documentos anexados, o Arcco não deve despejar texto bruto ou imagens no prompt principal.
+
+Em vez disso, a ingestão do documento gera um workspace operacional por sessão, com:
+- texto extraído
+- chunks prontos para RAG lexical
+- imagens extraídas e salvas
+- metadados como `text_char_count`, `image_count` e `chunk_count`
+
+O agente deve receber apenas o inventário desse workspace e consultar o conteúdo sob demanda.
+
+Isso reduz consumo de tokens, evita "lost in the middle" e separa ingestão de transformação.
+
 No código:
 - [backend/agents/handoffs.py](/Users/nitianimelofreire/Library/Mobile%20Documents/com~apple~CloudDocs/Arquivos%20das%20empresas/Grupo%20Arcco%20/Projeto%20Arcco%20agent/arcco.ai.agentV1-master/backend/agents/handoffs.py)
 - [backend/agents/contracts.py](/Users/nitianimelofreire/Library/Mobile%20Documents/com~apple~CloudDocs/Arquivos%20das%20empresas/Grupo%20Arcco%20/Projeto%20Arcco%20agent/arcco.ai.agentV1-master/backend/agents/contracts.py)

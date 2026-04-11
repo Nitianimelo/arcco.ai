@@ -22,7 +22,20 @@ from backend.agents.task_types import infer_task_type, resolve_execution_engine
 def _file_dependent_task(user_intent: str) -> bool:
     normalized = (user_intent or "").lower()
     file_markers = ("pdf", "arquivo", "arquivos", "anexo", "anexos", "documento", "documentos", "imagem", "imagens")
-    ops = ("extrair", "reorganizar", "converter", "transformar", "gerar outro", "novo pdf", "crie outro design")
+    ops = (
+        "extrair",
+        "reorganizar",
+        "converter",
+        "transformar",
+        "gerar outro",
+        "novo pdf",
+        "crie outro design",
+        "faz outro",
+        "fazer outro",
+        "semelhante",
+        "identidade visual",
+        "outra identidade",
+    )
     return any(token in normalized for token in file_markers) and any(token in normalized for token in ops)
 
 
@@ -53,7 +66,10 @@ def evaluate_preconditions(
     task_type = infer_task_type(user_intent)
     execution_engine = resolve_execution_engine(task_type)
     items = session_items or []
-    ready_items = [item for item in items if str(item.get("status") or "") == "ready"]
+    ready_items = [
+        item for item in items
+        if str(item.get("status") or "") == "ready" and str(item.get("workspace_status") or "ready") == "ready"
+    ]
     processing_items = [item for item in items if str(item.get("status") or "") in {"uploaded", "processing"}]
 
     if _file_dependent_task(user_intent):
@@ -78,6 +94,7 @@ def evaluate_preconditions(
                         for item in items
                         if str(item.get("original_name") or item.get("file_name") or "").strip()
                     ],
+                    "workspace_ready_count": len(ready_items),
                 },
             )
 
@@ -96,5 +113,6 @@ def evaluate_preconditions(
                 for item in items
                 if str(item.get("original_name") or item.get("file_name") or "").strip()
             ],
+            "workspace_ready_count": len(ready_items),
         },
     )
