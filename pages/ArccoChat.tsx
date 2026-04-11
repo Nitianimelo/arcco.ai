@@ -801,6 +801,20 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     [],
   );
 
+  const removeAttachment = useCallback(async (attachment: SessionAttachment) => {
+    const attachmentKey = attachment.clientId || attachment.fileId;
+    setAttachments(prev => prev.filter(att => (att.clientId || att.fileId) !== attachmentKey));
+
+    if (attachment.fileId && !String(attachment.fileId).startsWith('uploading:')) {
+      try {
+        await agentApi.deleteSessionFile(effectiveSessionId, attachment.fileId);
+      } catch (error) {
+        console.error('Falha ao remover anexo da sessão:', error);
+        showToast('Não foi possível remover o arquivo da sessão.', 'error');
+      }
+    }
+  }, [effectiveSessionId, showToast]);
+
   const attachmentStatusLabel = (status: SessionAttachment['status']) => {
     switch (status) {
       case 'ready':
@@ -921,6 +935,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
       setGeneratedFiles([]);
       setConversationId(null);
       setMessages([]);
+      setAttachments([]);
+      notifiedFailedFilesRef.current.clear();
       return;
     }
 
@@ -934,6 +950,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
     setGeneratedFiles([]);
     setMessages([]);
+    setAttachments([]);
+    notifiedFailedFilesRef.current.clear();
     if (!userId) return;
 
     let cancelled = false;
@@ -1944,7 +1962,18 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-3">
                     <span className="truncate text-xs font-medium">{att.name}</span>
-                    <span className="uppercase text-[10px] opacity-80 flex-shrink-0">{attachmentStatusLabel(att.status)}</span>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="uppercase text-[10px] opacity-80">{attachmentStatusLabel(att.status)}</span>
+                      <button
+                        type="button"
+                        onClick={() => { void removeAttachment(att); }}
+                        className="inline-flex items-center justify-center rounded-full hover:bg-black/10 p-0.5 opacity-80 hover:opacity-100 transition-colors"
+                        aria-label={`Remover ${att.name}`}
+                        title={`Remover ${att.name}`}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
                   </div>
                   <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-black/20">
                     <div

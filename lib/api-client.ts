@@ -343,5 +343,20 @@ export const agentApi = {
             const errorText = await res.text();
             throw new Error(`Delete session files failed (${res.status}): ${errorText}`);
         }
+    },
+
+    async deleteSessionFile(sessionId: string, fileId: string): Promise<void> {
+        const res = await fetch(`${API_BASE}/session-files/${encodeURIComponent(sessionId)}/${encodeURIComponent(fileId)}`, {
+            method: 'DELETE',
+        });
+
+        if (res.status === 404) {
+            return;
+        }
+
+        if (!res.ok) {
+            const errorText = await res.text();
+            throw new Error(`Delete session file failed (${res.status}): ${errorText}`);
+        }
     }
 };

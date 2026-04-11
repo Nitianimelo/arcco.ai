@@ -15,8 +15,10 @@ from backend.services.session_extraction_service import process_uploaded_file, r
 from backend.services.session_gc_service import cleanup_expired_sessions
 from backend.services.session_file_service import (
     SessionFileError,
+    SessionFileNotFoundError,
     SessionLimitError,
     SessionNotFoundError,
+    delete_session_file,
     delete_session_dir,
     list_session_files,
     save_uploaded_file,
@@ -123,6 +125,27 @@ async def delete_session_files(session_id: str):
     except Exception as exc:
         logger.error("Falha ao remover sessão %s: %s", session_id, exc)
         raise HTTPException(status_code=500, detail="Erro interno ao remover sessão.") from exc
+
+
+@router.delete("/session-files/{session_id}/{file_id}", response_model=SessionFilesDeleteResponse)
+async def delete_single_session_file(session_id: str, file_id: str):
+    """Remove um arquivo específico e seu workspace da sessão efêmera."""
+    try:
+        cleanup_expired_sessions()
+        validated_session_id = validate_session_id(session_id)
+        delete_session_file(validated_session_id, file_id)
+        return SessionFilesDeleteResponse(
+            session_id=validated_session_id,
+            deleted=True,
+            message="Arquivo removido com sucesso.",
+        )
+    except SessionFileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SessionFileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Falha ao remover arquivo %s da sessão %s: %s", file_id, session_id, exc)
+        raise HTTPException(status_code=500, detail="Erro interno ao remover arquivo da sessão.") from exc
 
 @router.post("/extract-text")
 async def extract_text_endpoint(file: UploadFile = File(...)):

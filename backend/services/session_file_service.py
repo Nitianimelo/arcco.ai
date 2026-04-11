@@ -368,6 +368,49 @@ def delete_session_dir(session_id: str) -> None:
         raise SessionFileError("Não foi possível remover a sessão.") from exc
 
 
+def delete_session_file(session_id: str, file_id: str) -> None:
+    manifest = load_manifest(session_id)
+    files = manifest.get("files", [])
+    target: dict[str, Any] | None = None
+    remaining: list[dict[str, Any]] = []
+
+    for entry in files:
+        if entry.get("file_id") == file_id and target is None:
+            target = entry
+            continue
+        remaining.append(entry)
+
+    if target is None:
+        raise SessionFileNotFoundError(f"Arquivo {file_id} não encontrado na sessão {session_id}.")
+
+    paths_to_remove = [
+        Path(str(target.get("stored_path") or "")),
+        Path(str(target.get("extracted_text_path") or "")),
+        Path(str(target.get("workspace_manifest_path") or "")),
+    ]
+
+    workspace_dir = get_file_workspace_dir(session_id, file_id)
+
+    try:
+        for path in paths_to_remove:
+            if path and str(path) and path.exists():
+                path.unlink(missing_ok=True)
+
+        if workspace_dir.exists():
+            for path in sorted(workspace_dir.rglob("*"), reverse=True):
+                if path.is_file() or path.is_symlink():
+                    path.unlink(missing_ok=True)
+                elif path.is_dir():
+                    path.rmdir()
+            workspace_dir.rmdir()
+    except Exception as exc:
+        logger.error("Falha ao remover arquivos físicos de %s/%s: %s", session_id, file_id, exc)
+        raise SessionFileError("Não foi possível remover o arquivo da sessão.") from exc
+
+    manifest["files"] = remaining
+    save_manifest(session_id, manifest)
+
+
 def session_exists(session_id: str) -> bool:
     return get_session_dir(session_id).exists()
 
