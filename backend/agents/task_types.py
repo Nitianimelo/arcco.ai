@@ -9,9 +9,37 @@ Objetivo:
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import asdict, dataclass
 
 from backend.agents.contracts import ExecutionEngineId, PlanStepContract, TaskTypeId
+
+
+def _strip_accents(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", text or "")
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def _normalize_intent(text: str) -> str:
+    """Lowercase + remove acentos + colapsa whitespace.
+
+    Usado apenas para detecção de keywords. Não afeta o texto original
+    que vai para LLM/logs.
+    """
+    lowered = (text or "").lower()
+    stripped = _strip_accents(lowered)
+    return re.sub(r"\s+", " ", stripped)
+
+
+def _has_word(haystack: str, token: str) -> bool:
+    """Word-boundary match para evitar falsos positivos."""
+    if not token:
+        return False
+    # Permite token composto (ex: "script python").
+    if " " in token:
+        return token in haystack
+    return re.search(rf"\b{re.escape(token)}\b", haystack) is not None
 
 
 @dataclass(frozen=True)
@@ -142,37 +170,75 @@ def resolve_execution_engine(task_type: TaskTypeId | str | None, steps: list[Pla
 
 
 def infer_task_type(user_intent: str, steps: list[PlanStepContract] | None = None) -> TaskTypeId:
-    normalized = (user_intent or "").lower()
+    normalized = _normalize_intent(user_intent)
     actions = {str(step.action) for step in (steps or [])}
     capability_ids = {str(step.capability_id) for step in (steps or []) if getattr(step, "capability_id", None)}
+
+    # Sinais operacionais: composições de verbos que indicam montagem/transformação
+    # livre de artefatos a partir de anexos. Usa word-boundary para não confundir
+    # "texto" com "pretexto" etc.
     open_solver_signals = (
-        "extra",
-        "imagen",
+        "extrair",
+        "extraia",
+        "imagem",
+        "imagens",
         "texto",
-        "ger",
+        "gerar",
+        "gere",
+        "criar",
+        "crie",
         "novo pdf",
-        "reorgan",
-        "recombin",
-        "convert",
-        "transform",
+        "reorganizar",
+        "reorganize",
+        "recombinar",
+        "converter",
+        "transformar",
         "python",
         "script python",
         "html",
     )
-    file_like_signals = ("pdf", "docx", "xlsx", "planilha", "documento", "arquivo", "anexo", "imagem")
+    file_like_signals = (
+        "pdf",
+        "docx",
+        "xlsx",
+        "planilha",
+        "documento",
+        "documentos",
+        "arquivo",
+        "arquivos",
+        "anexo",
+        "anexos",
+        "imagem",
+        "imagens",
+    )
 
-    open_signal_count = sum(1 for signal in open_solver_signals if signal in normalized)
-    if open_signal_count >= 3 and any(signal in normalized for signal in file_like_signals):
+    open_signal_count = sum(1 for signal in open_solver_signals if _has_word(normalized, signal))
+    if open_signal_count >= 3 and any(_has_word(normalized, signal) for signal in file_like_signals):
         return "open_problem_solving"
-    if (
-        "captcha" in normalized
-        or "formul" in normalized
-        or "site" in normalized and "preench" in normalized
-        or any(token in normalized for token in ("passagem", "passagens", "voo", "voos", "hotel", "hospedagem", "cotação", "cotacao", "disponibilidade"))
-    ):
+
+    browser_tokens = (
+        "captcha",
+        "formulario",
+        "formularios",
+        "passagem",
+        "passagens",
+        "voo",
+        "voos",
+        "hotel",
+        "hospedagem",
+        "cotacao",
+        "disponibilidade",
+    )
+    if any(_has_word(normalized, token) for token in browser_tokens):
         return "browser_workflow"
-    if any(token in normalized for token in ("ocr", "rag", "lote de documentos", "muitos pdf", "vários pdf", "varios pdf")):
+    # "preencher site" exige ambos os tokens (word-boundary em ambos).
+    if _has_word(normalized, "site") and any(_has_word(normalized, tok) for tok in ("preencher", "preencha", "preenchimento")):
+        return "browser_workflow"
+
+    mass_doc_tokens = ("ocr", "rag", "lote de documentos", "muitos pdf", "varios pdf")
+    if any(_has_word(normalized, token) for token in mass_doc_tokens):
         return "mass_document_analysis"
+
     if "deep_research" in actions or "deep_research" in capability_ids:
         return "deep_research"
     if "design_generator" in actions or "design_generate" in capability_ids:
@@ -181,11 +247,31 @@ def infer_task_type(user_intent: str, steps: list[PlanStepContract] | None = Non
         return "document_generation"
     if "session_file" in actions and "file_modifier" in actions:
         return "file_transformation"
-    if "python" in actions or "python_execute" in capability_ids or any(token in normalized for token in ("planilha", "excel", "csv", "tabela")):
-        return "spreadsheet_generation"
-    if "web_search" in actions or any(
-        token in normalized
-        for token in ("pesquisa", "buscar", "barbearia", "empresa", "contato", "telefone", "endereço", "endereco", "lead")
+
+    spreadsheet_tokens = ("planilha", "excel", "csv", "tabela")
+    if (
+        "python" in actions
+        or "python_execute" in capability_ids
+        or any(_has_word(normalized, token) for token in spreadsheet_tokens)
     ):
+        return "spreadsheet_generation"
+
+    entity_tokens = (
+        "pesquisa",
+        "pesquisar",
+        "buscar",
+        "busca",
+        "barbearia",
+        "empresa",
+        "empresas",
+        "contato",
+        "contatos",
+        "telefone",
+        "endereco",
+        "lead",
+        "leads",
+    )
+    if "web_search" in actions or any(_has_word(normalized, token) for token in entity_tokens):
         return "entity_collection"
+
     return "general_request"

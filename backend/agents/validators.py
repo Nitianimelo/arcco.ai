@@ -8,6 +8,7 @@ evidências e sugerem perguntas de refinamento quando fizer sentido.
 from __future__ import annotations
 
 import ast
+import json
 import re
 from typing import Any
 
@@ -39,6 +40,34 @@ _SESSION_FILE_PROCESSING_PATTERN = re.compile(
     r"(ainda est[aá] em processamento|ocr/leitura ainda est[aá] rodando|n[aã]o foi poss[ií]vel ler o arquivo)",
     re.IGNORECASE,
 )
+
+# Placeholders conhecidos do fallback antigo do slide_generator — sinal de deck lixo.
+_SLIDE_PLACEHOLDER_MARKERS: tuple[str, ...] = (
+    "backbone",
+    "ponto 1 | ponto 2 | ponto 3",
+    "ponto 1|ponto 2|ponto 3",
+    "gap de dados",
+    "complete com informação verificada",
+    "lorem ipsum",
+)
+_SLIDE_COUNT_REQUEST_PATTERNS: tuple[re.Pattern, ...] = (
+    re.compile(r"(\d{1,2})\s*slides?", re.IGNORECASE),
+    re.compile(r"(\d{1,2})\s*(?:tend[eê]ncias?|tópicos?|topicos?|itens?|pontos?)", re.IGNORECASE),
+)
+
+
+def _infer_requested_slide_count_from_intent(user_intent: str) -> int | None:
+    haystack = user_intent or ""
+    for pattern in _SLIDE_COUNT_REQUEST_PATTERNS:
+        match = pattern.search(haystack)
+        if match:
+            try:
+                value = int(match.group(1))
+                if 1 <= value <= 30:
+                    return value
+            except ValueError:
+                continue
+    return None
 
 
 def _normalize_name(value: str) -> str:
@@ -371,5 +400,190 @@ def validate_capability_execution(
             if result.clarification_needed:
                 result.suggested_questions = build_follow_up_questions(task_type=task_type, validation_result=result)
             return result
+
+    # ── Validação de qualidade de design (route: design_generator) ──────────
+    if route == "design_generator":
+        raw = str(capability_result.content or "")
+        issues: list[ValidationIssueContract] = []
+        stripped = raw.strip()
+
+        if not stripped:
+            issues.append(
+                ValidationIssueContract(
+                    code="design_empty_output",
+                    severity="high",
+                    message="O design_generator retornou conteúdo vazio.",
+                    field_name="content",
+                )
+            )
+        else:
+            lowered = stripped.lower()
+            # Detecta vazamento de tool_code como texto no HTML gerado.
+            if any(marker in lowered for marker in ("<tool_code", "```tool_code", "ask_design_generator(", "ask_text_generator(")):
+                issues.append(
+                    ValidationIssueContract(
+                        code="design_tool_code_leak",
+                        severity="high",
+                        message="O output do design_generator contém vazamento de tool_code em vez de HTML.",
+                        field_name="content",
+                    )
+                )
+            # Verifica presença mínima de estrutura HTML/CSS.
+            has_html_tag = "<div" in lowered or "<section" in lowered or "<html" in lowered
+            if not has_html_tag:
+                issues.append(
+                    ValidationIssueContract(
+                        code="design_missing_html_structure",
+                        severity="high",
+                        message="O conteúdo retornado não contém elementos HTML estruturais esperados.",
+                        field_name="content",
+                    )
+                )
+            # Contagem de slides para apresentações vs solicitado.
+            slide_hits = len(re.findall(r'<div[^>]+class=["\'][^"\']*\bslide\b', stripped, re.IGNORECASE))
+            requested_count = _infer_requested_slide_count_from_intent(user_intent or "")
+            if requested_count and slide_hits and slide_hits < requested_count:
+                issues.append(
+                    ValidationIssueContract(
+                        code="design_slide_count_below_request",
+                        severity="high",
+                        message=(
+                            f"O usuário pediu {requested_count} slides, mas o design final veio com {slide_hits}."
+                        ),
+                        field_name="slides",
+                    )
+                )
+
+        if not issues:
+            return ValidationResultContract(
+                validator_id="design_generator_quality",
+                task_type=task_type,
+                capability_id=capability_result.capability_id,
+                status="valid",
+                summary="Design gerado com estrutura HTML válida.",
+                issues=[],
+                clarification_needed=False,
+                metadata={"content_length": len(stripped)},
+            )
+
+        high_severity = any(issue.severity == "high" for issue in issues)
+        return ValidationResultContract(
+            validator_id="design_generator_quality",
+            task_type=task_type,
+            capability_id=capability_result.capability_id,
+            status="insufficient_but_deliverable" if high_severity else "valid_with_warnings",
+            summary="Design gerado, porém com problemas de qualidade.",
+            issues=issues,
+            clarification_needed=False,
+            metadata={"content_length": len(stripped)},
+        )
+
+    # ── Validação de qualidade de slide deck (skill: slide_generator) ────────
+    capability_id = str(capability_result.capability_id or "")
+    if capability_id == "skill_slide_generator" or (
+        route == "dynamic_skill" and "slide_generator" in capability_id
+    ):
+        raw_content = str(capability_result.content or "")
+        deck: dict[str, Any] | None = None
+        try:
+            deck = json.loads(raw_content) if raw_content.strip().startswith("{") else None
+        except Exception:
+            deck = None
+
+        issues: list[ValidationIssueContract] = []
+        slide_list: list[dict[str, Any]] = []
+        if isinstance(deck, dict):
+            slide_list = deck.get("slides") or []
+
+        slide_count = len(slide_list)
+        requested_count = _infer_requested_slide_count_from_intent(user_intent or "")
+
+        if requested_count and slide_count < requested_count:
+            issues.append(
+                ValidationIssueContract(
+                    code="slide_count_below_request",
+                    severity="high",
+                    message=(
+                        f"O usuário pediu {requested_count} slides/itens, mas o deck veio com {slide_count}."
+                    ),
+                    field_name="slides",
+                )
+            )
+
+        lowered_content = raw_content.lower()
+        placeholder_hits = [marker for marker in _SLIDE_PLACEHOLDER_MARKERS if marker in lowered_content]
+        if placeholder_hits:
+            issues.append(
+                ValidationIssueContract(
+                    code="slide_deck_placeholder_content",
+                    severity="high",
+                    message=(
+                        "O deck contém placeholders genéricos (ex.: "
+                        + ", ".join(placeholder_hits[:3])
+                        + "). Isso indica que o LLM falhou e o fallback entregou conteúdo sem substância."
+                    ),
+                    field_name="slides",
+                )
+            )
+
+        empty_bullet_slides = 0
+        for slide in slide_list:
+            if not isinstance(slide, dict):
+                continue
+            if slide.get("layout") == "bullets":
+                pts = slide.get("points") or []
+                if not pts or all(not str(p).strip() for p in pts):
+                    empty_bullet_slides += 1
+        if empty_bullet_slides > 0:
+            issues.append(
+                ValidationIssueContract(
+                    code="slide_empty_bullets",
+                    severity="warning",
+                    message=f"{empty_bullet_slides} slide(s) com layout 'bullets' sem pontos de conteúdo.",
+                    field_name="slides",
+                )
+            )
+
+        if not slide_list:
+            issues.append(
+                ValidationIssueContract(
+                    code="slide_deck_empty",
+                    severity="high",
+                    message="O deck foi retornado sem slides utilizáveis.",
+                    field_name="slides",
+                )
+            )
+
+        if not issues:
+            return ValidationResultContract(
+                validator_id="slide_deck_quality",
+                task_type=task_type,
+                capability_id=capability_result.capability_id,
+                status="valid",
+                summary=f"Deck com {slide_count} slides validado.",
+                issues=[],
+                clarification_needed=False,
+                metadata={"slide_count": slide_count, "requested_count": requested_count},
+            )
+
+        high_severity = any(issue.severity == "high" for issue in issues)
+        status_value = "insufficient_but_deliverable" if high_severity else "valid_with_warnings"
+        return ValidationResultContract(
+            validator_id="slide_deck_quality",
+            task_type=task_type,
+            capability_id=capability_result.capability_id,
+            status=status_value,
+            summary=(
+                f"Deck entregue com {slide_count} slides, mas com problemas que afetam a qualidade."
+            ),
+            issues=issues,
+            clarification_needed=False,
+            metadata={
+                "slide_count": slide_count,
+                "requested_count": requested_count,
+                "placeholder_hits": placeholder_hits,
+                "empty_bullet_slides": empty_bullet_slides,
+            },
+        )
 
     return None

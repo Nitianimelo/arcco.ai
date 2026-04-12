@@ -167,6 +167,18 @@ _TOOL_CALL_LEAK_PATTERN = re.compile(
     r'^\s*(?:```(?:json)?\s*)?\{[\s\S]*"(?:tool|function|parameters)"\s*:',
     re.IGNORECASE,
 )
+# Detecta vazamento de tool_code em qualquer posição do texto (não só início).
+_TOOL_CODE_LEAK_PATTERNS: tuple[re.Pattern, ...] = (
+    re.compile(r"<\s*tool_code\s*>", re.IGNORECASE),
+    re.compile(r"</\s*tool_code\s*>", re.IGNORECASE),
+    re.compile(r"```(?:tool_code|python|json)\s*[\s\S]*?ask_\w+\s*\(", re.IGNORECASE),
+    re.compile(r"\b(?:ask_design_generator|ask_text_generator|ask_web_search|ask_browser|ask_file_modifier|execute_python|deep_research|read_session_file|analyze_web_pages)\s*\(", re.IGNORECASE),
+    re.compile(r'"tool"\s*:\s*"ask_\w+"', re.IGNORECASE),
+    re.compile(r'"function"\s*:\s*\{[\s\S]*?"name"\s*:\s*"ask_\w+"', re.IGNORECASE),
+)
+# Markdown a ser removido da resposta final (regra do projeto: nunca retornar ** ou #).
+_MARKDOWN_BOLD_PATTERN = re.compile(r"\*\*([^*]+)\*\*")
+_MARKDOWN_HEADER_PATTERN = re.compile(r"^#{1,6}\s+", re.MULTILINE)
 _RAW_URL_CONTEXT_PATTERN = re.compile(r"https?://[^\s\)\]]+", re.IGNORECASE)
 _SEARCH_SUMMARY_CONTEXT_PATTERN = re.compile(r"\*\*Resumo:\*\*(.+?)(?:\n\n|\Z)", re.IGNORECASE | re.DOTALL)
 
@@ -288,43 +300,128 @@ def _extract_source_urls_from_text(content: str) -> list[str]:
     return deduped
 
 
+# Sentinel prefix emitido por `execute_tool`/dispatchers quando há falha estruturada.
+_ERROR_SENTINEL_PREFIXES: tuple[str, ...] = (
+    "erro:",
+    "error:",
+    "erro ao",
+    "error at",
+    "falha:",
+    "falha ao",
+    "timeout:",
+    "timeout de",
+)
+
+# Substrings que sinalizam falha mesmo quando a mensagem não começa com sentinel.
+_ERROR_SUBSTRINGS: tuple[str, ...] = (
+    "client error",
+    "server error",
+    "payment required",
+    "unauthorized",
+    "403 forbidden",
+    "429 too many requests",
+    "502 bad gateway",
+    "503 service unavailable",
+    "504 gateway timeout",
+    "tool call obrigatório não emitido",
+    "não encontrado na sessão",
+    "nao encontrado na sessao",
+    "nenhum arquivo disponível",
+    "nenhum arquivo disponivel",
+    "nenhum arquivo anexado",
+    "traceback (most recent call last)",
+)
+
+# Pares (token_a, token_b): só é erro se ambos aparecem (evita falso-positivo em "timeout" literal).
+_ERROR_TOKEN_PAIRS: tuple[tuple[str, str], ...] = (
+    ("timeout", "excedeu"),
+    ("timeout", "falh"),
+    ("timeout", "erro"),
+    ("cancel", "falh"),
+)
+
+
 def _is_error_result(value: Any) -> bool:
+    """Detecta falhas de tool de forma estruturada primeiro, com fallback textual.
+
+    Regras em ordem:
+      1. Se for CapabilityResult: olha `status` e `error_text` diretamente.
+      2. Se for dict com chaves 'error'/'status', respeita.
+      3. Texto cru: confere sentinela, substrings e pares de tokens.
+    """
+    if value is None:
+        return False
+    # Checagem estruturada por CapabilityResult.
+    if isinstance(value, CapabilityResult):
+        if value.status == "failed":
+            return True
+        if value.error_text:
+            return True
+        return False
+    # Dicts retornados por dispatchers legados.
+    if isinstance(value, dict):
+        status = str(value.get("status") or "").lower()
+        if status in {"failed", "error"}:
+            return True
+        if value.get("error") or value.get("error_text"):
+            return True
+        # Continua para checagem textual do payload, se houver.
+        value = value.get("content") or value.get("message") or ""
+
     text = str(value or "").strip()
     if not text:
         return False
     lowered = text.lower()
-    error_markers = (
-        lowered.startswith("erro"),
-        lowered.startswith("error"),
-        "client error" in lowered,
-        "server error" in lowered,
-        "payment required" in lowered,
-        "unauthorized" in lowered,
-        "excedeu 90s" in lowered,
-        "timeout" in lowered and ("erro" in lowered or "falh" in lowered),
-        "tool call obrigatório não emitido" in lowered,
-        "falhou:" in lowered,
-        "não encontrado na sessão" in lowered,
-        "nao encontrado na sessao" in lowered,
-        "nenhum arquivo disponível" in lowered,
-        "nenhum arquivo disponivel" in lowered,
-        "nenhum arquivo anexado" in lowered,
-    )
-    return any(error_markers)
+
+    if any(lowered.startswith(prefix) for prefix in _ERROR_SENTINEL_PREFIXES):
+        return True
+    if any(marker in lowered for marker in _ERROR_SUBSTRINGS):
+        return True
+    for token_a, token_b in _ERROR_TOKEN_PAIRS:
+        if token_a in lowered and token_b in lowered:
+            return True
+    return False
+
+
+def _contains_tool_call_leak(text: str) -> bool:
+    if not text:
+        return False
+    if _TOOL_CALL_LEAK_PATTERN.search(text):
+        return True
+    for pattern in _TOOL_CODE_LEAK_PATTERNS:
+        if pattern.search(text):
+            return True
+    if '"tool"' in text and "ask_" in text:
+        return True
+    return False
+
+
+def _strip_forbidden_markdown(text: str) -> str:
+    """Remove ** e # mas preserva links markdown [texto](url)."""
+    if not text:
+        return text
+    # Remove negrito ** mantendo o conteúdo interno.
+    stripped = _MARKDOWN_BOLD_PATTERN.sub(r"\1", text)
+    # Remove header markers (# ## ###) no início de linha.
+    stripped = _MARKDOWN_HEADER_PATTERN.sub("", stripped)
+    return stripped
 
 
 def _sanitize_user_facing_response(content: str, *, had_failures: bool = False) -> str:
     text = (content or "").strip()
     if not text:
         return "Desculpe, não consegui gerar uma resposta confiável."
-    if _TOOL_CALL_LEAK_PATTERN.search(text) or ('"tool"' in text and "ask_" in text):
+    if _contains_tool_call_leak(text):
+        logger.warning("[SANITIZE] Tool call leak detectado na resposta final — substituindo por mensagem segura.")
         if had_failures:
             return (
                 "Não consegui concluir a tarefa com confiabilidade porque uma ou mais ferramentas "
                 "falharam durante a execução. Ajuste a configuração necessária e tente novamente."
             )
         return "Desculpe, a resposta final saiu em formato interno inválido. Tente novamente."
-    return text
+    # Aplica stripping de markdown proibido conforme regra do projeto.
+    text = _strip_forbidden_markdown(text)
+    return text.strip() or "Desculpe, não consegui gerar uma resposta confiável."
 
 
 def _get_session_inventory_items(session_id: str | None) -> list[dict[str, Any]]:
@@ -1033,6 +1130,11 @@ def _clamp_accumulated_context(text: str) -> str:
     normalized = text or ""
     if len(normalized) <= _MAX_ACCUMULATED_CONTEXT_CHARS:
         return normalized
+    logger.info(
+        "[ORCHESTRATOR] Clamp de accumulated_context ativado: %d chars → janela de %d chars.",
+        len(normalized),
+        _MAX_ACCUMULATED_CONTEXT_CHARS,
+    )
     head = 3000
     tail = _MAX_ACCUMULATED_CONTEXT_CHARS - head - 90
     return (
@@ -1085,6 +1187,8 @@ async def _emit_design_artifact(content: str) -> AsyncGenerator[str, None]:
 
 
 async def _stream_assistant_text(messages: list, model: str) -> AsyncGenerator[str, None]:
+    # Bufferiza a resposta completa para permitir sanitização antes de emitir.
+    # A perda de latência de streaming é aceitável nesta rota de recovery.
     accumulated = ""
     async for chunk in stream_openrouter(
         messages=messages,
@@ -1099,10 +1203,10 @@ async def _stream_assistant_text(messages: list, model: str) -> AsyncGenerator[s
         if not content:
             continue
         accumulated += content
-        yield sse("chunk", content)
 
-    if not accumulated:
-        yield sse("chunk", "Desculpe, não consegui gerar uma resposta. Tente novamente.")
+    final_text = _sanitize_user_facing_response(accumulated)
+    async for event in _yield_text_chunks(final_text):
+        yield event
 
 
 async def _yield_text_chunks(content: str, chunk_size: int = 40) -> AsyncGenerator[str, None]:
@@ -1462,6 +1566,22 @@ async def _call_supervisor_for_step(
 
     message = data["choices"][0]["message"]
 
+    # Detecta quando o modelo "escreve" a chamada de ferramenta como texto
+    # (vazamento de <tool_code>, ```python ask_...(```) em vez de retornar tool_calls.
+    # Nesse caso tratamos igual ao caso "ignorou tool_choice" — reforça e retenta.
+    def _message_has_tool_code_leak(msg: dict) -> bool:
+        content = (msg.get("content") or "").strip()
+        if not content:
+            return False
+        return _contains_tool_call_leak(content)
+
+    if forced_tool_name and not message.get("tool_calls") and _message_has_tool_code_leak(message):
+        logger.warning(
+            "[ORCHESTRATOR] '%s' vazou tool_code como texto em vez de tool_calls para '%s'.",
+            supervisor_model,
+            forced_tool_name,
+        )
+
     # Se esperávamos um tool_call mas o modelo respondeu em texto mesmo com "auto"
     if forced_tool_name and not message.get("tool_calls"):
         logger.warning(
@@ -1496,6 +1616,16 @@ async def _call_supervisor_for_step(
             else:
                 raise
         message = retry["choices"][0]["message"]
+
+    # Guardrail final: se após todos os retries o content ainda tem tool_code leak,
+    # zeramos o content para evitar que o texto cru chegue ao SSE/usuário.
+    # O orchestrator trata ausência de tool_calls + content vazio como falha de contrato.
+    if _message_has_tool_code_leak(message):
+        logger.error(
+            "[ORCHESTRATOR] '%s' vazou tool_code mesmo após retries — content será descartado.",
+            supervisor_model,
+        )
+        message["content"] = ""
 
     return message
 
@@ -1750,9 +1880,13 @@ async def orchestrate_and_stream(
     user_intent = next(
         (str(m["content"]) for m in reversed(messages) if m.get("role") == "user"), ""
     )
+    # task_type canônico calculado UMA vez e propagado para preconditions e planner.
+    # Evita divergência entre intake (precondições) e planejamento principal.
+    intake_task_type = infer_task_type(user_intent)
     precondition_check = evaluate_preconditions(
         user_intent=user_intent,
         session_items=session_inventory_items,
+        task_type=intake_task_type,
     )
 
     # Para o planner, constrói contexto completo em conversas multi-turno.
@@ -1885,6 +2019,12 @@ async def orchestrate_and_stream(
         session_id=session_id,
     )
     inferred_task_type = getattr(plan_output, "task_type", None) or infer_task_type(user_intent, plan_output.steps)
+    if inferred_task_type != intake_task_type:
+        logger.info(
+            "[ORCHESTRATOR] task_type reconciliado: intake=%s → planner=%s (fonte da verdade: planner).",
+            intake_task_type,
+            inferred_task_type,
+        )
     plan_output.task_type = inferred_task_type
     task_type_definition = get_task_type_definition(inferred_task_type) or {}
     execution_engine = resolve_execution_engine(inferred_task_type, plan_output.steps)
@@ -3047,9 +3187,27 @@ async def orchestrate_and_stream(
                             )
 
                     except Exception as tool_exc:
-                        # Captura qualquer erro (ImportError, timeout, etc.) sem matar o pipeline
-                        logger.error(f"[ORCHESTRATOR] Erro na tool '%s' (Passo %s): %s", func_name, step.step, tool_exc)
-                        error_msg = f"Ferramenta '{func_name}' falhou: {tool_exc}"
+                        # Captura qualquer erro (ImportError, timeout, etc.) sem matar o pipeline.
+                        # Loga classe da exceção e traceback completo para distinguir bugs de código
+                        # (NameError/TypeError/AttributeError) de falhas legítimas de runtime da tool.
+                        exc_class = type(tool_exc).__name__
+                        logger.exception(
+                            "[ORCHESTRATOR] Exceção %s na tool '%s' (Passo %s): %s",
+                            exc_class,
+                            func_name,
+                            step.step,
+                            tool_exc,
+                        )
+                        programming_error = isinstance(
+                            tool_exc,
+                            (NameError, AttributeError, TypeError, KeyError, ImportError, SyntaxError),
+                        )
+                        if programming_error:
+                            logger.error(
+                                "[ORCHESTRATOR] Erro de programação detectado em tool '%s' — verificar código.",
+                                func_name,
+                            )
+                        error_msg = f"Ferramenta '{func_name}' falhou ({exc_class}): {tool_exc}"
                         had_failures = True
                         tool_failed = True
                         failure_summaries.append(error_msg)
@@ -3070,6 +3228,10 @@ async def orchestrate_and_stream(
                                 message=error_msg,
                                 tool_name=func_name,
                                 tool_args=func_args,
+                                raw_payload={
+                                    "exception_class": exc_class,
+                                    "is_programming_error": programming_error,
+                                },
                             )
                             await execution_logger.finish_agent(
                                 tool_agent_id,

@@ -16,6 +16,7 @@ from backend.agents.contracts import (
     ValidationIssueContract,
     ValidationResultContract,
 )
+from backend.agents.contracts import TaskTypeId
 from backend.agents.task_types import infer_task_type, resolve_execution_engine
 
 
@@ -62,8 +63,12 @@ def evaluate_preconditions(
     *,
     user_intent: str,
     session_items: list[dict] | None,
+    task_type: TaskTypeId | str | None = None,
 ) -> PreconditionCheckContract:
-    task_type = infer_task_type(user_intent)
+    # Aceita task_type pré-computado para evitar inferência duplicada.
+    # Se não for passado, infere aqui com o mesmo helper canônico.
+    resolved_task_type = str(task_type or "").strip() or infer_task_type(user_intent)
+    task_type = resolved_task_type  # mantém o nome legado neste escopo
     execution_engine = resolve_execution_engine(task_type)
     items = session_items or []
     ready_items = [

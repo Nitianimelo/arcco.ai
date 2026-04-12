@@ -3,6 +3,47 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-04-12 — Claude Code (claude-opus-4-6) — Correção de fragilidades extras
+
+### Arquivos modificados:
+- `backend/agents/orchestrator.py`
+- `backend/agents/task_types.py`
+- `backend/agents/validators.py`
+
+### O que foi feito:
+1. **orchestrator.py — `_is_error_result()`** — Reescrito com detecção estruturada: verifica `CapabilityResult.status`/`error_text` e `dict.status`/`dict.error` antes do fallback textual. Sentinelas (`erro:`, `falha:`, `timeout:`) separados de substrings (`502 bad gateway`, `traceback (most recent call last)`) e pares de tokens (`timeout`+`falh`) para reduzir falsos-positivos. Adicionados HTTP status codes (`403`, `429`, `502`, `503`, `504`).
+2. **orchestrator.py — `_clamp_accumulated_context()`** — Adicionado `logger.info` quando o clamp ativa, para rastrear quando o contexto ultrapassa 24k chars.
+3. **orchestrator.py — exception handler do loop de tool_calls** — `except Exception` agora usa `logger.exception()` (traceback completo), inclui classe da exceção no log e na mensagem de erro, e detecta erros de programação (`NameError`, `TypeError`, `AttributeError`, `KeyError`, `ImportError`, `SyntaxError`) com log extra de alerta. Payload no execution_logger inclui `exception_class` e `is_programming_error`.
+4. **validators.py — novo validador `design_generator_quality`** — Detecta: output vazio, vazamento de tool_code no HTML, ausência de estrutura HTML (`<div`/`<section`/`<html`), e contagem de slides inferior ao solicitado pelo usuário.
+5. **task_types.py — `infer_task_type()`** — Refatorado com: `_strip_accents()` normaliza acentos, `_has_word()` usa word-boundary (`\b`) para evitar falsos-positivos (ex: "site" dentro de "requisite"), threshold de `open_solver_signals` melhorado com verbos específicos (`extrair`, `gerar`, `criar`, `reorganizar`) em vez de prefixos genéricos (`ger`, `extra`), regra de `browser_workflow` para "preencher site" exige ambos tokens com word-boundary.
+
+### Por quê:
+Fragilidades encontradas durante auditoria aprofundada do orchestrator: `_is_error_result()` baseado em keyword simples gerava falsos-positivos/negativos; `infer_task_type()` usava substrings genéricos como `"ger"` e `"extra"` causando classificações incorretas; exceções no loop de tools não preservavam traceback nem distinguiam bugs de código de falhas de runtime; não havia validador para `design_generator` permitindo que HTML vazio ou tool_code vazado chegasse ao frontend.
+
+---
+
+## 2026-04-11 — Claude Code (claude-opus-4-6)
+
+### Arquivos modificados:
+- `backend/agents/planner.py`
+- `backend/agents/orchestrator.py`
+- `backend/agents/preconditions.py`
+- `backend/agents/validators.py`
+- `backend/skills/slide_generator.py`
+
+### O que foi feito:
+1. **planner.py — `_normalize_plan()`** — Adicionada função `_promote_terminal_direct_answer()` que detecta quando o último step do plano é `direct_answer` mas a task exige artefato (design/documento), e promove o step para `design_generator` ou `text_generator` com o `capability_id` correto. Re-sequencia os steps após promoção. Constantes `_DESIGN_INTENT_SIGNALS` e `_DOCUMENT_INTENT_SIGNALS` documentam os gatilhos de keywords.
+2. **orchestrator.py — sanitização da resposta final** — Expandido `_TOOL_CODE_LEAK_PATTERNS` para cobrir `<tool_code>`, ```` ```python ask_X(```` ````, `ask_*(...)` nú e variantes JSON. Adicionadas `_contains_tool_call_leak()` e `_strip_forbidden_markdown()`. `_sanitize_user_facing_response()` agora remove `**` e `#` conforme regra do projeto (preservando links markdown) e loga warning quando detecta leak. `_stream_assistant_text()` passou a bufferizar a resposta completa antes de sanitizar e emitir, cobrindo o único caminho que streava texto cru ao usuário.
+3. **orchestrator.py — `_call_supervisor_for_step()`** — Acrescentada detecção de `tool_code` vazado em `message.content` quando o supervisor ignora tool_choice. Se após todos os retries o content ainda tiver leak, o content é zerado antes de retornar, impedindo que chegue ao SSE. Logs de warning/error para rastreabilidade.
+4. **orchestrator.py + preconditions.py — unificação de task_type** — Orchestrator agora calcula `intake_task_type` uma única vez via `infer_task_type()` e o passa para `evaluate_preconditions()` através de novo parâmetro opcional `task_type`. Após o planner, divergência entre intake e planner é logada (planner é a fonte da verdade). Elimina inferência duplicada que divergia em casos de `open_problem_solving`.
+5. **slide_generator.py — fallback determinístico** — `_build_fallback_deck()` reescrito: detecta quantidade explícita de slides no pedido via regex (`10 slides`, `10 tendências`), distribui pontos reais extraídos do `context_data` entre slides usando `_chunk_points_into_slides()`, garante contagem exata solicitada pelo usuário, e **zera `slot_updates`** para evitar placeholders como `Backbone`, `73%`, `Ponto 1 | Ponto 2 | Ponto 3` vazados do `build_slot_defaults()`. Quando não há dados reais, marca slide com "Gap de dados" para não mentir. Timeout do LLM aumentado de 28s para 45s. Branch (LLM vs fallback) agora é logado explicitamente.
+6. **validators.py — novo validador `slide_deck_quality`** — Valida output da skill `slide_generator`: detecta contagem de slides abaixo do solicitado pelo usuário, placeholders conhecidos no conteúdo, slides `bullets` vazios, e deck totalmente vazio. Retorna `insufficient_but_deliverable` em problemas high-severity. Injetado no pipeline existente em `validate_capability_execution()`.
+
+### Por quê:
+Correção da orquestração que estava "cuspindo código" no chat. Dois casos confirmados nos logs: (a) pedido de PDF com refatoração visual terminava em `direct_answer` e o supervisor vazava `<tool_code>ask_design_generator(...)</tool_code>` como texto; (b) geração de slides de tendências de IA retornava 3 slides com placeholders genéricos ("Backbone", "73%") em vez de 10 slides com conteúdo real. As correções atacam as 5 causas-raiz identificadas (planner terminando em direct_answer para artefato, sanitização fraca, task_type divergente, fallback com placeholders, sem validador para deck) sem alterar a arquitetura nem o contrato SSE. Modelos do registry não foram tocados — serão ajustados pelo dono via painel admin.
+
+---
+
 ## 2026-03-31 16:40 — Codex (gpt-5)
 
 ### Arquivos modificados:

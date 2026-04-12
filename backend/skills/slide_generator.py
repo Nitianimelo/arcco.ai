@@ -22,7 +22,31 @@ from backend.agents import registry
 from backend.services.design_template_registry import build_guided_design_contract, build_slot_defaults, choose_design_route
 
 logger = logging.getLogger(__name__)
-_SLIDE_LLM_TIMEOUT_SECONDS = 28.0
+_SLIDE_LLM_TIMEOUT_SECONDS = 45.0
+_DEFAULT_SLIDE_COUNT = 8
+_MIN_FALLBACK_SLIDES = 4
+_MAX_FALLBACK_SLIDES = 18
+
+_EXPLICIT_COUNT_PATTERNS: tuple[re.Pattern, ...] = (
+    re.compile(r"(\d{1,2})\s*slides?", re.IGNORECASE),
+    re.compile(r"(\d{1,2})\s*(?:tend[eê]ncias?|tópicos?|topicos?|itens?|pontos?|bullets?)", re.IGNORECASE),
+    re.compile(r"(\d{1,2})\s*(?:cards?|páginas?|paginas?)", re.IGNORECASE),
+)
+
+
+def _infer_requested_slide_count(topic: str, context_data: str) -> int | None:
+    """Detecta quando o usuário pediu explicitamente um número de slides/itens."""
+    haystack = f"{topic or ''}\n{context_data or ''}"
+    for pattern in _EXPLICIT_COUNT_PATTERNS:
+        match = pattern.search(haystack)
+        if match:
+            try:
+                value = int(match.group(1))
+                if 1 <= value <= 30:
+                    return value
+            except ValueError:
+                continue
+    return None
 
 # ── Contrato da Skill ─────────────────────────────────────────────────────────
 
@@ -108,7 +132,7 @@ def _clean_line(text: str) -> str:
     return cleaned.strip(" -•*")
 
 
-def _extract_points(context_data: str, max_points: int = 6) -> list[str]:
+def _extract_points(context_data: str, max_points: int = 60) -> list[str]:
     raw_parts = re.split(r"[\n\r]+|(?<=[.!?])\s+", context_data or "")
     points: list[str] = []
     for part in raw_parts:
@@ -116,29 +140,115 @@ def _extract_points(context_data: str, max_points: int = 6) -> list[str]:
         if len(cleaned) < 18:
             continue
         if cleaned not in points:
-            points.append(cleaned[:180])
+            points.append(cleaned[:220])
         if len(points) >= max_points:
             break
     return points
 
 
+def _chunk_points_into_slides(points: list[str], slide_count: int, bullets_per_slide: int = 3) -> list[list[str]]:
+    """Distribui pontos extraídos entre N slides de conteúdo."""
+    if slide_count <= 0:
+        return []
+    buckets: list[list[str]] = [[] for _ in range(slide_count)]
+    for index, point in enumerate(points):
+        bucket_index = index % slide_count
+        if len(buckets[bucket_index]) < bullets_per_slide:
+            buckets[bucket_index].append(point)
+    return buckets
+
+
 def _build_fallback_deck(topic: str, context_data: str) -> SlideDeck:
     points = _extract_points(context_data)
+    short_topic = _clean_line(topic)[:72] or "Apresentação"
     selection = choose_design_route(topic, "slide", context_data, "16:9")
     template = selection["template"]
-    intro = points[:2] or [
-        "Contextualize o tema com clareza e impacto.",
-        "Mostre rapidamente por que isso importa agora.",
+
+    requested_count = _infer_requested_slide_count(topic, context_data)
+    if requested_count:
+        total_slides = requested_count
+    elif points:
+        # Estima baseado no volume de pontos: ~3 bullets por slide + capa + fecho.
+        estimated_content_slides = max(3, (len(points) + 2) // 3)
+        total_slides = min(_MAX_FALLBACK_SLIDES, max(_MIN_FALLBACK_SLIDES, estimated_content_slides + 2))
+    else:
+        total_slides = _DEFAULT_SLIDE_COUNT
+
+    total_slides = max(_MIN_FALLBACK_SLIDES, min(_MAX_FALLBACK_SLIDES, total_slides))
+
+    # Capa + Conteúdo + Fecho.
+    content_slide_count = max(1, total_slides - 2)
+    buckets = _chunk_points_into_slides(points, content_slide_count, bullets_per_slide=3)
+
+    slides: list[Slide] = [
+        Slide(
+            layout="title_and_subtitle",
+            heading=short_topic[:48],
+            points=[],
+            big_value=None,
+            speaker_notes=(
+                "Apresente o tema com contexto rápido, destaque por que ele importa agora "
+                "e prepare a transição para os pontos principais."
+            ),
+        )
     ]
-    details = points[2:5] or [
-        "Destaque os fatos principais em linguagem simples.",
-        "Organize os pontos em ordem lógica para leitura rápida.",
-        "Mantenha o foco em impacto e consequência.",
-    ]
-    closing = points[5:6] or [
-        "Feche com consequência, próximo passo ou chamada para ação.",
-    ]
-    short_topic = _clean_line(topic)[:72] or "Apresentação"
+    for idx, bucket in enumerate(buckets, start=1):
+        if bucket:
+            slides.append(
+                Slide(
+                    layout="bullets",
+                    heading=f"Ponto {idx}",
+                    points=bucket,
+                    big_value=None,
+                    speaker_notes=(
+                        "Explique os pontos em sequência curta, priorizando os dados mais concretos "
+                        "coletados nos passos anteriores."
+                    ),
+                )
+            )
+        else:
+            # Sem dados reais: ainda entrega a estrutura mas sinaliza gap no speaker_notes.
+            slides.append(
+                Slide(
+                    layout="bullets",
+                    heading=f"Ponto {idx}",
+                    points=[
+                        "Gap de dados: complete com informação verificada antes de apresentar.",
+                    ],
+                    big_value=None,
+                    speaker_notes=(
+                        "Este slide ficou sem conteúdo concreto porque a pesquisa anterior não "
+                        "retornou dados suficientes. Evite apresentar até completar com fonte real."
+                    ),
+                )
+            )
+
+    slides.append(
+        Slide(
+            layout="title_and_subtitle",
+            heading="Conclusão",
+            points=[],
+            big_value=None,
+            speaker_notes="Feche com síntese, consequência prática e um próximo passo claro para o público.",
+        )
+    )
+
+    # Garante exatamente o total solicitado (ajuste fino após montagem).
+    if len(slides) > total_slides:
+        slides = slides[:total_slides - 1] + [slides[-1]]
+    elif len(slides) < total_slides:
+        while len(slides) < total_slides:
+            slides.insert(
+                len(slides) - 1,
+                Slide(
+                    layout="bullets",
+                    heading=f"Ponto adicional {len(slides)}",
+                    points=["Gap de dados: complemente antes de apresentar."],
+                    big_value=None,
+                    speaker_notes="Slide gerado para respeitar a quantidade pedida; preencher com dados reais antes do uso.",
+                ),
+            )
+
     guided_contract = build_guided_design_contract(topic, context_data, template, str(selection["mode"]))
     return SlideDeck(
         title=short_topic,
@@ -148,34 +258,14 @@ def _build_fallback_deck(topic: str, context_data: str) -> SlideDeck:
         canvas_preset=(template or {}).get("canvas_preset"),
         render_mode=str(selection["mode"]),
         template_score=int(selection.get("score", -1) or 0),
-        slot_updates=build_slot_defaults(topic, context_data, template),
+        # IMPORTANTE: NÃO chamamos build_slot_defaults porque ele retorna placeholders
+        # genéricos ("Backbone", "73%", "Ponto 1 | Ponto 2 | Ponto 3") que contaminam o deck.
+        slot_updates={},
         style_overrides=guided_contract["style_overrides"],
         allowed_edits=guided_contract["allowed_edits"],
         optional_blocks=guided_contract["optional_blocks"],
         locked_regions=guided_contract["locked_regions"],
-        slides=[
-            Slide(
-                layout="title_and_subtitle",
-                heading=short_topic[:48],
-                points=[],
-                big_value=None,
-                speaker_notes="Apresente o tema com contexto rápido, destaque por que ele importa e prepare a transição para os fatos centrais.",
-            ),
-            Slide(
-                layout="bullets",
-                heading="O que aconteceu",
-                points=intro + details[:2],
-                big_value=None,
-                speaker_notes="Explique os fatos centrais em sequência curta, usando apenas os dados mais relevantes para manter clareza e ritmo.",
-            ),
-            Slide(
-                layout="bullets",
-                heading="Impactos e próximos passos",
-                points=details[2:4] + closing,
-                big_value=None,
-                speaker_notes="Feche com impacto, consequência e um próximo passo claro para o público.",
-            ),
-        ],
+        slides=slides,
     )
 
 
@@ -316,9 +406,24 @@ async def execute(args: dict) -> str:
             deck.template_label = None
 
         slide_count = len(deck.slides)
-        logger.info("[SLIDE_GENERATOR] Deck gerado: '%s' | %d slides", deck.title, slide_count)
+        logger.info(
+            "[SLIDE_GENERATOR] branch=llm | modelo=%s | topic='%s' | %d slides",
+            model,
+            deck.title,
+            slide_count,
+        )
         return deck.model_dump_json(ensure_ascii=False)
     except Exception as exc:
-        logger.warning("[SLIDE_GENERATOR] Fallback local acionado para '%s': %s", topic[:60], exc)
+        logger.warning(
+            "[SLIDE_GENERATOR] branch=fallback | modelo=%s | topic='%s' | erro=%s",
+            model,
+            topic[:60],
+            exc,
+        )
         fallback = _build_fallback_deck(topic, context_data)
+        logger.info(
+            "[SLIDE_GENERATOR] fallback gerou %d slides (requested=%s)",
+            len(fallback.slides),
+            _infer_requested_slide_count(topic, context_data),
+        )
         return fallback.model_dump_json(ensure_ascii=False)

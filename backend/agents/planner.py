@@ -54,6 +54,108 @@ def _extract_json_payload(raw_content: str) -> dict:
     raise ValueError(f"Planner retornou JSON invalido: {last_error}")
 
 
+_ARTIFACT_TASK_TYPES: frozenset[str] = frozenset(
+    {
+        "design_generation",
+        "document_generation",
+        "deep_research",
+        "mass_document_analysis",
+    }
+)
+
+_DESIGN_INTENT_SIGNALS: tuple[str, ...] = (
+    "slide",
+    "slides",
+    "apresenta",
+    "deck",
+    "pitch",
+    "design",
+    "identidade visual",
+    "layout",
+    "capa",
+    "poster",
+    "cartaz",
+    "banner",
+    "infogr",
+    "html",
+)
+
+_DOCUMENT_INTENT_SIGNALS: tuple[str, ...] = (
+    "documento",
+    "relatório",
+    "relatorio",
+    "resumo",
+    "resuma",
+    "texto",
+    "artigo",
+    "proposta",
+    "ensaio",
+    "carta",
+    "email",
+    "briefing",
+)
+
+
+def _promote_terminal_direct_answer(
+    steps: list[PlanStep],
+    *,
+    user_intent: str,
+    task_type: str | None,
+) -> list[PlanStep]:
+    """Evita terminar o plano em direct_answer quando o pedido exige artefato.
+
+    O supervisor tem hábito de responder diretamente com código ou markdown
+    quando o step final é direct_answer, causando vazamento de tool_code no
+    chat. Se detectarmos sinais de design/documento, promovemos o step final
+    para a capability correta.
+    """
+    if not steps:
+        return steps
+
+    last = steps[-1]
+    action = (last.action or "").strip()
+    if action != "direct_answer":
+        return steps
+
+    normalized_intent = (user_intent or "").lower()
+    normalized_task = (task_type or "").strip()
+
+    wants_design = (
+        normalized_task == "design_generation"
+        or any(token in normalized_intent for token in _DESIGN_INTENT_SIGNALS)
+    )
+    wants_document = (
+        normalized_task in {"document_generation", "deep_research", "mass_document_analysis"}
+        or any(token in normalized_intent for token in _DOCUMENT_INTENT_SIGNALS)
+    )
+
+    promoted_action: str | None = None
+    if wants_design:
+        promoted_action = "design_generator"
+    elif wants_document:
+        promoted_action = "text_generator"
+
+    if not promoted_action:
+        return steps
+
+    logger.info(
+        "[PLANNER] Promovendo step final direct_answer para '%s' (task_type=%s).",
+        promoted_action,
+        task_type,
+    )
+
+    new_detail = last.detail or user_intent
+    promoted = last.model_copy(
+        update={
+            "action": promoted_action,
+            "capability_id": infer_capability_id_from_action(promoted_action),
+            "detail": new_detail,
+            "is_terminal": True,
+        }
+    )
+    return [*steps[:-1], promoted]
+
+
 def _normalize_plan(plan: PlannerOutput, *, user_intent: str) -> PlannerOutput:
     if not plan.steps:
         if plan.is_complex and not plan.needs_clarification:
@@ -81,10 +183,24 @@ def _normalize_plan(plan: PlannerOutput, *, user_intent: str) -> PlannerOutput:
             )
         )
 
+    resolved_task_type = plan.task_type or infer_task_type(user_intent, normalized_steps)
+
+    normalized_steps = _promote_terminal_direct_answer(
+        normalized_steps,
+        user_intent=user_intent,
+        task_type=resolved_task_type,
+    )
+
+    # Re-sequencia steps após promoção para garantir numeração coerente.
+    normalized_steps = [
+        step.model_copy(update={"step": idx})
+        for idx, step in enumerate(normalized_steps, start=1)
+    ]
+
     return plan.model_copy(
         update={
             "steps": normalized_steps,
-            "task_type": plan.task_type or infer_task_type(user_intent, normalized_steps),
+            "task_type": resolved_task_type,
         }
     )
 
