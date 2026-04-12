@@ -3,6 +3,24 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-04-12 — Claude Code (claude-opus-4-6) — Correção de falhas do log de design corporativo
+
+### Arquivos modificados:
+- `backend/agents/task_types.py`
+- `backend/agents/workflow_policy.py`
+- `backend/agents/orchestrator.py`
+
+### O que foi feito:
+1. **task_types.py — `infer_task_type()`** — Adicionados keywords de intent para detectar `design_generation` diretamente pelo pedido do usuário (ex: "design", "layout", "identidade visual", "capa", "banner", "slide", "apresentacao", etc.) SEM depender de actions do planner. Idem para `document_generation` com tokens conservadores ("relatorio", "resumo", "proposta", "redigir", etc.). Antes, esses task_types só ativavam se o planner já tivesse gerado steps com a action certa.
+2. **workflow_policy.py — `decide_on_route_failure()`** — Novo parâmetro `is_terminal_step`. Quando step non-terminal falha, policy agora retorna `should_abort=False, continue_partial=True` em vez de abortar o pipeline. Pipeline só aborta hard em steps terminais (onde a entrega depende diretamente do resultado).
+3. **orchestrator.py — 3 call sites de `decide_on_route_failure`** — Passam `is_terminal_step=step.is_terminal` (planner loop) ou `False` (react loop). No primeiro call site (direct dispatch), quando `continue_partial=True`, marca `had_failures=True`, acumula erro no context, e continua para o próximo step em vez de abortar.
+4. **orchestrator.py — `_strip_forbidden_markdown()`** — Expandido para remover bullets markdown (`* `, `- `, `+ `) no início de linha, além de `**` e `#`. Pattern: `_MARKDOWN_BULLET_PATTERN`.
+
+### Por quê:
+Log de execução real mostrou 3 problemas: (a) pedido "design corporativo clean" classificado como `general_request` porque keywords de design não existiam no `infer_task_type` (dependia de actions pós-planner); (b) pipeline abortou no passo 2 (python falhou com `ModuleNotFoundError`) sem tentar os passos 3 e 4 (design_generator) — a policy abortava sempre para routes não-retryable; (c) resposta final continha `*   Metodologia Modular:` (bullets markdown) que não era sanitizada.
+
+---
+
 ## 2026-04-12 — Claude Code (claude-opus-4-6) — Correção de fragilidades extras
 
 ### Arquivos modificados:

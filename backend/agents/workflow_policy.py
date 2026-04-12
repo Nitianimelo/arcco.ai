@@ -107,6 +107,7 @@ def decide_on_route_failure(
     route: str,
     attempt_no: int,
     error_text: str,
+    is_terminal_step: bool = False,
 ) -> PolicyDecisionContract:
     route_retryable = route in {"web_search", "deep_research", "browser", "session_file"}
     retry_same_route = route_retryable and attempt_no == 1
@@ -196,6 +197,22 @@ def decide_on_route_failure(
             clarification_questions=questions,
             user_message="A busca falhou parcialmente. Posso continuar com cobertura parcial e sinalizar os gaps.",
             metadata={"attempt_no": attempt_no, "error_text": error_text[:300]},
+        )
+
+    # Se o step não é terminal, permitir continuação parcial com os resultados
+    # acumulados até aqui. O pipeline só aborta hard em steps terminais onde
+    # a entrega final depende diretamente deste resultado.
+    if not is_terminal_step and not retry_same_route:
+        return PolicyDecisionContract(
+            decision_id="default_failure_policy_non_terminal",
+            task_type=task_type,
+            route=route,
+            should_abort=False,
+            continue_partial=True,
+            request_clarification=False,
+            retry_same_route=False,
+            user_message=f"Falha em {route}, mas como não é o passo final, a execução segue com contexto parcial.",
+            metadata={"attempt_no": attempt_no, "error_text": error_text[:300], "non_terminal_skip": True},
         )
 
     return PolicyDecisionContract(

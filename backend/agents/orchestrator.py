@@ -179,6 +179,8 @@ _TOOL_CODE_LEAK_PATTERNS: tuple[re.Pattern, ...] = (
 # Markdown a ser removido da resposta final (regra do projeto: nunca retornar ** ou #).
 _MARKDOWN_BOLD_PATTERN = re.compile(r"\*\*([^*]+)\*\*")
 _MARKDOWN_HEADER_PATTERN = re.compile(r"^#{1,6}\s+", re.MULTILINE)
+# Bullets markdown: "* texto", "- texto", "+ texto" no início de linha (com indentação opcional).
+_MARKDOWN_BULLET_PATTERN = re.compile(r"^(\s*)[*\-+]\s+", re.MULTILINE)
 _RAW_URL_CONTEXT_PATTERN = re.compile(r"https?://[^\s\)\]]+", re.IGNORECASE)
 _SEARCH_SUMMARY_CONTEXT_PATTERN = re.compile(r"\*\*Resumo:\*\*(.+?)(?:\n\n|\Z)", re.IGNORECASE | re.DOTALL)
 
@@ -397,13 +399,15 @@ def _contains_tool_call_leak(text: str) -> bool:
 
 
 def _strip_forbidden_markdown(text: str) -> str:
-    """Remove ** e # mas preserva links markdown [texto](url)."""
+    """Remove **, #, e bullets (* - +) mas preserva links markdown [texto](url)."""
     if not text:
         return text
     # Remove negrito ** mantendo o conteúdo interno.
     stripped = _MARKDOWN_BOLD_PATTERN.sub(r"\1", text)
     # Remove header markers (# ## ###) no início de linha.
     stripped = _MARKDOWN_HEADER_PATTERN.sub("", stripped)
+    # Remove bullet markers (* - +) preservando indentação e conteúdo.
+    stripped = _MARKDOWN_BULLET_PATTERN.sub(r"\1", stripped)
     return stripped
 
 
@@ -2571,6 +2575,7 @@ async def orchestrate_and_stream(
                                         route=current_route,
                                         attempt_no=route_attempts[current_route],
                                         error_text=str(specialist_result or ""),
+                                        is_terminal_step=step.is_terminal,
                                     )
                                     if execution_logger:
                                         await _log_policy_decision(
@@ -2622,6 +2627,20 @@ async def orchestrate_and_stream(
                                         yield sse("step_replanned", json.dumps(replan_decision.model_dump()))
                                         yield sse("thought", replan_decision.user_message)
                                         continue
+                                    # Sem retry nem replan: marcar falha parcial e sair do dispatch loop.
+                                    if failure_decision.continue_partial:
+                                        had_failures = True
+                                        failure_summaries.append(
+                                            failure_decision.user_message or f"Falha em {current_route} (continuando com contexto parcial)."
+                                        )
+                                        accumulated_context = _append_to_accumulated_context(
+                                            accumulated_context,
+                                            step=step.step,
+                                            route=current_route,
+                                            content=str(specialist_result or ""),
+                                            error=True,
+                                        )
+                                        yield sse("thought", failure_decision.user_message)
                                 break
                             if execution_logger:
                                 await execution_logger.log_event(
@@ -2750,6 +2769,7 @@ async def orchestrate_and_stream(
                                     route=current_route,
                                     attempt_no=route_attempts.get(current_route, 1),
                                     error_text=str(specialist_result or ""),
+                                    is_terminal_step=step.is_terminal,
                                 )
                                 tool_failed = bool(failure_decision.should_abort and not failure_decision.continue_partial)
                                 if execution_logger and active_mass_doc_stages:
@@ -3659,6 +3679,7 @@ async def orchestrate_and_stream(
                                 route=current_route,
                                 attempt_no=direct_route_attempts[current_route],
                                 error_text=str(specialist_result or ""),
+                                is_terminal_step=False,  # react loop: nenhum step é declarado terminal
                             )
                             if execution_logger:
                                 await _log_policy_decision(

@@ -241,10 +241,55 @@ def infer_task_type(user_intent: str, steps: list[PlanStepContract] | None = Non
 
     if "deep_research" in actions or "deep_research" in capability_ids:
         return "deep_research"
-    if "design_generator" in actions or "design_generate" in capability_ids:
+
+    # Detecção de design_generation por keywords do intent — não depende de actions do planner.
+    design_intent_tokens = (
+        "design",
+        "layout",
+        "identidade visual",
+        "visual",
+        "capa",
+        "banner",
+        "poster",
+        "cartaz",
+        "flyer",
+        "panfleto",
+        "carrossel",
+        "slide",
+        "slides",
+        "apresentacao",
+        "pitch",
+        "deck",
+        "infografico",
+        "landing page",
+        "peca visual",
+    )
+    if "design_generator" in actions or "design_generate" in capability_ids or any(
+        _has_word(normalized, token) for token in design_intent_tokens
+    ):
         return "design_generation"
-    if "text_generator" in actions or "text_document_generate" in capability_ids:
+
+    # Detecção de document_generation por keywords do intent.
+    # Tokens conservadores: só verbos/nomes que indicam "gerar texto novo",
+    # não "envie o documento existente".
+    document_intent_tokens = (
+        "relatorio",
+        "resumo",
+        "resuma",
+        "proposta",
+        "artigo",
+        "ensaio",
+        "briefing",
+        "redacao",
+        "redigir",
+        "redija",
+        "escreva",
+    )
+    if "text_generator" in actions or "text_document_generate" in capability_ids or any(
+        _has_word(normalized, token) for token in document_intent_tokens
+    ):
         return "document_generation"
+
     if "session_file" in actions and "file_modifier" in actions:
         return "file_transformation"
 
