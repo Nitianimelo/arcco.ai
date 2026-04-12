@@ -3,6 +3,35 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-04-12 — Claude Code (claude-opus-4-6) — Refatoração Supervisor/Worker + Classifier + Clarificação Visual
+
+### Arquivos modificados:
+- `backend/agents/classifier.py` (NOVO)
+- `backend/agents/contracts.py`
+- `backend/agents/prompts.py`
+- `backend/agents/registry.py`
+- `backend/api/admin.py`
+- `backend/agents/orchestrator.py`
+- `components/chat/ClarificationCard.tsx`
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **classifier.py (NOVO)** — Classificador leve de intent que substitui o planner como primeiro estágio. Usa LLM econômico (gpt-4o-mini) com fallback heurístico (`infer_task_type()`). Retorna `task_type`, `hints` operacionais, e `clarification_questions` visuais quando o intent é ambíguo. Detecta 4 tipos de ambiguidade: design sem estilo, documento sem formato, arquivo sem ação, busca sem escopo.
+2. **contracts.py** — Adicionado `ClassifierOutputContract` (task_type, needs_clarification, clarification_questions, hints, acknowledgment).
+3. **prompts.py** — Adicionados 3 prompts novos: `CLASSIFIER_SYSTEM_PROMPT`, `WEB_RESEARCHER_PROMPT`, `CODE_CREATOR_PROMPT`. Aliases `COPYWRITER_PROMPT` e `DESIGNER_PROMPT` para consistência de naming.
+4. **registry.py** — 3 agentes novos: `classifier` (Sistema, gpt-4o-mini), `web_researcher` (Arcco Chat, gpt-4o-mini), `code_creator` (Arcco Chat, gpt-4o-mini). Total: 9 agentes. Todos aparecem automaticamente no admin.
+5. **admin.py** — `_PROMPT_CONSTANTS` atualizado com classifier, web_researcher, code_creator para edição de prompts via admin.
+6. **orchestrator.py** — (a) Import de `generate_plan` substituído por `classify_intent` do classifier. (b) Bloco do planner substituído por chamada ao classifier com logging completo. (c) Planner loop desativado (`if False:`). (d) ReAct loop promovido como loop principal: `MAX_ITERATIONS` de 3 para 10, hints do classifier injetados no prompt do Supervisor, `accumulated_context` tracking entre iterações. (e) Variável `planner_model` removida.
+7. **ClarificationCard.tsx** — Suporte a `option_details` (description + recommended badge) e `helper_text` por question. Cards visuais com descrição expandida e badge "Recomendado" para opções marcadas.
+8. **ArccoChat.tsx** — Tipo `BrowserClarificationPayload` atualizado para aceitar `option_details` e `helper_text`.
+9. **orchestrator.py** — Criado `_ROUTE_TO_WORKER` (mapeamento route→worker_id), `_worker_model()` e `_worker_name()`. Todos os pontos de dispatch no ReAct loop agora usam o modelo/prompt do worker correto do registry (web_search→web_researcher, python→code_creator, etc.) em vez de cair no fallback do Supervisor.
+10. **capabilities.py** — `owning_agent` atualizado: web_search→web_researcher, python→code_creator.
+
+### Por quê:
+Arquitetura Plan-and-Execute tinha fragilidades: planner fraco gerava steps errados, `tool_choice` forçado falhava em alguns modelos, pipeline abortava em steps intermediários. Nova arquitetura Supervisor/Worker com ReAct loop dá autonomia ao Supervisor para decidir dinamicamente quais tools chamar, com classifier leve apenas classificando intent e gerando hints. Clarificação visual melhora UX quando o pedido é ambíguo. Workers no registry permitem controle granular de modelo por especialista via admin panel.
+
+---
+
 ## 2026-04-12 — Claude Code (claude-opus-4-6) — Correção de falhas do log de design corporativo
 
 ### Arquivos modificados:

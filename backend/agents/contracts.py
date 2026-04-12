@@ -267,6 +267,31 @@ class PlannerOutputContract(BaseModel):
     )
 
 
+class ClassifierOutputContract(BaseModel):
+    """Saída do classificador leve que substitui o planner."""
+
+    task_type: TaskTypeId = Field(
+        default="general_request",
+        description="Classificação canônica da tarefa para roteamento e logs.",
+    )
+    needs_clarification: bool = Field(
+        default=False,
+        description="True quando o pedido precisa de mais informação antes de executar.",
+    )
+    clarification_questions: list[ClarificationQuestionContract] = Field(
+        default_factory=list,
+        description="Perguntas de clarificação para o usuário.",
+    )
+    hints: list[str] = Field(
+        default_factory=list,
+        description="Dicas operacionais para o Supervisor (ex: 'ler anexo primeiro').",
+    )
+    acknowledgment: str = Field(
+        default="",
+        description="Mensagem curta de confirmação do que será feito.",
+    )
+
+
 def infer_capability_id_from_action(action: str) -> str | None:
     normalized = (action or "").strip()
     if not normalized or normalized == "direct_answer":

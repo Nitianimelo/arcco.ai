@@ -1,10 +1,18 @@
 import React, { useState } from 'react';
-import { MessageCircleQuestion, ArrowRight } from 'lucide-react';
+import { MessageCircleQuestion, ArrowRight, Star } from 'lucide-react';
+
+export interface ClarificationOptionDetail {
+  label: string;
+  description?: string;
+  recommended?: boolean;
+}
 
 export interface ClarificationQuestion {
   type: 'choice' | 'open';
   text: string;
   options: string[];
+  option_details?: ClarificationOptionDetail[];
+  helper_text?: string;
 }
 
 interface ClarificationCardProps {
@@ -74,48 +82,75 @@ const ClarificationCard: React.FC<ClarificationCardProps> = ({
           </div>
         )}
 
-        {questions.map((q, qi) => (
-          <div key={qi}>
-            <p className="text-xs font-medium text-neutral-200 mb-2">{q.text}</p>
+        {questions.map((q, qi) => {
+          const details = q.option_details || [];
 
-            {q.type === 'choice' && q.options.length > 0 ? (
-              <div className="space-y-1.5">
-                {q.options.map((opt, oi) => (
-                  <button
-                    key={oi}
-                    onClick={() => updateAnswer(qi, opt)}
-                    disabled={disabled}
-                    className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-all border ${
-                      answers[qi] === opt
-                        ? 'bg-amber-500/15 border-amber-500/50 text-amber-200'
-                        : 'bg-[#1a1a1a] border-[#2a2a2a] text-neutral-400 hover:bg-[#222] hover:text-neutral-200'
-                    } disabled:opacity-50`}
-                  >
-                    <span className="inline-flex items-center gap-2">
-                      <span className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center ${
-                        answers[qi] === opt ? 'border-amber-500' : 'border-neutral-600'
-                      }`}>
-                        {answers[qi] === opt && (
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                        )}
-                      </span>
-                      {opt}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <input
-                type="text"
-                value={answers[qi]}
-                onChange={(e) => updateAnswer(qi, e.target.value)}
-                disabled={disabled}
-                placeholder="Digite sua resposta..."
-                className="w-full px-3 py-2 rounded-lg text-xs bg-[#1a1a1a] border border-[#2a2a2a] text-neutral-200 placeholder-neutral-600 focus:border-amber-500/50 focus:outline-none transition-colors disabled:opacity-50"
-              />
-            )}
-          </div>
-        ))}
+          return (
+            <div key={qi}>
+              <p className="text-xs font-medium text-neutral-200 mb-1.5">{q.text}</p>
+              {q.helper_text && (
+                <p className="text-[10px] text-neutral-500 mb-2">{q.helper_text}</p>
+              )}
+
+              {q.type === 'choice' && q.options.length > 0 ? (
+                <div className="space-y-1.5">
+                  {q.options.map((opt, oi) => {
+                    const detail = details.find(d => d.label === opt);
+                    const isSelected = answers[qi] === opt;
+
+                    return (
+                      <button
+                        key={oi}
+                        onClick={() => updateAnswer(qi, opt)}
+                        disabled={disabled}
+                        className={`w-full text-left px-3 py-2.5 rounded-lg text-xs transition-all border ${
+                          isSelected
+                            ? 'bg-amber-500/15 border-amber-500/50 text-amber-200'
+                            : 'bg-[#1a1a1a] border-[#2a2a2a] text-neutral-400 hover:bg-[#222] hover:text-neutral-200'
+                        } disabled:opacity-50`}
+                      >
+                        <span className="flex items-start gap-2">
+                          <span className={`mt-0.5 w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${
+                            isSelected ? 'border-amber-500' : 'border-neutral-600'
+                          }`}>
+                            {isSelected && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                            )}
+                          </span>
+                          <span className="flex-1 min-w-0">
+                            <span className="flex items-center gap-1.5">
+                              <span className={isSelected ? 'text-amber-200' : ''}>{opt}</span>
+                              {detail?.recommended && (
+                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[9px] font-medium">
+                                  <Star size={8} className="fill-amber-400 text-amber-400" />
+                                  Recomendado
+                                </span>
+                              )}
+                            </span>
+                            {detail?.description && (
+                              <span className="block mt-0.5 text-[10px] text-neutral-500 leading-snug">
+                                {detail.description}
+                              </span>
+                            )}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <input
+                  type="text"
+                  value={answers[qi]}
+                  onChange={(e) => updateAnswer(qi, e.target.value)}
+                  disabled={disabled}
+                  placeholder="Digite sua resposta..."
+                  className="w-full px-3 py-2 rounded-lg text-xs bg-[#1a1a1a] border border-[#2a2a2a] text-neutral-200 placeholder-neutral-600 focus:border-amber-500/50 focus:outline-none transition-colors disabled:opacity-50"
+                />
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* Submit */}

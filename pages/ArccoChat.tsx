@@ -135,7 +135,13 @@ interface SessionAttachment {
 }
 
 interface BrowserClarificationPayload {
-  questions: Array<{ type: 'choice' | 'open'; text: string; options: string[] }>;
+  questions: Array<{
+    type: 'choice' | 'open';
+    text: string;
+    options: string[];
+    option_details?: Array<{ label: string; description?: string; recommended?: boolean }>;
+    helper_text?: string;
+  }>;
   helperText?: string;
   actionUrl?: string;
   actionLabel?: string;

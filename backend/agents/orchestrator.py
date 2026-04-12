@@ -62,6 +62,35 @@ _TERMINAL_TIMEOUT = 90.0
 _MAX_CONTEXT_ENTRY_CHARS = 4000
 _MAX_ACCUMULATED_CONTEXT_CHARS = 24000
 
+# Mapeamento route → worker_id no registry.
+# Quando o Supervisor chama uma tool, o orchestrator resolve a "route"
+# (ex: "web_search", "python") e precisa saber qual worker do registry
+# usar para obter modelo e prompt corretos.
+_ROUTE_TO_WORKER: dict[str, str] = {
+    "web_search": "web_researcher",
+    "python": "code_creator",
+    "text_generator": "text_generator",
+    "design_generator": "design_generator",
+    "file_modifier": "file_modifier",
+    "deep_research": "deep_research",
+    "browser": "chat",          # browser usa o supervisor
+    "session_file": "chat",     # leitura de arquivo usa o supervisor
+    "spy_pages": "chat",        # spy pages usa o supervisor
+}
+
+
+def _worker_model(route: str, fallback_model: str) -> str:
+    """Resolve o modelo do worker para uma route, com fallback pro supervisor."""
+    worker_id = _ROUTE_TO_WORKER.get(route, route)
+    return registry.get_model(worker_id) or fallback_model
+
+
+def _worker_name(route: str) -> str:
+    """Retorna o nome humano do worker para logs."""
+    worker_id = _ROUTE_TO_WORKER.get(route, route)
+    agent = registry.get_agent(worker_id)
+    return agent["name"] if agent else route
+
 
 async def _exec_with_heartbeat(coro, heartbeat_fn, timeout: float, interval: float = _HEARTBEAT_INTERVAL):
     """
@@ -1832,9 +1861,9 @@ async def _run_guarded_specialist(
     try:
         specialist_response = await _run_specialist_with_tools(
             list(temp_messages),
-            registry.get_model(route) or model,
-            registry.get_prompt(route),
-            registry.get_tools(route),
+            _worker_model(route, model),
+            registry.get_prompt(_ROUTE_TO_WORKER.get(route, route)),
+            registry.get_tools(_ROUTE_TO_WORKER.get(route, route)),
             user_id=user_id,
             thought_log=thought_log,
             tool_history=tool_history,
@@ -1873,7 +1902,7 @@ async def orchestrate_and_stream(
        - Passa o `step_context` (resultado do passo anterior) para cada passo logando com clareza.
     """
 
-    from backend.agents.planner import generate_plan
+    from backend.agents.classifier import classify as classify_intent
 
     supervisor_prompt = registry.get_prompt("chat")
     supervisor_model = registry.get_model("chat") or model
@@ -1924,8 +1953,6 @@ async def orchestrate_and_stream(
             "métricas de engajamento e concorrentes dos sites solicitados. Passe as URLs exatamente como "
             "o usuário forneceu."
         )
-
-    planner_model = registry.get_model("planner") or supervisor_model
 
     if browser_resume_token:
         async for event in _resume_browser_handoff(
@@ -1985,53 +2012,37 @@ async def orchestrate_and_stream(
             )
         return
 
-    # ── 1. Planejamento (Planner Output Estruturado — modelo leve) ──
-    yield sse("steps", "<step>Definindo estratégia de execução...</step>")
-    planner_agent_id = None
+    # ── 1. Classificação de Intent (Classifier leve — substitui Planner) ──
+    yield sse("steps", "<step>Classificando pedido...</step>")
+    classifier_agent_id = None
+    session_file_names = [
+        str(item.get("original_name") or item.get("file_name") or "").strip()
+        for item in (session_inventory_items or [])
+        if str(item.get("original_name") or item.get("file_name") or "").strip()
+    ]
     if execution_logger:
-        planner_agent_id = await execution_logger.start_agent(
+        classifier_agent_id = await execution_logger.start_agent(
             execution_id,
-            agent_key="planner",
-            agent_name="Planejador de Execução",
-            model=planner_model,
-            role="planner",
-            route="generate_plan",
+            agent_key="classifier",
+            agent_name="Classificador de Intent",
+            model=registry.get_model("classifier") or "openai/gpt-4o-mini",
+            role="classifier",
+            route="classify_intent",
             input_payload={"user_intent": user_intent},
         )
-    plan_output = await generate_plan(_planner_intent, planner_model)
-    plan_output = _normalize_plan_for_session_files(
-        plan_output,
-        user_intent=user_intent,
-        session_id=session_id,
+    classifier_output = await classify_intent(
+        user_intent=_planner_intent,
+        session_file_names=session_file_names,
     )
-    plan_output = _normalize_plan_for_visual_requests(
-        plan_output,
-        user_intent=user_intent,
-    )
-    plan_output = _normalize_plan_for_mass_document_requests(
-        plan_output,
-        user_intent=user_intent,
-        session_id=session_id,
-    )
-    plan_output = _normalize_plan_for_open_problem_solving(
-        plan_output,
-        user_intent=user_intent,
-        session_id=session_id,
-    )
-    plan_output = _reconcile_plan_clarification_with_inventory(
-        plan_output,
-        session_id=session_id,
-    )
-    inferred_task_type = getattr(plan_output, "task_type", None) or infer_task_type(user_intent, plan_output.steps)
+    inferred_task_type = classifier_output.task_type
     if inferred_task_type != intake_task_type:
         logger.info(
-            "[ORCHESTRATOR] task_type reconciliado: intake=%s → planner=%s (fonte da verdade: planner).",
+            "[ORCHESTRATOR] task_type reconciliado: intake=%s → classifier=%s (fonte da verdade: classifier).",
             intake_task_type,
             inferred_task_type,
         )
-    plan_output.task_type = inferred_task_type
     task_type_definition = get_task_type_definition(inferred_task_type) or {}
-    execution_engine = resolve_execution_engine(inferred_task_type, plan_output.steps)
+    execution_engine = resolve_execution_engine(inferred_task_type)
     mass_doc_handoff = None
     mass_doc_stages = None
     open_solver_context = None
@@ -2044,7 +2055,7 @@ async def orchestrate_and_stream(
         )
         mass_doc_stages = build_mass_document_stages(
             session_items=mass_doc_items,
-            awaiting_user_goal=bool(plan_output.needs_clarification),
+            awaiting_user_goal=bool(classifier_output.needs_clarification),
             delivery_completed=False,
         )
     elif inferred_task_type == "open_problem_solving":
@@ -2052,10 +2063,10 @@ async def orchestrate_and_stream(
         open_solver_context = init_open_solver_context(
             user_intent=user_intent,
             session_items=open_solver_items,
-            step_budget=max(len(plan_output.steps), 1) + 2,
+            step_budget=10,
         )
         open_solver_stages = build_open_solver_stages(
-            awaiting_user_goal=bool(plan_output.needs_clarification),
+            awaiting_user_goal=bool(classifier_output.needs_clarification),
             delivery_completed=False,
             steps_used=0,
             step_budget=int(open_solver_context.get("step_budget") or 0),
@@ -2069,17 +2080,17 @@ async def orchestrate_and_stream(
                 "task_type": inferred_task_type,
                 "execution_engine": execution_engine,
                 "task_type_definition": task_type_definition,
-                "step_count": len(plan_output.steps),
+                "hints": classifier_output.hints,
             },
         )
         await execution_logger.log_event(
             execution_id,
             event_type="strategy_selected",
-            message=f"Estratégia principal selecionada: {execution_engine}",
+            message=f"Estratégia principal selecionada: ReAct loop (Supervisor/Worker)",
             raw_payload={
                 "task_type": inferred_task_type,
                 "execution_engine": execution_engine,
-                "step_count": len(plan_output.steps),
+                "hints": classifier_output.hints,
                 "preconditions": precondition_check.model_dump(),
             },
         )
@@ -2138,48 +2149,42 @@ async def orchestrate_and_stream(
     if execution_logger:
         await execution_logger.log_event(
             execution_id,
-            execution_agent_id=planner_agent_id,
-            event_type="planner_result",
-            message=f"Plano gerado com {len(plan_output.steps)} passo(s)",
+            execution_agent_id=classifier_agent_id,
+            event_type="classifier_result",
+            message=f"Intent classificado como {inferred_task_type}",
             raw_payload={
-                "is_complex": plan_output.is_complex,
                 "task_type": inferred_task_type,
-                "steps": [step.model_dump() for step in plan_output.steps],
+                "hints": classifier_output.hints,
+                "needs_clarification": classifier_output.needs_clarification,
             },
         )
         await execution_logger.finish_agent(
-            planner_agent_id,
+            classifier_agent_id,
             status="completed",
             output_payload={
-                "is_complex": plan_output.is_complex,
-                "step_count": len(plan_output.steps),
                 "task_type": inferred_task_type,
+                "hints": classifier_output.hints,
             },
         )
-    
+
     # ── Acknowledgment rápido (sempre, se disponível) ──
-    if plan_output.acknowledgment:
-        if plan_output.is_complex:
-            # Planos complexos: acknowledgment como mensagem temporária de thinking
-            # para não poluir os chunks do step terminal (ex: HTML do design_generator)
-            yield sse("pre_action", plan_output.acknowledgment)
-        else:
-            yield sse("chunk", plan_output.acknowledgment)
+    if classifier_output.acknowledgment:
+        yield sse("pre_action", classifier_output.acknowledgment)
 
     # ── Clarificação (se necessária, pausa o pipeline) ──
-    if plan_output.needs_clarification and plan_output.questions:
-        questions_payload = [q.model_dump() for q in plan_output.questions]
+    if classifier_output.needs_clarification and classifier_output.clarification_questions:
+        questions_payload = [q.model_dump() for q in classifier_output.clarification_questions]
         yield sse("clarification", json.dumps(questions_payload))
 
         if execution_logger:
             await execution_logger.log_event(
                 execution_id,
                 event_type="clarification_requested",
-                message=f"Aguardando clarificação do usuário ({len(plan_output.questions)} perguntas)",
+                message=f"Aguardando clarificação do usuário ({len(classifier_output.clarification_questions)} perguntas)",
                 raw_payload={
                     "task_type": inferred_task_type,
                     "questions": questions_payload,
-                    "acknowledgment": plan_output.acknowledgment,
+                    "acknowledgment": classifier_output.acknowledgment,
                 },
             )
             if mass_doc_stages:
@@ -2221,8 +2226,8 @@ async def orchestrate_and_stream(
             await execution_logger.finish_execution(execution_id, status="awaiting_clarification")
         return
 
-    if plan_output.is_complex and plan_output.steps:
-        yield sse("steps", f"<step>Plano gerado: {len(plan_output.steps)} passos identificados.</step>")
+    if False:  # ── PLANNER LOOP DESATIVADO — substituído pelo ReAct loop abaixo ──
+        yield sse("steps", "planner loop removido")
 
         # ── Fallback de segurança: garantir que pelo menos o último step é terminal ──
         has_terminal = any(s.is_terminal for s in plan_output.steps)
@@ -3414,30 +3419,24 @@ async def orchestrate_and_stream(
 
         return
 
-    # ── 3. Fallback / Sem Planejamento Complexo (Execução Normal ReAct) ──
-    yield sse("thought", "Pedido direto. Respondendo ou acionando a ferramenta aplicável.")
-    direct_task_type = infer_task_type(user_intent)
-    direct_task_type_definition = get_task_type_definition(direct_task_type) or {}
+    # ── 3. ReAct Loop Principal (Supervisor/Worker) ──
+    yield sse("thought", "Analisando pedido e preparando execução...")
+    direct_task_type = inferred_task_type  # já classificado acima
+    direct_task_type_definition = task_type_definition  # já resolvido acima
     direct_validation_trail: list[dict[str, Any]] = []
     direct_capability_results: list[CapabilityResult] = []
     direct_route_attempts: dict[str, int] = {}
-    direct_mass_doc_stages = (
-        build_mass_document_stages(
-            session_items=_get_session_inventory_items(session_id),
-            awaiting_user_goal=False,
-            delivery_completed=False,
-        )
-        if direct_task_type == "mass_document_analysis"
-        else None
-    )
+    accumulated_context = ""  # contexto acumulado entre iterações do ReAct
+    direct_mass_doc_stages = mass_doc_stages  # já construído acima (ou None)
     if execution_logger:
         await execution_logger.log_event(
             execution_id,
-            event_type="direct_mode_started",
-            message="Fluxo ReAct sem plano complexo iniciado",
+            event_type="react_loop_started",
+            message="ReAct loop principal iniciado",
             raw_payload={
                 "task_type": direct_task_type,
                 "task_type_definition": direct_task_type_definition,
+                "hints": classifier_output.hints,
             },
         )
         if direct_mass_doc_stages:
@@ -3446,7 +3445,7 @@ async def orchestrate_and_stream(
                 execution_id,
                 workflow_id="mass_document_analysis",
                 stages=direct_mass_doc_stages,
-                message="Pipeline documental iniciado em modo direto",
+                message="Pipeline documental iniciado",
             )
             yield sse(
                 "workflow_state",
@@ -3454,16 +3453,24 @@ async def orchestrate_and_stream(
                     {
                         "workflow_id": "mass_document_analysis",
                         "stages": [stage.model_dump() for stage in direct_mass_doc_stages],
-                        "message": "Pipeline documental iniciado em modo direto",
+                        "message": "Pipeline documental iniciado",
                     }
                 ),
             )
+
+    # Monta mensagens com hints do classifier injetados no prompt do Supervisor
     current_messages = [{"role": "system", "content": supervisor_prompt}]
+    if classifier_output.hints:
+        hints_text = "\n".join(f"- {h}" for h in classifier_output.hints)
+        current_messages.append({
+            "role": "system",
+            "content": f"CONTEXTO OPERACIONAL (hints do classificador):\n{hints_text}",
+        })
     if session_inventory_message:
         current_messages.append({"role": "system", "content": session_inventory_message})
     current_messages += messages
     referenced_session_file = _select_referenced_session_file(user_intent, session_id)
-    MAX_ITERATIONS = 3
+    MAX_ITERATIONS = 10
 
     for iteration in range(MAX_ITERATIONS):
         if iteration == 0:
@@ -3529,12 +3536,13 @@ async def orchestrate_and_stream(
                 route = resolved["route"]
                 route_semantics = get_runtime_semantics(tool_name=func_name, route=route)
                 react_agent_id = None
+                worker_id = _ROUTE_TO_WORKER.get(route, route)
                 if execution_logger:
                     react_agent_id = await execution_logger.start_agent(
                         execution_id,
-                        agent_key=route,
-                        agent_name=route,
-                        model=registry.get_model(route) or model,
+                        agent_key=worker_id,
+                        agent_name=_worker_name(route),
+                        model=_worker_model(route, model),
                         role=str(route_semantics["agent_role"]),
                         route=route,
                         input_payload={"func_name": func_name, "func_args": func_args, "iteration": iteration},
@@ -3625,7 +3633,7 @@ async def orchestrate_and_stream(
                                     or ""
                                 )
                         if current_route == "deep_research":
-                            dispatch_args["_model"] = registry.get_model("deep_research") or supervisor_model
+                            dispatch_args["_model"] = _worker_model("deep_research", supervisor_model)
                         elif current_route == "dynamic_skill":
                             dispatch_args["_func_name"] = current_func_name
                         async for event in dispatch_direct_route(
@@ -3834,6 +3842,9 @@ async def orchestrate_and_stream(
                         "content": specialist_result,
                     })
                     direct_capability_results.append(dispatch_result)
+                    # Acumula contexto para consolidated response
+                    if specialist_result and not dispatch_info.get("error"):
+                        accumulated_context += f"\n[{current_route}]: {specialist_result[:3000]}\n"
                     if execution_logger and direct_mass_doc_stages:
                         stage_updates, stage_metadata = mass_document_updates_for_step_result(
                             current_route,
@@ -4051,9 +4062,9 @@ async def orchestrate_and_stream(
                     temp_msgs = recent_context + [{"role": "user", "content": content}]
 
                     yield sse("steps", f"<step>{step_message}</step>")
-                    route_prompt = registry.get_prompt(route)
-                    route_model = registry.get_model(route) or model
-                    route_tools = registry.get_tools(route)
+                    route_prompt = registry.get_prompt(worker_id)
+                    route_model = _worker_model(route, model)
+                    route_tools = registry.get_tools(worker_id)
 
                     if local_rendered_design:
                         final_result = local_rendered_design
@@ -4225,6 +4236,9 @@ async def orchestrate_and_stream(
                         "tool_call_id": tool["id"],
                         "content": specialist_result,
                     })
+                    # Acumula contexto para consolidated response
+                    if specialist_result and not _is_error_result(specialist_result):
+                        accumulated_context += f"\n[{route}]: {specialist_result[:3000]}\n"
                     if execution_logger:
                         await execution_logger.log_event(
                             execution_id,

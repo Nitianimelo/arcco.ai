@@ -86,11 +86,14 @@ _TOOLS_FILE   = Path(__file__).parent.parent / "agents" / "tools.py"
 
 # Mapeamento: agent_id → nome da constante Python em prompts.py
 _PROMPT_CONSTANTS: dict[str, str] = {
-    "chat":           "CHAT_SYSTEM_PROMPT",
-    "text_generator": "TEXT_GENERATOR_SYSTEM_PROMPT",
+    "chat":             "CHAT_SYSTEM_PROMPT",
+    "text_generator":   "TEXT_GENERATOR_SYSTEM_PROMPT",
     "design_generator": "DESIGN_GENERATOR_SYSTEM_PROMPT",
-    "file_modifier":  "FILE_MODIFIER_SYSTEM_PROMPT",
-    "planner":        "PLANNER_SYSTEM_PROMPT",
+    "file_modifier":    "FILE_MODIFIER_SYSTEM_PROMPT",
+    "planner":          "PLANNER_SYSTEM_PROMPT",
+    "classifier":       "CLASSIFIER_SYSTEM_PROMPT",
+    "web_researcher":   "WEB_RESEARCHER_PROMPT",
+    "code_creator":     "CODE_CREATOR_PROMPT",
 }
 
 # Mapeamento: agent_id → nome da constante Python em tools.py
