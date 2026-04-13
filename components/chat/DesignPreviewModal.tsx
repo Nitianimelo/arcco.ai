@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronLeft,
@@ -58,13 +58,14 @@ function ensureHtmlDocument(src: string): string {
 }
 
 function detectSlidesFromHtml(html: string): boolean {
-  const matches = html.match(/<(?:section|div)[^>]*class="[^"]*\bslide\b[^"]*"/gi);
+  const matches = html.match(/<(?:section|div)[^>]*class="[^"]*\bslide\b(?!-)[^"]*"/gi);
   return Boolean(matches && matches.length > 1);
 }
 
 function detectViewerItems(doc: Document, isSlideDeck: boolean): ViewerItem[] {
   if (isSlideDeck) {
-    const slideNodes = Array.from(doc.querySelectorAll('.slide, .slide-container'));
+    const candidates = Array.from(doc.querySelectorAll('.slide, .slide-container'));
+    const slideNodes = candidates.filter(el => el.querySelector('.slide') === null);
     return slideNodes.map((node, index) => {
       const heading = node.querySelector('h1, h2, h3, [data-role="headline"]')?.textContent?.trim();
       const element = node as HTMLElement;
@@ -150,16 +151,35 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  const iframeContainerRef = useRef<HTMLDivElement>(null);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
   const currentHtml = designs[activeIndex] || '';
   const previewHtml = ensureHtmlDocument(currentHtml);
   const title = extractTitle(previewHtml);
   const isSlideDeck = detectSlidesFromHtml(previewHtml);
 
+  const designDimensions = useMemo(() => {
+    const maxWMatch = currentHtml.match(/max-width:\s*(\d+)px\s*;/);
+    const maxHMatch = currentHtml.match(/max-height:\s*(\d+)px\s*;/);
+    if (maxWMatch && maxHMatch) {
+      return { width: parseInt(maxWMatch[1]), height: parseInt(maxHMatch[1]) };
+    }
+    return { width: 1920, height: 1080 };
+  }, [currentHtml]);
+
+  const iframeScale = useMemo(() => {
+    if (!containerSize.width || !containerSize.height) return 1;
+    const scaleX = containerSize.width / designDimensions.width;
+    const scaleY = containerSize.height / designDimensions.height;
+    return Math.min(scaleX, scaleY, 1);
+  }, [containerSize, designDimensions]);
+
   const syncSlideState = (index: number) => {
     const doc = iframeRef.current?.contentDocument;
     if (!doc || !isSlideDeck) return;
-    const slides = Array.from(doc.querySelectorAll('.slide, .slide-container'));
+    const candidates = Array.from(doc.querySelectorAll('.slide, .slide-container'));
+    const slides = candidates.filter(el => el.querySelector('.slide') === null);
     slides.forEach((slide, slideIndex) => {
       const element = slide as HTMLElement;
       if (slideIndex === index) {
@@ -226,6 +246,22 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
       document.body.style.overflow = '';
     };
   }, [isOpen, onClose, activeItem, items.length]);
+
+  useEffect(() => {
+    const el = iframeContainerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0];
+      if (entry) {
+        setContainerSize({
+          width: entry.contentRect.width,
+          height: entry.contentRect.height,
+        });
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!showExportMenu) return;
@@ -479,20 +515,32 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
             )}
           </div>
 
-          <div className="relative flex-1 min-h-0 bg-[#090b10]">
+          <div ref={iframeContainerRef} className="relative flex-1 min-h-0 bg-[#090b10] overflow-hidden">
             {isLoading && (
               <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[#0c0c0f]/80 backdrop-blur-sm">
                 <Loader2 size={28} className="animate-spin text-orange-400 mb-3" />
                 <p className="text-xs text-neutral-400">Renderizando HTML bruto...</p>
               </div>
             )}
-            <iframe
-              ref={iframeRef}
-              srcDoc={previewHtml}
-              className="h-full w-full border-0 bg-white"
-              sandbox="allow-scripts allow-same-origin"
-              title={title}
-            />
+            <div
+              style={{
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                width: `${designDimensions.width}px`,
+                height: `${designDimensions.height}px`,
+                transform: `translate(-50%, -50%) scale(${iframeScale})`,
+              }}
+            >
+              <iframe
+                ref={iframeRef}
+                srcDoc={previewHtml}
+                className="border-0 bg-white"
+                style={{ width: '100%', height: '100%' }}
+                sandbox="allow-scripts allow-same-origin"
+                title={title}
+              />
+            </div>
           </div>
 
           <div className="flex items-center justify-between px-5 py-2.5 border-t border-[#1e1e22] bg-[#0d0d11] shrink-0">

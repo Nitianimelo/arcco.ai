@@ -3,6 +3,22 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-04-13 18:50 — Claude Code (claude-opus-4-6) — Fix distorção de designs no iframe
+
+### Arquivos modificados:
+- `components/chat/DesignPreviewModal.tsx`
+- `components/chat/PresentationCard.tsx`
+
+### O que foi feito:
+1. **DesignPreviewModal.tsx** — Iframe agora renderiza nas dimensoes nativas do design (ex: 1080x1080) e usa `transform: scale()` para encaixar no container do modal, preservando aspect ratio. Adicionado ResizeObserver para recalcular escala dinamicamente. Dimensoes detectadas via regex do CSS (`max-width`/`max-height`), fallback 1920x1080.
+2. **PresentationCard.tsx** — Mesmo fix para o thumbnail de single-page designs. Iframe renderiza nas dimensoes nativas e escala para caber no container `h-72`, centralizado via `translate(-50%, -50%)`.
+3. **DesignPreviewModal.tsx + PresentationCard.tsx** — Fix bug pre-existente na paginacao: regex `\bslide\b` fazia match em "slide-container" (wrapper), inflando contagem de slides. Adicionado negative lookahead `(?!-)`. Seletores DOM `querySelectorAll('.slide, .slide-container')` agora filtram containers que contem `.slide` filhos, evitando que o wrapper seja tratado como slide (causava paginacao quebrada: container vazio ao navegar).
+
+### Por que:
+O HTML gerado pelo design_generator usa `body { height: 100vh }` com canvas de dimensoes fixas (ex: 1080x1080). Quando o iframe preenchia 100% do container pai (modal ou thumbnail), o `100vh` assumia a altura do container, distorcendo o aspect ratio do canvas. Agora o iframe tem dimensoes fixas iguais ao design original, e o CSS transform cuida do redimensionamento visual sem distorcao. O bug de paginacao fazia o seletor incluir o `.slide-container` wrapper como slide index 0, escondendo todos os slides reais ao navegar.
+
+---
+
 ## 2026-04-12 — Claude Code (claude-opus-4-6) — Refatoração Supervisor/Worker + Classifier + Clarificação Visual
 
 ### Arquivos modificados:

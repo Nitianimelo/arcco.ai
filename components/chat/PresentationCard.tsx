@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Eye, Layers, Loader2, Monitor } from 'lucide-react';
 
 interface PresentationCardProps {
@@ -17,12 +17,12 @@ function ensureHtmlDocument(src: string): string {
 }
 
 function isMultiSlidePresentation(html: string): boolean {
-  const slideElements = html.match(/<(?:section|div)[^>]*class="[^"]*\bslide\b[^"]*"/gi);
+  const slideElements = html.match(/<(?:section|div)[^>]*class="[^"]*\bslide\b(?!-)[^"]*"/gi);
   return !!slideElements && slideElements.length > 1;
 }
 
 function countSlides(html: string): number {
-  const slideElements = html.match(/<(?:section|div)[^>]*class="[^"]*\bslide\b[^"]*"/gi);
+  const slideElements = html.match(/<(?:section|div)[^>]*class="[^"]*\bslide\b(?!-)[^"]*"/gi);
   return slideElements ? slideElements.length : 0;
 }
 
@@ -31,6 +31,41 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
   const isPresentation = isMultiSlidePresentation(html);
   const slideCount = isPresentation ? countSlides(html) : 0;
   const previewHtml = ensureHtmlDocument(html);
+
+  const thumbRef = useRef<HTMLDivElement>(null);
+  const [thumbSize, setThumbSize] = useState({ width: 0, height: 0 });
+
+  const designDims = useMemo(() => {
+    const maxWMatch = html.match(/max-width:\s*(\d+)px\s*;/);
+    const maxHMatch = html.match(/max-height:\s*(\d+)px\s*;/);
+    if (maxWMatch && maxHMatch) {
+      return { width: parseInt(maxWMatch[1]), height: parseInt(maxHMatch[1]) };
+    }
+    return { width: 1920, height: 1080 };
+  }, [html]);
+
+  useEffect(() => {
+    const el = thumbRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0];
+      if (entry) {
+        setThumbSize({
+          width: entry.contentRect.width,
+          height: entry.contentRect.height,
+        });
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const thumbScale = useMemo(() => {
+    if (!thumbSize.width || !thumbSize.height) return 0.3;
+    const scaleX = thumbSize.width / designDims.width;
+    const scaleY = thumbSize.height / designDims.height;
+    return Math.min(scaleX, scaleY);
+  }, [thumbSize, designDims]);
 
   if (isStreaming) {
     return (
@@ -91,16 +126,29 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
   return (
     <div className="my-3 w-full group">
       <div
+        ref={thumbRef}
         className="relative h-72 overflow-hidden cursor-pointer rounded-xl border border-[#222] bg-white"
         onClick={() => onOpenPreview?.()}
       >
-        <iframe
-          srcDoc={previewHtml}
-          className="w-full h-full border-0 pointer-events-none bg-white"
-          sandbox="allow-scripts allow-same-origin"
-          title="Miniatura"
-          tabIndex={-1}
-        />
+        <div
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            width: `${designDims.width}px`,
+            height: `${designDims.height}px`,
+            transform: `translate(-50%, -50%) scale(${thumbScale})`,
+          }}
+        >
+          <iframe
+            srcDoc={previewHtml}
+            style={{ width: '100%', height: '100%', border: 0 }}
+            className="pointer-events-none bg-white"
+            sandbox="allow-scripts allow-same-origin"
+            title="Miniatura"
+            tabIndex={-1}
+          />
+        </div>
         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all duration-200 flex items-center justify-center">
           <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1.5 px-4 py-2 rounded-lg bg-orange-500/90 text-white text-xs font-medium shadow-lg">
             <Eye size={14} />
