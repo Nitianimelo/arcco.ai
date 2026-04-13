@@ -3,6 +3,21 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-04-13 20:00 — Claude Code (claude-opus-4-6) — Thumbnail visual para decks + scaling condicional
+
+### Arquivos modificados:
+- `components/chat/PresentationCard.tsx`
+- `components/chat/DesignPreviewModal.tsx`
+
+### O que foi feito:
+1. **PresentationCard.tsx** — Unificado rendering de apresentacoes e single-page: ambos agora mostram iframe thumbnail visual (antes, decks mostravam apenas botao de texto). Para decks, injeta CSS `.slide~.slide{display:none!important}` para exibir apenas o 1o slide no thumbnail. Badge com contagem de slides no rodape. Deteccao de dimensoes melhorada: tenta `max-width + max-height`, depois `max-width + min-height` (px), fallback 1200x900.
+2. **DesignPreviewModal.tsx** — Scaling agora e condicional: so aplica transform:scale quando detecta canvas fixo (max-width + max-height). Designs scrollaveis/empilhados (sem max-height, como slides com flex-column) usam iframe full-container original (h-full w-full), evitando clipping de conteudo.
+
+### Por que:
+O design gerado pela AbbVie usa layout scrollavel (slides empilhados com flex-column, min-height: 1080px por slide, sem max-height). O scaling anterior forcava iframe em 1920x1080 fixo, cortando os slides. Alem disso, o PresentationCard mostrava apenas um botao de texto para decks multi-slide, sem preview visual — o usuario nao conseguia ver o design sem clicar.
+
+---
+
 ## 2026-04-13 18:50 — Claude Code (claude-opus-4-6) — Fix distorção de designs no iframe
 
 ### Arquivos modificados:

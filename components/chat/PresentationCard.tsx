@@ -26,23 +26,37 @@ function countSlides(html: string): number {
   return slideElements ? slideElements.length : 0;
 }
 
+/** Detect the intended render dimensions from the design CSS. */
+function detectDesignDims(html: string): { width: number; height: number } {
+  const maxWMatch = html.match(/max-width:\s*(\d+)px\s*;/);
+  const maxHMatch = html.match(/max-height:\s*(\d+)px\s*;/);
+  if (maxWMatch && maxHMatch) {
+    return { width: parseInt(maxWMatch[1]), height: parseInt(maxHMatch[1]) };
+  }
+  // Scrollable designs: try max-width + min-height (px only, not vh)
+  const minHMatch = html.match(/min-height:\s*(\d+)px\s*;/);
+  if (maxWMatch && minHMatch) {
+    return { width: parseInt(maxWMatch[1]), height: parseInt(minHMatch[1]) };
+  }
+  return { width: 1200, height: 900 };
+}
+
 const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming = false, onOpenPreview }) => {
   const title = extractTitle(html);
   const isPresentation = isMultiSlidePresentation(html);
   const slideCount = isPresentation ? countSlides(html) : 0;
-  const previewHtml = ensureHtmlDocument(html);
+
+  const previewHtml = useMemo(() => {
+    const doc = ensureHtmlDocument(html);
+    if (!isPresentation) return doc;
+    // Inject CSS to show only the first slide in the thumbnail
+    return doc.replace('</head>', '<style>.slide~.slide{display:none!important}</style></head>');
+  }, [html, isPresentation]);
 
   const thumbRef = useRef<HTMLDivElement>(null);
   const [thumbSize, setThumbSize] = useState({ width: 0, height: 0 });
 
-  const designDims = useMemo(() => {
-    const maxWMatch = html.match(/max-width:\s*(\d+)px\s*;/);
-    const maxHMatch = html.match(/max-height:\s*(\d+)px\s*;/);
-    if (maxWMatch && maxHMatch) {
-      return { width: parseInt(maxWMatch[1]), height: parseInt(maxHMatch[1]) };
-    }
-    return { width: 1920, height: 1080 };
-  }, [html]);
+  const designDims = useMemo(() => detectDesignDims(html), [html]);
 
   useEffect(() => {
     const el = thumbRef.current;
@@ -86,43 +100,7 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
     );
   }
 
-  if (isPresentation) {
-    return (
-      <div className="my-3 w-full">
-        <button
-          type="button"
-          onClick={() => onOpenPreview?.()}
-          className="group w-full rounded-2xl border border-[#222833] bg-[linear-gradient(180deg,#11151d_0%,#0d1016_100%)] p-5 text-left transition-colors hover:border-[#384152]"
-        >
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.2em] text-neutral-500">
-                <Layers size={12} />
-                Deck HTML
-              </div>
-              <h4 className="mt-3 truncate text-sm font-medium text-neutral-100">{title}</h4>
-              <p className="mt-2 max-w-xl text-xs leading-5 text-neutral-400">
-                O preview expandido renderiza o HTML bruto do deck e permite paginação por slide.
-              </p>
-            </div>
-            <div className="shrink-0 rounded-xl border border-[#2c3341] bg-[#0a0d14] px-3 py-2 text-right">
-              <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">Slides</div>
-              <div className="mt-1 text-lg font-semibold text-neutral-100">{slideCount}</div>
-            </div>
-          </div>
-
-          <div className="mt-4 flex items-center justify-between rounded-xl border border-[#1d2230] bg-[#0a0d14] px-4 py-3">
-            <div className="text-xs text-neutral-400">Abrir renderer bruto</div>
-            <div className="flex items-center gap-1.5 rounded-lg bg-orange-500/90 px-3 py-2 text-xs font-medium text-white shadow-lg transition-opacity group-hover:opacity-100">
-              <Eye size={14} />
-              Visualizar
-            </div>
-          </div>
-        </button>
-      </div>
-    );
-  }
-
+  // Unified thumbnail for both presentations and single-page designs
   return (
     <div className="my-3 w-full group">
       <div
@@ -156,9 +134,17 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
           </div>
         </div>
       </div>
-      <div className="mt-2 min-w-0">
-        <p className="text-xs text-neutral-200 truncate">{title}</p>
-        <p className="text-[10px] text-neutral-500">HTML bruto do agente</p>
+      <div className="mt-2 flex items-center justify-between min-w-0">
+        <div className="min-w-0">
+          <p className="text-xs text-neutral-200 truncate">{title}</p>
+          <p className="text-[10px] text-neutral-500">{isPresentation ? 'Deck HTML' : 'HTML bruto do agente'}</p>
+        </div>
+        {isPresentation && (
+          <div className="flex items-center gap-1.5 shrink-0 rounded-lg bg-[#1a1d24] px-2.5 py-1.5">
+            <Layers size={10} className="text-neutral-500" />
+            <span className="text-[10px] font-medium text-neutral-400">{slideCount} slides</span>
+          </div>
+        )}
       </div>
     </div>
   );

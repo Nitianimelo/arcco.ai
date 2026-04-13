@@ -159,17 +159,19 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
   const title = extractTitle(previewHtml);
   const isSlideDeck = detectSlidesFromHtml(previewHtml);
 
-  const designDimensions = useMemo(() => {
+  // Only use scaling when the design has a fixed canvas (max-width + max-height).
+  // Scrollable/stacked designs (no max-height) render at full container size.
+  const designDimensions = useMemo<{ width: number; height: number } | null>(() => {
     const maxWMatch = currentHtml.match(/max-width:\s*(\d+)px\s*;/);
     const maxHMatch = currentHtml.match(/max-height:\s*(\d+)px\s*;/);
     if (maxWMatch && maxHMatch) {
       return { width: parseInt(maxWMatch[1]), height: parseInt(maxHMatch[1]) };
     }
-    return { width: 1920, height: 1080 };
+    return null;
   }, [currentHtml]);
 
   const iframeScale = useMemo(() => {
-    if (!containerSize.width || !containerSize.height) return 1;
+    if (!designDimensions || !containerSize.width || !containerSize.height) return 1;
     const scaleX = containerSize.width / designDimensions.width;
     const scaleY = containerSize.height / designDimensions.height;
     return Math.min(scaleX, scaleY, 1);
@@ -522,25 +524,35 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
                 <p className="text-xs text-neutral-400">Renderizando HTML bruto...</p>
               </div>
             )}
-            <div
-              style={{
-                position: 'absolute',
-                top: '50%',
-                left: '50%',
-                width: `${designDimensions.width}px`,
-                height: `${designDimensions.height}px`,
-                transform: `translate(-50%, -50%) scale(${iframeScale})`,
-              }}
-            >
+            {designDimensions ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '50%',
+                  left: '50%',
+                  width: `${designDimensions.width}px`,
+                  height: `${designDimensions.height}px`,
+                  transform: `translate(-50%, -50%) scale(${iframeScale})`,
+                }}
+              >
+                <iframe
+                  ref={iframeRef}
+                  srcDoc={previewHtml}
+                  className="border-0 bg-white"
+                  style={{ width: '100%', height: '100%' }}
+                  sandbox="allow-scripts allow-same-origin"
+                  title={title}
+                />
+              </div>
+            ) : (
               <iframe
                 ref={iframeRef}
                 srcDoc={previewHtml}
-                className="border-0 bg-white"
-                style={{ width: '100%', height: '100%' }}
+                className="h-full w-full border-0 bg-white"
                 sandbox="allow-scripts allow-same-origin"
                 title={title}
               />
-            </div>
+            )}
           </div>
 
           <div className="flex items-center justify-between px-5 py-2.5 border-t border-[#1e1e22] bg-[#0d0d11] shrink-0">
