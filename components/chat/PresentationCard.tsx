@@ -1,6 +1,5 @@
-import React, { useRef } from 'react';
-import { Eye, Loader2, Monitor, Layers } from 'lucide-react';
-import { CANVAS_PRESETS, inferCanvasPreset } from '../../lib/designContract';
+import React from 'react';
+import { Eye, Layers, Loader2, Monitor } from 'lucide-react';
 
 interface PresentationCardProps {
   html: string;
@@ -9,7 +8,7 @@ interface PresentationCardProps {
 }
 
 function extractTitle(html: string) {
-  return html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] ?? 'Design gerado';
+  return html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() ?? 'Design gerado';
 }
 
 function ensureHtmlDocument(src: string): string {
@@ -17,10 +16,7 @@ function ensureHtmlDocument(src: string): string {
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Design</title></head><body>${src}</body></html>`;
 }
 
-/** Detect if the HTML contains multiple slides (presentation vs single design) */
 function isMultiSlidePresentation(html: string): boolean {
-  // Match elements with class containing "slide" as a standalone word
-  // Covers: class="slide", class="slide active", class="slide-container"
   const slideElements = html.match(/<(?:section|div)[^>]*class="[^"]*\bslide\b[^"]*"/gi);
   return !!slideElements && slideElements.length > 1;
 }
@@ -30,52 +26,15 @@ function countSlides(html: string): number {
   return slideElements ? slideElements.length : 0;
 }
 
-/** For presentations: show only the first slide at 16:9, hide nav controls */
-function normalizePresentationThumbnail(html: string): string {
-  const exactHtml = ensureHtmlDocument(html);
-  const overrideCSS = `<style id="arcco-pres-thumb">
-    /* Hide all slides, then show only the first */
-    .slide, .slide-container { display: none !important; }
-    .slide:first-of-type, .slide-container:first-of-type {
-      display: flex !important;
-      opacity: 1 !important;
-      width: 100% !important;
-      height: 100% !important;
-      min-height: 0 !important;
-      max-width: 100% !important;
-      max-height: 100% !important;
-    }
-    /* Hide navigation controls */
-    .nav-btn, .slide-nav, .slide-counter, .slide-navigation,
-    [class*="nav-btn"], [class*="slide-nav"], [class*="slide-counter"],
-    button[onclick*="slide"], .navigation { display: none !important; }
-    /* Clean body */
-    body { margin: 0; overflow: hidden; }
-  </style>`;
-
-  // Remove any JS that could interfere with slide visibility
-  const noJS = exactHtml.replace(/<script(?!.*src=["']https?:\/\/cdn)[\s\S]*?<\/script>/gi, '');
-
-  if (noJS.includes('</head>')) {
-    return noJS.replace('</head>', overrideCSS + '</head>');
-  }
-  return overrideCSS + noJS;
-}
-
 const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming = false, onOpenPreview }) => {
-  const thumbRef = useRef<HTMLIFrameElement>(null);
   const title = extractTitle(html);
   const isPresentation = isMultiSlidePresentation(html);
   const slideCount = isPresentation ? countSlides(html) : 0;
-  const preset = inferCanvasPreset(html);
-  const presetSpec = CANVAS_PRESETS[preset];
-  const thumbnailHtml = isPresentation
-    ? normalizePresentationThumbnail(html)
-    : ensureHtmlDocument(html);
+  const previewHtml = ensureHtmlDocument(html);
 
   if (isStreaming) {
     return (
-      <div className="my-3 rounded-xl border border-orange-500/20 bg-[#111113] overflow-hidden shadow-lg w-full max-w-sm animate-pulse">
+      <div className="my-3 rounded-xl border border-orange-500/20 bg-[#111113] overflow-hidden shadow-lg w-full animate-pulse">
         <div className="flex items-center gap-3 px-4 py-3 border-b border-[#1e1e1e]">
           <div className="p-2 bg-orange-500/10 rounded-lg">
             <Monitor size={16} className="text-orange-400" />
@@ -92,34 +51,56 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
     );
   }
 
-  // Presentation: 16:9 card. Single design: square card.
-  const aspectClass = presetSpec.width === presetSpec.height
-      ? 'aspect-square'
-      : presetSpec.width > presetSpec.height
-        ? 'aspect-video'
-        : 'aspect-[4/5]';
+  if (isPresentation) {
+    return (
+      <div className="my-3 w-full">
+        <button
+          type="button"
+          onClick={() => onOpenPreview?.()}
+          className="group w-full rounded-2xl border border-[#222833] bg-[linear-gradient(180deg,#11151d_0%,#0d1016_100%)] p-5 text-left transition-colors hover:border-[#384152]"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.2em] text-neutral-500">
+                <Layers size={12} />
+                Deck HTML
+              </div>
+              <h4 className="mt-3 truncate text-sm font-medium text-neutral-100">{title}</h4>
+              <p className="mt-2 max-w-xl text-xs leading-5 text-neutral-400">
+                O preview expandido renderiza o HTML bruto do deck e permite paginação por slide.
+              </p>
+            </div>
+            <div className="shrink-0 rounded-xl border border-[#2c3341] bg-[#0a0d14] px-3 py-2 text-right">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">Slides</div>
+              <div className="mt-1 text-lg font-semibold text-neutral-100">{slideCount}</div>
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center justify-between rounded-xl border border-[#1d2230] bg-[#0a0d14] px-4 py-3">
+            <div className="text-xs text-neutral-400">Abrir renderer bruto</div>
+            <div className="flex items-center gap-1.5 rounded-lg bg-orange-500/90 px-3 py-2 text-xs font-medium text-white shadow-lg transition-opacity group-hover:opacity-100">
+              <Eye size={14} />
+              Visualizar
+            </div>
+          </div>
+        </button>
+      </div>
+    );
+  }
 
   return (
-    <div className="my-3 w-full max-w-sm group">
+    <div className="my-3 w-full group">
       <div
-        className={`relative ${aspectClass} overflow-hidden cursor-pointer rounded-xl border border-[#222]`}
+        className="relative h-72 overflow-hidden cursor-pointer rounded-xl border border-[#222] bg-white"
         onClick={() => onOpenPreview?.()}
       >
         <iframe
-          ref={thumbRef}
-          srcDoc={thumbnailHtml}
-          className="w-full h-full border-0 pointer-events-none bg-transparent"
+          srcDoc={previewHtml}
+          className="w-full h-full border-0 pointer-events-none bg-white"
           sandbox="allow-scripts allow-same-origin"
           title="Miniatura"
           tabIndex={-1}
         />
-        {/* Slide count badge */}
-        {isPresentation && slideCount > 0 && (
-          <div className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 rounded-md bg-black/60 backdrop-blur-sm text-white text-[10px] font-medium">
-            <Layers size={10} />
-            {slideCount} slides
-          </div>
-        )}
         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all duration-200 flex items-center justify-center">
           <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1.5 px-4 py-2 rounded-lg bg-orange-500/90 text-white text-xs font-medium shadow-lg">
             <Eye size={14} />
@@ -129,13 +110,7 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
       </div>
       <div className="mt-2 min-w-0">
         <p className="text-xs text-neutral-200 truncate">{title}</p>
-        <p className="text-[10px] text-neutral-500">
-          {isPresentation
-            ? (preset === 'instagram-square' || preset === 'instagram-portrait'
-                ? `Carrossel com ${slideCount} slides`
-                : `Apresentação com ${slideCount} slides`)
-            : presetSpec.label}
-        </p>
+        <p className="text-[10px] text-neutral-500">HTML bruto do agente</p>
       </div>
     </div>
   );
