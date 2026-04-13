@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  FileStack,
   FileImage,
   FileText,
   Image,
@@ -19,7 +20,6 @@ import {
   CANVAS_PRESETS,
   type CanvasPreset,
   inferCanvasPreset,
-  normalizeDesignHtml,
 } from '../../lib/designContract';
 
 // ────────────────────────────────────────────────────────────────
@@ -36,6 +36,10 @@ interface DesignPreviewModalProps {
 type ExportFormat = 'pdf' | 'pptx' | 'png' | 'jpeg';
 type ResolutionOption = 'hd-720' | 'hd-1080';
 type SlideSelection = 'all' | 'current';
+type NativePage = {
+  id: string;
+  label: string;
+};
 
 // ────────────────────────────────────────────────────────────────
 // Constants
@@ -83,6 +87,51 @@ function extractTitle(html: string) {
 function ensureHtmlDocument(src: string): string {
   if (/<!doctype html>/i.test(src) || /<html[\s>]/i.test(src)) return src;
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Design</title></head><body>${src}</body></html>`;
+}
+
+function buildNativePreviewHtml(src: string): string {
+  const html = ensureHtmlDocument(src);
+  const previewStyles = `
+    <style id="arcco-native-preview">
+      html, body {
+        margin: 0 !important;
+        min-height: 100% !important;
+        background: #101116 !important;
+        color-scheme: dark;
+      }
+      body {
+        padding: 28px !important;
+        overflow: auto !important;
+        -webkit-font-smoothing: antialiased;
+      }
+      body::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+      }
+      body::-webkit-scrollbar-thumb {
+        background: rgba(255,255,255,0.14);
+        border-radius: 999px;
+      }
+      body::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .page,
+      .sheet,
+      [data-page],
+      [data-arcco-page],
+      [data-page-number] {
+        scroll-margin-top: 24px;
+      }
+      img, svg, canvas, video {
+        max-width: 100%;
+      }
+    </style>
+  `;
+
+  if (html.includes('</head>')) {
+    return html.replace('</head>', `${previewStyles}</head>`);
+  }
+  return html.replace(/<html([^>]*)>/i, `<html$1><head>${previewStyles}</head>`);
 }
 
 async function downloadBlob(blob: Blob, filename: string) {
@@ -200,55 +249,6 @@ function injectPresentationNav(html: string): string {
 // Main Component
 // ────────────────────────────────────────────────────────────────
 
-const getPresetAspect = (preset: CanvasPreset): string => {
-  const spec = CANVAS_PRESETS[preset];
-  return `${spec.width} / ${spec.height}`;
-};
-
-type FrameKind = 'mobile' | 'tablet' | 'desktop';
-
-const getFrameKind = (preset: CanvasPreset): FrameKind => {
-  if (preset === 'story' || preset === 'instagram-square' || preset === 'instagram-portrait') return 'mobile';
-  if (preset === 'a4-portrait' || preset === 'a4-landscape') return 'tablet';
-  return 'desktop';
-};
-
-const renderFrameShell = (kind: FrameKind, children: React.ReactNode) => {
-  if (kind === 'mobile') {
-    return (
-      <div className="relative rounded-[2.2rem] border border-[#2a2d33] bg-[#050506] p-3 shadow-[0_30px_90px_rgba(0,0,0,0.55)]">
-        <div className="pointer-events-none absolute left-1/2 top-2 h-1.5 w-20 -translate-x-1/2 rounded-full bg-[#15171b]" />
-        <div className="overflow-hidden rounded-[1.6rem] border border-[#17191d] bg-[#09090c]">
-          {children}
-        </div>
-      </div>
-    );
-  }
-
-  if (kind === 'tablet') {
-    return (
-      <div className="relative rounded-[2rem] border border-[#2a2d33] bg-[#050506] p-4 shadow-[0_30px_90px_rgba(0,0,0,0.48)]">
-        <div className="overflow-hidden rounded-[1.35rem] border border-[#17191d] bg-[#09090c]">
-          {children}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-[1.4rem] border border-[#2a2d33] bg-[#050506] p-3 shadow-[0_30px_90px_rgba(0,0,0,0.42)]">
-      <div className="mb-3 flex items-center gap-2 px-2">
-        <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
-        <span className="h-2.5 w-2.5 rounded-full bg-[#febc2e]" />
-        <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
-      </div>
-      <div className="overflow-hidden rounded-[0.9rem] border border-[#17191d] bg-[#09090c]">
-        {children}
-      </div>
-    </div>
-  );
-};
-
 const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose, designs, initialIndex = 0 }) => {
   const [activeIndex, setActiveIndex] = useState(initialIndex);
   const [isLoading, setIsLoading] = useState(true);
@@ -268,14 +268,14 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
   const [slideSelection, setSlideSelection] = useState<SlideSelection>('all');
   const [resolution, setResolution] = useState<ResolutionOption>('hd-720');
   const [previewPreset, setPreviewPreset] = useState<CanvasPreset>('instagram-square');
+  const [nativePages, setNativePages] = useState<NativePage[]>([]);
+  const [activePage, setActivePage] = useState(0);
 
   const currentHtml = designs[activeIndex] || '';
   const title = extractTitle(currentHtml);
   const isPresentationMode = isMultiSlidePresentation(currentHtml);
-  const normalizedPreviewHtml = normalizeDesignHtml(currentHtml, previewPreset);
   const previewPresetSpec = CANVAS_PRESETS[previewPreset];
-  const previewAspect = getPresetAspect(previewPreset);
-  const frameKind = getFrameKind(previewPreset);
+  const previewHtml = buildNativePreviewHtml(currentHtml);
 
   // ── Presentation: listen for messages from iframe ──
   useEffect(() => {
@@ -315,10 +315,85 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
         : inferred;
     setPreviewPreset(fallbackPreset);
     setIsLoading(true);
+    setNativePages([]);
+    setActivePage(0);
   }, [isOpen, isPresentationMode, currentHtml, activeIndex]);
+
+  useEffect(() => {
+    if (!isOpen || isPresentationMode) return;
+    const iframe = singleIframeRef.current;
+    if (!iframe) return;
+
+    const detectPages = () => {
+      const doc = iframe.contentDocument;
+      if (!doc) return;
+      const selectors = ['.page', '.sheet', '[data-page]', '[data-arcco-page]', '[data-page-number]'];
+      const nodes = Array.from(doc.querySelectorAll(selectors.join(',')));
+      const pages = (nodes.length > 0 ? nodes : [doc.body]).map((node, index) => {
+        const pageNumber = node.getAttribute?.('data-page-number')?.trim();
+        const aria = node.getAttribute?.('aria-label')?.trim();
+        const heading = node.querySelector?.('h1, h2, h3');
+        const headingText = heading?.textContent?.trim();
+        const label = pageNumber
+          ? `Página ${pageNumber}`
+          : aria
+            ? aria
+            : headingText
+              ? `Página ${index + 1} · ${headingText.slice(0, 42)}`
+              : `Página ${index + 1}`;
+        if (!(node as HTMLElement).id) {
+          (node as HTMLElement).id = `arcco-native-page-${index + 1}`;
+        }
+        return { id: (node as HTMLElement).id, label };
+      });
+      setNativePages(pages);
+      setIsLoading(false);
+    };
+
+    const handleLoad = () => {
+      detectPages();
+      try {
+        const doc = iframe.contentDocument;
+        doc?.addEventListener('scroll', () => {
+          const scrollRoot = doc.scrollingElement || doc.documentElement;
+          const pageNodes = nativePages.length
+            ? nativePages
+                .map(page => doc.getElementById(page.id))
+                .filter(Boolean) as HTMLElement[]
+            : [];
+          if (!scrollRoot || pageNodes.length === 0) return;
+          const offset = scrollRoot.scrollTop + 48;
+          let current = 0;
+          for (let i = 0; i < pageNodes.length; i += 1) {
+            if (pageNodes[i].offsetTop <= offset) current = i;
+          }
+          setActivePage(current);
+        }, { passive: true });
+      } catch {
+        /* noop */
+      }
+    };
+
+    if (iframe.contentDocument?.readyState === 'complete') {
+      handleLoad();
+    }
+    iframe.addEventListener('load', handleLoad);
+    return () => iframe.removeEventListener('load', handleLoad);
+  }, [isOpen, isPresentationMode, currentHtml, activeIndex, nativePages.length]);
 
   const goToSlide = (index: number) => {
     presIframeRef.current?.contentWindow?.postMessage({ type: 'arcco_go_to_slide', index }, '*');
+  };
+
+  const goToNativePage = (index: number) => {
+    const iframe = singleIframeRef.current;
+    const page = nativePages[index];
+    if (!iframe || !page) return;
+    const doc = iframe.contentDocument;
+    const target = doc?.getElementById(page.id);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setActivePage(index);
   };
 
   // ── Escape to close ──
@@ -358,10 +433,10 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
       if (isPresentationMode) {
         if (slideSelection === 'current') opts.slide_index = currentSlide;
         if (fmt === 'png' || fmt === 'jpeg') opts.resolution = resolution;
-        await downloadHtmlExport(normalizedPreviewHtml, title, fmt, opts);
+        await downloadHtmlExport(previewHtml, title, fmt, opts);
       } else {
         if (fmt === 'png' || fmt === 'jpeg') opts.resolution = resolution;
-        await downloadHtmlExport(normalizedPreviewHtml, title, fmt, opts);
+        await downloadHtmlExport(previewHtml, title, fmt, opts);
       }
     } catch (e: any) {
       setError(`Erro ao exportar: ${e.message}`);
@@ -377,14 +452,72 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
   // ── Render ──
   if (!isOpen) return null;
 
-  const modalSize = isFullscreen ? 'inset-0 rounded-none' : 'inset-3 sm:inset-4 md:inset-6 lg:inset-10';
+  const panelWidth = isFullscreen ? 'w-screen rounded-none' : 'w-[min(94vw,1400px)]';
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center">
+    <div className="fixed inset-0 z-[100] flex items-stretch justify-end">
       <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose} />
 
-      <div className={`absolute ${modalSize} bg-[#0c0c0f] border border-[#222] rounded-2xl flex flex-col overflow-hidden shadow-2xl`}>
+      <div className={`relative h-full ${panelWidth} bg-[#0c0c0f] border-l border-[#222] flex overflow-hidden shadow-2xl`}>
 
+        {!isPresentationMode && (
+          <aside className="hidden lg:flex w-[280px] shrink-0 flex-col border-r border-[#1e1e22] bg-[#0a0b0f]">
+            <div className="px-5 py-4 border-b border-[#1e1e22]">
+              <div className="text-[11px] uppercase tracking-[0.22em] text-neutral-500">Navegação</div>
+              <h3 className="mt-2 text-sm font-medium text-neutral-100 truncate">{title}</h3>
+              <p className="mt-1 text-xs text-neutral-500">
+                {designs.length > 1 ? `${activeIndex + 1} de ${designs.length} artes` : `${nativePages.length || 1} página${nativePages.length === 1 ? '' : 's'}`}
+              </p>
+            </div>
+
+            {designs.length > 1 && (
+              <div className="px-3 py-3 border-b border-[#1e1e22]">
+                <div className="mb-2 px-2 text-[10px] uppercase tracking-[0.18em] text-neutral-500">Artes</div>
+                <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                  {designs.map((design, i) => (
+                    <button
+                      key={i}
+                      onClick={() => switchDesign(i)}
+                      className={`w-full rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                        i === activeIndex
+                          ? 'border-[#3b4453] bg-[#141823] text-neutral-100'
+                          : 'border-[#20232c] bg-[#0f1117] text-neutral-400 hover:bg-[#151923] hover:text-neutral-200'
+                      }`}
+                    >
+                      <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">Arte {i + 1}</div>
+                      <div className="mt-1 truncate text-xs">{extractTitle(design)}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex-1 px-3 py-3 min-h-0">
+              <div className="mb-2 flex items-center gap-2 px-2 text-[10px] uppercase tracking-[0.18em] text-neutral-500">
+                <FileStack size={12} />
+                Páginas
+              </div>
+              <div className="space-y-1.5 overflow-y-auto pr-1 max-h-full">
+                {(nativePages.length > 0 ? nativePages : [{ id: 'single', label: 'Página única' }]).map((page, i) => (
+                  <button
+                    key={page.id}
+                    onClick={() => goToNativePage(i)}
+                    className={`w-full rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                      i === activePage
+                        ? 'border-[#3b4453] bg-[#141823] text-neutral-100'
+                        : 'border-[#20232c] bg-[#0f1117] text-neutral-400 hover:bg-[#151923] hover:text-neutral-200'
+                    }`}
+                  >
+                    <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">Página {i + 1}</div>
+                    <div className="mt-1 text-xs line-clamp-2">{page.label}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </aside>
+        )}
+
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {/* ── Header ─────────────────────────────────────────── */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-[#1e1e22] bg-[#0f0f13] shrink-0">
           <div className="flex items-center gap-3 min-w-0">
@@ -398,6 +531,9 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
               )}
               {!isPresentationMode && designs.length > 1 && (
                 <p className="text-[10px] text-neutral-600">{activeIndex + 1} de {designs.length} artes</p>
+              )}
+              {!isPresentationMode && nativePages.length > 1 && (
+                <p className="text-[10px] text-neutral-600">Página {activePage + 1} de {nativePages.length}</p>
               )}
             </div>
           </div>
@@ -576,23 +712,15 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
               )}
 
               {/* Iframe container */}
-              <div className="flex-1 min-h-0 relative flex items-center justify-center p-6">
-                {renderFrameShell(
-                  frameKind,
-                  <div
-                    className="w-full max-w-[calc(100vw-440px)] max-h-full"
-                    style={{ aspectRatio: previewAspect }}
-                  >
-                    <iframe
-                      ref={presIframeRef}
-                      srcDoc={injectPresentationNav(normalizedPreviewHtml)}
-                      className="w-full h-full border-0"
-                      sandbox="allow-scripts allow-same-origin"
-                      title="Apresentacao"
-                      onLoad={() => setIsLoading(false)}
-                    />
-                  </div>,
-                )}
+              <div className="flex-1 min-h-0 relative bg-[#090b10]">
+                <iframe
+                  ref={presIframeRef}
+                  srcDoc={injectPresentationNav(previewHtml)}
+                  className="h-full w-full border-0"
+                  sandbox="allow-scripts allow-same-origin"
+                  title="Apresentacao"
+                  onLoad={() => setIsLoading(false)}
+                />
               </div>
 
               {/* Slide navigation bar */}
@@ -639,29 +767,48 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
           ) : (
             /* ── SINGLE DESIGN MODE: exact HTML preview + export sidebar ── */
             <>
-              <div className="flex-1 min-w-0 bg-[#0a0a0e] overflow-hidden relative flex items-center justify-center">
+              <div className="flex-1 min-w-0 bg-[#090b10] overflow-hidden relative flex flex-col">
                 {isLoading && (
                   <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[#0c0c0f]/80 backdrop-blur-sm">
                   <Loader2 size={28} className="animate-spin text-orange-400 mb-3" />
                   <p className="text-xs text-neutral-400">Renderizando...</p>
                 </div>
               )}
-                {renderFrameShell(
-                  frameKind,
-                  <div
-                    className="w-full max-w-[calc(100vw-440px)] max-h-full"
-                    style={{ aspectRatio: previewAspect }}
-                  >
-                    <iframe
-                      ref={singleIframeRef}
-                      srcDoc={normalizedPreviewHtml}
-                      className="w-full h-full border-0"
-                      sandbox="allow-scripts allow-same-origin"
-                      title="Design"
-                      onLoad={() => setIsLoading(false)}
-                    />
-                  </div>,
-                )}
+                <div className="flex items-center justify-between gap-3 border-b border-[#1c2028] bg-[#0d1016] px-4 py-3 shrink-0">
+                  <div className="min-w-0">
+                    <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">Preview nativo</div>
+                    <div className="truncate text-xs text-neutral-300">Renderização direta do HTML gerado, com scroll preservado</div>
+                  </div>
+                  {nativePages.length > 1 && (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => goToNativePage(Math.max(0, activePage - 1))}
+                        disabled={activePage === 0}
+                        className="rounded-lg border border-[#2a2f39] p-2 text-neutral-400 transition-colors hover:bg-white/[0.05] hover:text-neutral-200 disabled:opacity-35"
+                      >
+                        <ChevronLeft size={15} />
+                      </button>
+                      <div className="rounded-lg border border-[#232833] bg-[#11151d] px-3 py-2 text-[11px] text-neutral-300">
+                        Página {activePage + 1} / {nativePages.length}
+                      </div>
+                      <button
+                        onClick={() => goToNativePage(Math.min(nativePages.length - 1, activePage + 1))}
+                        disabled={activePage >= nativePages.length - 1}
+                        className="rounded-lg border border-[#2a2f39] p-2 text-neutral-400 transition-colors hover:bg-white/[0.05] hover:text-neutral-200 disabled:opacity-35"
+                      >
+                        <ChevronRight size={15} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <iframe
+                  ref={singleIframeRef}
+                  srcDoc={previewHtml}
+                  className="h-full w-full border-0"
+                  sandbox="allow-scripts allow-same-origin"
+                  title="Design"
+                  onLoad={() => setIsLoading(false)}
+                />
               </div>
 
             </>
@@ -694,6 +841,7 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
           )}
           {error && <span className="text-[11px] text-red-400 truncate max-w-xs">{error}</span>}
         </div>
+      </div>
       </div>
     </div>
   );

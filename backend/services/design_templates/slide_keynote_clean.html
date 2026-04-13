@@ -10,6 +10,13 @@
     .container-base { background: linear-gradient(140deg, #08111f 0%, #0f172a 55%, #0b1222 100%); color: #e2e8f0; }
     .slide-card { width: 100%; height: 100%; border-radius: 28px; overflow: hidden; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06); }
     .slide-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .slide-card .metric-fallback,
+    .slide-card .chart-shell { width: 100%; height: 100%; display: flex; flex-direction: column; }
+    .slide-card .metric-fallback { align-items: center; justify-content: center; font-size: clamp(46px, 6cqw, 112px); font-weight: 900; color: #e2e8f0; }
+    .slide-card .chart-shell { padding: 2cqw; gap: 1cqw; }
+    .slide-card .chart-title { font-size: 1.05cqw; letter-spacing: .08em; text-transform: uppercase; color: #7dd3fc; }
+    .slide-card .chart-stage { flex: 1; min-height: 0; position: relative; }
+    .slide-card canvas { width: 100% !important; height: 100% !important; }
     .slide-kicker { color: #7dd3fc; text-transform: uppercase; letter-spacing: .18em; }
     .slide-title { color: #fff; }
     .slide-body { color: #cbd5e1; }
@@ -31,7 +38,7 @@
       </div>
       <div class="content-media">
         <div class="slide-card">
-          {{ slide.hero_image_html }}
+          {{ slide.visual_html }}
         </div>
       </div>
     </div>

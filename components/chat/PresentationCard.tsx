@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { Eye, Loader2, Monitor, Layers } from 'lucide-react';
-import { CANVAS_PRESETS, inferCanvasPreset, normalizeDesignHtml } from '../../lib/designContract';
+import { CANVAS_PRESETS, inferCanvasPreset } from '../../lib/designContract';
 
 interface PresentationCardProps {
   html: string;
@@ -10,6 +10,11 @@ interface PresentationCardProps {
 
 function extractTitle(html: string) {
   return html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] ?? 'Design gerado';
+}
+
+function ensureHtmlDocument(src: string): string {
+  if (/<!doctype html>/i.test(src) || /<html[\s>]/i.test(src)) return src;
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>Design</title></head><body>${src}</body></html>`;
 }
 
 /** Detect if the HTML contains multiple slides (presentation vs single design) */
@@ -27,8 +32,7 @@ function countSlides(html: string): number {
 
 /** For presentations: show only the first slide at 16:9, hide nav controls */
 function normalizePresentationThumbnail(html: string): string {
-  const preset = inferCanvasPreset(html);
-  const base = normalizeDesignHtml(html, preset);
+  const exactHtml = ensureHtmlDocument(html);
   const overrideCSS = `<style id="arcco-pres-thumb">
     /* Hide all slides, then show only the first */
     .slide, .slide-container { display: none !important; }
@@ -50,7 +54,7 @@ function normalizePresentationThumbnail(html: string): string {
   </style>`;
 
   // Remove any JS that could interfere with slide visibility
-  const noJS = base.replace(/<script(?!.*src=["']https?:\/\/cdn)[\s\S]*?<\/script>/gi, '');
+  const noJS = exactHtml.replace(/<script(?!.*src=["']https?:\/\/cdn)[\s\S]*?<\/script>/gi, '');
 
   if (noJS.includes('</head>')) {
     return noJS.replace('</head>', overrideCSS + '</head>');
@@ -67,7 +71,7 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
   const presetSpec = CANVAS_PRESETS[preset];
   const thumbnailHtml = isPresentation
     ? normalizePresentationThumbnail(html)
-    : normalizeDesignHtml(html, preset);
+    : ensureHtmlDocument(html);
 
   if (isStreaming) {
     return (

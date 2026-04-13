@@ -105,6 +105,25 @@ class Slide(BaseModel):
     speaker_notes: str = Field(
         description="Roteiro exato e persuasivo para o palestrante ler neste slide. 2-4 frases."
     )
+    chart_type: Optional[Literal["bar", "line", "doughnut"]] = Field(
+        default=None,
+        description=(
+            "Use SOMENTE quando houver comparação, evolução temporal ou distribuição com números explícitos no contexto. "
+            "Tipos aceitos: 'bar', 'line' ou 'doughnut'."
+        ),
+    )
+    chart_title: Optional[str] = Field(
+        default=None,
+        description="Título curto do gráfico, quando chart_type estiver preenchido.",
+    )
+    chart_labels: List[str] = Field(
+        default_factory=list,
+        description="Rótulos do eixo/categorias do gráfico. Máximo de 6 itens.",
+    )
+    chart_values: List[float] = Field(
+        default_factory=list,
+        description="Valores numéricos do gráfico, na mesma ordem de chart_labels.",
+    )
 
 
 class SlideDeck(BaseModel):
@@ -289,6 +308,8 @@ REGRAS DE LAYOUT:
 - title_and_subtitle: APENAS para capa (slide 1), transições entre seções e encerramento
 - bullets: para argumentos, comparações, listas de benefícios (máx 4 pontos por slide)
 - big_number: para dados de impacto, estatísticas chocantes, preços, percentuais
+- Só preencha chart_type/chart_title/chart_labels/chart_values quando o contexto trouxer números claros e comparáveis.
+- Nunca invente números precisos para preencher gráfico. Se os dados não existirem, deixe os campos de gráfico vazios.
 
 REGRAS DE COPY:
 - Headings: máx 6 palavras, verbos de ação, sem pontuação final
@@ -297,6 +318,7 @@ REGRAS DE COPY:
 - Prefira template determinístico da família slide quando houver catálogo disponível.
 - Retorne template_family, template_id, template_label, canvas_preset e slot_updates globais do deck.
 - Quando render_mode for guided, retorne também style_overrides, allowed_edits, optional_blocks e locked_regions.
+- Se um slide trouxer gráfico, mantenha no máximo 4 labels em bar/doughnut e 6 labels em line.
 
 Retorne ESTRITAMENTE o JSON válido. Sem markdown, sem explicações fora do JSON."""
 

@@ -9,6 +9,14 @@
     .slide { width: 100%; min-height: 100%; }
     .container-base { background: linear-gradient(135deg, #ffffff 0%, #eff6ff 100%); color: #0f172a; }
     .metric-panel { width: 100%; height: 100%; border-radius: 28px; background: #0f172a; color: #fff; display: flex; align-items: center; justify-content: center; font-size: clamp(46px, 6cqw, 112px); font-weight: 900; }
+    .metric-panel img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .metric-panel .metric-fallback,
+    .metric-panel .chart-shell { width: 100%; height: 100%; display: flex; flex-direction: column; }
+    .metric-panel .metric-fallback { align-items: center; justify-content: center; font-size: clamp(46px, 6cqw, 112px); font-weight: 900; color: #fff; }
+    .metric-panel .chart-shell { padding: 2cqw; gap: 1cqw; }
+    .metric-panel .chart-title { font-size: 1.02cqw; letter-spacing: .08em; text-transform: uppercase; color: #93c5fd; }
+    .metric-panel .chart-stage { flex: 1; min-height: 0; position: relative; }
+    .metric-panel canvas { width: 100% !important; height: 100% !important; }
     .metric-kicker { color: #1d4ed8; text-transform: uppercase; letter-spacing: .18em; }
     .metric-title { color: #0f172a; }
     .metric-body { color: #334155; }
@@ -29,7 +37,7 @@
         <div class="metric-note">{{ slide.note }}</div>
       </div>
       <div class="content-media">
-        <div class="metric-panel">{{ slide.big_value }}</div>
+        <div class="metric-panel">{{ slide.visual_html }}</div>
       </div>
     </div>
   </section>

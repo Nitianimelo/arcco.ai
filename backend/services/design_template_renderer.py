@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import html
 from pathlib import Path
 import re
 from typing import Any
@@ -52,6 +54,85 @@ def _replace_tokens(template_html: str, mapping: dict[str, str]) -> str:
     return rendered
 
 
+def _build_chart_html(chart_type: str, chart_title: str, labels: list[Any], values: list[Any], chart_id: str) -> str:
+    normalized_labels = [str(item).strip()[:42] for item in labels if str(item).strip()]
+    normalized_values: list[float] = []
+    for value in values:
+        try:
+            normalized_values.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    if not normalized_labels or not normalized_values or len(normalized_labels) != len(normalized_values):
+        return ""
+    palette = ["#60a5fa", "#38bdf8", "#818cf8", "#22c55e", "#f59e0b", "#f43f5e"]
+    colors = [palette[index % len(palette)] for index in range(len(normalized_values))]
+    config = {
+        "type": chart_type,
+        "data": {
+            "labels": normalized_labels,
+            "datasets": [
+                {
+                    "label": chart_title or "Indicador",
+                    "data": normalized_values,
+                    "backgroundColor": colors if chart_type != "line" else "rgba(96,165,250,0.18)",
+                    "borderColor": colors if chart_type != "line" else "#60a5fa",
+                    "borderWidth": 2,
+                    "fill": chart_type == "line",
+                    "tension": 0.32,
+                }
+            ],
+        },
+        "options": {
+            "responsive": True,
+            "maintainAspectRatio": False,
+            "plugins": {
+                "legend": {"display": chart_type == "doughnut"},
+                "title": {"display": bool(chart_title), "text": chart_title or ""},
+            },
+            "scales": {
+                "y": {"beginAtZero": True},
+            } if chart_type in {"bar", "line"} else {},
+        },
+    }
+    safe_title = html.escape(chart_title or "Visualização de Dados")
+    safe_config = json.dumps(config, ensure_ascii=False).replace("</script>", "<\\/script>")
+    return (
+        f'<div class="chart-shell">'
+        f'<div class="chart-title">{safe_title}</div>'
+        f'<div class="chart-stage"><canvas id="{chart_id}"></canvas></div>'
+        f'<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>'
+        f'<script>'
+        f'(function(){{'
+        f'var el=document.getElementById("{chart_id}");'
+        f'if(!el||typeof Chart==="undefined") return;'
+        f'new Chart(el.getContext("2d"), {safe_config});'
+        f'}})();'
+        f'</script>'
+        f'</div>'
+    )
+
+
+def _build_visual_html(slide: dict[str, Any], deck_label: str, fallback_big_value: str, chart_id: str) -> str:
+    chart_type = str(slide.get("chart_type") or "").strip().lower()
+    chart_labels = slide.get("chart_labels") or []
+    chart_values = slide.get("chart_values") or []
+    if chart_type in {"bar", "line", "doughnut"} and chart_labels and chart_values:
+        chart_html = _build_chart_html(
+            chart_type,
+            str(slide.get("chart_title") or slide.get("heading") or deck_label),
+            chart_labels,
+            chart_values,
+            chart_id,
+        )
+        if chart_html:
+            return chart_html
+
+    if slide.get("hero_image_url"):
+        return f'<img src="{slide["hero_image_url"]}" alt="{html.escape(str(slide.get("heading", deck_label)))}" />'
+
+    return f'<div class="metric-fallback">{html.escape(str(slide.get("big_value") or fallback_big_value or deck_label))}</div>'
+
+
 def _render_single_canvas(payload: dict[str, Any], template: dict[str, Any]) -> str:
     slots = _merge_slots(payload, template)
     hero_image_url = _resolve_image_url(payload, template) or ""
@@ -62,17 +143,13 @@ def _render_single_canvas(payload: dict[str, Any], template: dict[str, Any]) -> 
     return _replace_tokens(html, mapping)
 
 
-def _render_slide_block(template_html: str, slide: dict[str, Any], deck_label: str, fallback_big_value: str) -> str:
+def _render_slide_block(template_html: str, slide: dict[str, Any], deck_label: str, fallback_big_value: str, chart_id: str) -> str:
     points = slide.get("points") or []
     if points:
         points_html = "<ul>" + "".join(f"<li>{point}</li>" for point in points) + "</ul>"
     else:
         points_html = f"<p>{slide.get('support', '')}</p>"
-    hero_image_html = (
-        f'<img src="{slide["hero_image_url"]}" alt="{slide.get("heading", deck_label)}" />'
-        if slide.get("hero_image_url")
-        else f'<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:2cqw;color:#94a3b8;">{deck_label}</div>'
-    )
+    visual_html = _build_visual_html(slide, deck_label, fallback_big_value, chart_id)
     mapping = {
         "title": slide.get("heading", deck_label),
         "slide.kicker": slide.get("kicker", deck_label),
@@ -81,7 +158,8 @@ def _render_slide_block(template_html: str, slide: dict[str, Any], deck_label: s
         "slide.big_value": slide.get("big_value") or fallback_big_value,
         "slide.support": slide.get("support", ""),
         "slide.note": slide.get("note", ""),
-        "slide.hero_image_html": hero_image_html,
+        "slide.visual_html": visual_html,
+        "slide.chart_title": slide.get("chart_title", ""),
     }
     return _replace_tokens(template_html, mapping)
 
@@ -104,9 +182,14 @@ def _render_slide_deck(payload: dict[str, Any], template: dict[str, Any]) -> str
                     "support": " ".join(points[:3]) if points else deck_slots.get("supporting_points", ""),
                     "note": slide.get("speaker_notes") or deck_slots.get("speaker_note") or "",
                     "hero_image_url": hero_image_url,
+                    "chart_type": slide.get("chart_type"),
+                    "chart_title": slide.get("chart_title"),
+                    "chart_labels": slide.get("chart_labels") or [],
+                    "chart_values": slide.get("chart_values") or [],
                 },
                 template.get("label", "Slide"),
                 deck_slots.get("big_value", "73%"),
+                f"arcco-chart-{index}",
             )
         )
     if not rendered_slides:
@@ -121,9 +204,14 @@ def _render_slide_deck(payload: dict[str, Any], template: dict[str, Any]) -> str
                     "support": deck_slots.get("supporting_points", ""),
                     "note": deck_slots.get("speaker_note", ""),
                     "hero_image_url": hero_image_url,
+                    "chart_type": None,
+                    "chart_title": "",
+                    "chart_labels": [],
+                    "chart_values": [],
                 },
                 template.get("label", "Slide"),
                 deck_slots.get("big_value", "73%"),
+                "arcco-chart-1",
             )
         )
     return "<!-- ARCCO_DESIGN_SEPARATOR -->".join(rendered_slides)
