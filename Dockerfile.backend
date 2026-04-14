@@ -7,9 +7,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr-eng \
     libglib2.0-0 \
     libgl1 \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Dependências JS do backend (render/export design-source)
+COPY backend/js/package.json ./backend/js/package.json
+RUN cd /app/backend/js && npm install --omit=dev --no-audit --no-fund
 
 # Copiar requirements primeiro (cache de layer)
 COPY backend/requirements.txt .

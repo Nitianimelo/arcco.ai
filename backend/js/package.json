@@ -1,0 +1,10 @@
+{
+  "name": "arcco-backend-design-export",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "fabric": "^5.3.0",
+    "pptxgenjs": "^4.0.1"
+  }
+}
+

@@ -3,6 +3,64 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-04-14 16:05 — Codex — Contrato design-source + 4 skills específicas + export backend PNG/PDF/PPTX
+
+### Arquivos modificados:
+- `Dockerfile.backend`
+- `backend/api/export.py`
+- `AI_CHANGELOG.md`
+
+### Arquivos adicionados:
+- `backend/services/design_source_contract.py`
+- `backend/services/design_source_export.py`
+- `backend/skills/design_source_skill_utils.py`
+- `backend/skills/a4_booklet_generator.py`
+- `backend/skills/slide_presentation_generator.py`
+- `backend/skills/instagram_post_generator.py`
+- `backend/skills/reels_story_generator.py`
+- `backend/js/package.json`
+- `backend/js/design_source_to_pptx.mjs`
+
+### O que foi feito:
+1. Introduzido o contrato estruturado `arcco.design-source/v1` como fonte da verdade para design, com canvas fixo por preset e frames com elementos posicionados (texto/retângulo), sem depender de HTML fluido.
+2. Criadas 4 skills específicas, cada uma com dimensão nativa:
+   - `a4_booklet_generator` (A4 2480x3508 @ 300 DPI)
+   - `slide_presentation_generator` (1920x1080)
+   - `instagram_post_generator` (1080x1080)
+   - `reels_story_generator` (1080x1920)
+3. Implementado renderer backend de design-source via Fabric.js + Playwright para gerar PNG e PDF 100% no servidor.
+4. Implementado export PPTX via `pptxgenjs` (Node script backend), alimentado por frames renderizados no backend.
+5. Exposta nova rota `POST /api/agent/export-design-source` para exportar `png`, `pdf` e `pptx` a partir do source estruturado.
+6. Ajustado `Dockerfile.backend` para instalar runtime Node e dependências JS de export (`fabric` e `pptxgenjs`) dentro de `backend/js`.
+
+### Por que:
+O fluxo anterior dependia de HTML/CSS livre gerado por LLM, com comportamento variável e difícil de renderizar de forma determinística. A nova base elimina esse problema: o LLM gera estrutura declarativa e o render/export passa a ser controlado pelo motor do sistema (Fabric.js + Playwright + pptxgenjs), com dimensões fixas e pipeline backend.
+
+---
+
+## 2026-04-14 15:10 — Claude Code — Remoção total do renderer/preview de design para refatoração futura
+
+### Arquivos modificados:
+- `components/chat/DesignGallery.tsx`
+- `pages/ArccoChat.tsx`
+- `AI_CHANGELOG.md`
+
+### Arquivos removidos:
+- `components/chat/PresentationCard.tsx`
+- `components/chat/DesignPreviewModal.tsx`
+- `lib/designContract.ts`
+
+### O que foi feito:
+1. Removido todo o renderer de design baseado em `iframe`, thumbnail, modal, paginação visual e export acoplado ao preview.
+2. Reescrito `DesignGallery.tsx` como listagem neutra de artefatos HTML, sem renderização embutida. Cada item agora só oferece cópia do HTML bruto e download do arquivo `.html`.
+3. Simplificado `ArccoChat.tsx` para parar de abrir popup/modal de design e parar de depender da camada antiga de preview.
+4. Eliminados arquivos e utilitários órfãos do renderer antigo para deixar o terreno limpo para uma reimplementação do zero.
+
+### Por que:
+O renderer de design acumulou muitas camadas corretivas e heurísticas (`iframe`, scaling, detecção de slide, modal, thumbnail, export acoplado), o que vinha introduzindo regressões contínuas. A decisão aqui foi zerar essa superfície e deixar apenas o artefato HTML preservado, preparando uma nova implementação sem reaproveitar o acoplamento anterior.
+
+---
+
 ## 2026-04-14 14:00 — Claude Code (claude-opus-4-6) — Reescrita limpa do renderer de designs (PresentationCard + DesignPreviewModal)
 
 ### Arquivos modificados:

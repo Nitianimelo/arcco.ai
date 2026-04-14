@@ -4,10 +4,11 @@ Endpoint de exportação de documentos — converte texto ou HTML em arquivos pa
 Rotas:
   POST /api/agent/export-doc   → texto → DOCX ou PDF
   POST /api/agent/export-html  → HTML → PDF, PPTX, PNG ou JPEG
+  POST /api/agent/export-design-source → design-source JSON → PDF, PPTX, PNG
 """
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
@@ -54,6 +55,13 @@ class ExportHtmlRequest(BaseModel):
     canvas_preset: Optional[str] = None  # "instagram-square" | "instagram-portrait" | "story" | "banner" | "widescreen"
 
 
+class ExportDesignSourceRequest(BaseModel):
+    source: dict[str, Any]
+    title: str
+    format: str  # "pdf" | "pptx" | "png"
+    frame_index: Optional[int] = None
+
+
 @router.post("/export-doc")
 async def export_doc(req: ExportDocRequest):
     """Converte texto/markdown em DOCX ou PDF para download direto (sem upload ao Supabase)."""
@@ -91,6 +99,70 @@ async def export_doc(req: ExportDocRequest):
         if _is_playwright_browser_missing_error(e):
             _raise_export_dependency_error(e)
         logger.error(f"[EXPORT-DOC] Erro ao exportar '{fmt}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    safe_name = "".join(c if c.isalnum() or c in "._- " else "_" for c in title)[:50]
+    filename = f"{safe_name}.{ext}"
+    return Response(
+        content=file_bytes,
+        media_type=mime,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/export-design-source")
+async def export_design_source(req: ExportDesignSourceRequest):
+    """
+    Converte design source (arcco.design-source/v1) em PNG/PDF/PPTX no backend.
+    """
+    fmt = req.format.lower()
+    title = req.title or "design_source"
+
+    try:
+        if fmt == "png":
+            from backend.services.design_source_export import render_design_source_png
+
+            result = await render_design_source_png(
+                req.source,
+                frame_index=req.frame_index,
+            )
+            if isinstance(result, tuple):
+                file_bytes, mime, ext = result
+            else:
+                file_bytes = result
+                mime = "image/png"
+                ext = "png"
+
+        elif fmt == "pdf":
+            from backend.services.design_source_export import render_design_source_pdf
+
+            file_bytes = await render_design_source_pdf(
+                req.source,
+                frame_index=req.frame_index,
+            )
+            mime = "application/pdf"
+            ext = "pdf"
+
+        elif fmt == "pptx":
+            from backend.services.design_source_export import render_design_source_pptx
+
+            file_bytes = await render_design_source_pptx(
+                req.source,
+                title=title,
+                frame_index=req.frame_index,
+            )
+            mime = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            ext = "pptx"
+
+        else:
+            raise HTTPException(status_code=400, detail=f"Formato inválido: {fmt}. Use 'png', 'pdf' ou 'pptx'.")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        if _is_playwright_browser_missing_error(e):
+            _raise_export_dependency_error(e)
+        logger.error(f"[EXPORT-DESIGN-SOURCE] Erro ao exportar '{fmt}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
     safe_name = "".join(c if c.isalnum() or c in "._- " else "_" for c in title)[:50]

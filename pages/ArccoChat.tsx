@@ -13,7 +13,6 @@ import TextDocCard from '../components/chat/TextDocCard';
 import ClarificationCard from '../components/chat/ClarificationCard';
 import DesignGallery from '../components/chat/DesignGallery';
 import DocumentPreviewModal from '../components/chat/DocumentPreviewModal';
-import DesignPreviewModal from '../components/chat/DesignPreviewModal';
 import { ProjectEditModal } from '../components/chat/ProjectEditModal';
 import { GridPattern } from '../components/ui/grid-pattern';
 import { useToast } from '../components/Toast';
@@ -308,7 +307,6 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const chatThinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastNarrativeThinkingRef = useRef('');
   const [modalPreview, setModalPreview] = useState<{ type: 'text_doc' | 'pdf' | 'excel' | 'other'; title: string; content?: string; url?: string } | null>(null);
-  const [designPreview, setDesignPreview] = useState<{ designs: string[]; initialIndex: number } | null>(null);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [isSearchEnabled, setIsSearchEnabled] = useState(false);
   const [spyPagesActive, setSpyPagesActive] = useState(false);
@@ -1669,8 +1667,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     const trimmedContent = content.trim();
     if (trimmedContent.startsWith('<!DOCTYPE') || trimmedContent.toLowerCase().startsWith('<html')) {
       const designs = splitDesignsFromHtml(trimmedContent);
-      const openDesignByIndex = (index: number) => setDesignPreview({ designs, initialIndex: index });
-      return <DesignGallery designs={designs.length > 0 ? designs : [trimmedContent]} isStreaming={isLoading} onOpenPreview={openDesignByIndex} />;
+      return <DesignGallery designs={designs.length > 0 ? designs : [trimmedContent]} isStreaming={isLoading} />;
     }
 
     const fencedDesignMatch = trimmedContent.match(/^```(?:html)?\s*([\s\S]*?)\s*```$/i);
@@ -1678,8 +1675,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
       const html = fencedDesignMatch[1].trim();
       if (html.startsWith('<!DOCTYPE') || html.toLowerCase().startsWith('<html')) {
         const designs = splitDesignsFromHtml(html);
-        const openDesignByIndex = (index: number) => setDesignPreview({ designs, initialIndex: index });
-        return <DesignGallery designs={designs.length > 0 ? designs : [html]} isStreaming={isLoading} onOpenPreview={openDesignByIndex} />;
+        return <DesignGallery designs={designs.length > 0 ? designs : [html]} isStreaming={isLoading} />;
       }
     }
 
@@ -2490,11 +2486,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                       <React.Fragment key={msg.id}>
                         {shouldRenderAgentPanel && renderAgentActivityPanel()}
                         <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%]">
-                          <DesignGallery
-                            designs={designArtifact}
-                            isStreaming={false}
-                            onOpenPreview={(index) => setDesignPreview({ designs: designArtifact, initialIndex: index })}
-                          />
+                          <DesignGallery designs={designArtifact} isStreaming={false} />
                         </div>
                       </React.Fragment>
                     );
@@ -2617,11 +2609,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
                 {designArtifact && designArtifact.length > 0 && !isLoading && !messages.some(msg => msg.content === DESIGN_ARTIFACT_SENTINEL) && (
                   <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%]">
-                    <DesignGallery
-                      designs={designArtifact}
-                      isStreaming={false}
-                      onOpenPreview={(index) => setDesignPreview({ designs: designArtifact, initialIndex: index })}
-                    />
+                    <DesignGallery designs={designArtifact} isStreaming={false} />
                   </div>
                 )}
 
@@ -2699,16 +2687,6 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
           isOpen={!!modalPreview}
           onClose={() => setModalPreview(null)}
           data={modalPreview}
-        />
-      )}
-
-      {/* Design Preview Modal */}
-      {designPreview && (
-        <DesignPreviewModal
-          isOpen={!!designPreview}
-          onClose={() => setDesignPreview(null)}
-          designs={designPreview.designs}
-          initialIndex={designPreview.initialIndex}
         />
       )}
     </div >
