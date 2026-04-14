@@ -12,6 +12,7 @@ import { BrowserAgentCard } from '../components/chat/BrowserAgentCard';
 import TextDocCard from '../components/chat/TextDocCard';
 import ClarificationCard from '../components/chat/ClarificationCard';
 import DesignGallery from '../components/chat/DesignGallery';
+import DesignPreviewModal from '../components/chat/DesignPreviewModal';
 import DocumentPreviewModal from '../components/chat/DocumentPreviewModal';
 import { ProjectEditModal } from '../components/chat/ProjectEditModal';
 import { GridPattern } from '../components/ui/grid-pattern';
@@ -298,6 +299,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const [generatedFiles, setGeneratedFiles] = useState<Array<{ filename: string; url: string; type: 'pdf' | 'excel' | 'other' }>>([]);
   const [textDocArtifact, setTextDocArtifact] = useState<{ title: string; content: string } | null>(null);
   const [designArtifact, setDesignArtifact] = useState<string[] | null>(null);
+  const [designPreviewIndex, setDesignPreviewIndex] = useState<number | null>(null);
   const [clarificationQuestions, setClarificationQuestions] = useState<BrowserClarificationPayload | null>(null);
   const clarificationBasePromptRef = useRef<string | null>(null);
   const [chatThinkingMessage, setChatThinkingMessage] = useState('');
@@ -2486,7 +2488,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                       <React.Fragment key={msg.id}>
                         {shouldRenderAgentPanel && renderAgentActivityPanel()}
                         <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%]">
-                          <DesignGallery designs={designArtifact} isStreaming={false} />
+                          <DesignGallery designs={designArtifact} isStreaming={false} onOpenPreview={(i) => setDesignPreviewIndex(i)} />
                         </div>
                       </React.Fragment>
                     );
@@ -2609,7 +2611,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
                 {designArtifact && designArtifact.length > 0 && !isLoading && !messages.some(msg => msg.content === DESIGN_ARTIFACT_SENTINEL) && (
                   <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%]">
-                    <DesignGallery designs={designArtifact} isStreaming={false} />
+                    <DesignGallery designs={designArtifact} isStreaming={false} onOpenPreview={(i) => setDesignPreviewIndex(i)} />
                   </div>
                 )}
 
@@ -2678,6 +2680,15 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
           onDeleteProjectFile={handleDeleteProjectFile}
           onDeleteProject={handleDeleteProject}
           onSaveProject={handleSaveProject}
+        />
+      )}
+
+      {/* Design Preview Modal */}
+      {designPreviewIndex !== null && designArtifact && designArtifact.length > 0 && (
+        <DesignPreviewModal
+          designs={designArtifact}
+          initialIndex={designPreviewIndex}
+          onClose={() => setDesignPreviewIndex(null)}
         />
       )}
 

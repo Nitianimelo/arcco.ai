@@ -3,6 +3,25 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-04-14 23:30 — Claude Opus 4.6 — Restaurar preview visual de designs no chat
+
+### Arquivos modificados:
+- `components/chat/DesignGallery.tsx`
+- `pages/ArccoChat.tsx`
+
+### Arquivos adicionados:
+- `components/chat/DesignPreviewModal.tsx`
+
+### O que foi feito:
+1. **DesignGallery.tsx** — Reescrito: substituiu listagem neutra (só copiar/baixar) por galeria com preview visual via iframe srcDoc sandboxed. Inclui: scaling automático via ResizeObserver, detecção de viewport (regex CSS), detecção de multi-slide com badge de contagem, lazy loading via IntersectionObserver, hover overlay com botão "Visualizar".
+2. **DesignPreviewModal.tsx** — Criado: modal fullscreen para visualização de designs em tamanho real. Iframe srcDoc com sandbox, navegação de slides (setas, dots, teclado), botões copiar/baixar, fecha com Escape/backdrop. Versão simplificada sem editor Fabric.js ou export acoplado.
+3. **ArccoChat.tsx** — Integração: adicionado state `designPreviewIndex`, import do DesignPreviewModal, prop `onOpenPreview` passada ao DesignGallery, renderização condicional do modal.
+
+### Por quê:
+O commit 8cb0360 removeu o PresentationCard (iframe preview) e DesignPreviewModal sem substituir por componente de preview visual, resultando em designs sendo mostrados como snippet de arquivo sem renderização. Esta mudança restaura o preview usando a mesma abordagem consolidada (iframe srcDoc + CSS transform scale), de forma limpa e sem as heurísticas problemáticas do antigo renderer.
+
+---
+
 ## 2026-04-14 16:05 — Codex — Contrato design-source + 4 skills específicas + export backend PNG/PDF/PPTX
 
 ### Arquivos modificados:
