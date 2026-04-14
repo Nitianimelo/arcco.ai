@@ -26,19 +26,23 @@ function countSlides(html: string): number {
   return slideElements ? slideElements.length : 0;
 }
 
-/** Detect the intended render dimensions from the design CSS. */
-function detectDesignDims(html: string): { width: number; height: number } {
+/**
+ * Detect the intended viewport size for the design.
+ * The iframe will be rendered at these dimensions so that viewport-relative
+ * units (100vh, 100vw) resolve to the design's intended size.
+ */
+function detectDesignViewport(html: string): { width: number; height: number } {
   const maxWMatch = html.match(/max-width:\s*(\d+)px\s*;/);
   const maxHMatch = html.match(/max-height:\s*(\d+)px\s*;/);
   if (maxWMatch && maxHMatch) {
     return { width: parseInt(maxWMatch[1]), height: parseInt(maxHMatch[1]) };
   }
-  // Scrollable designs: try max-width + min-height (px only, not vh)
   const minHMatch = html.match(/min-height:\s*(\d+)px\s*;/);
   if (maxWMatch && minHMatch) {
     return { width: parseInt(maxWMatch[1]), height: parseInt(minHMatch[1]) };
   }
-  return { width: 1200, height: 900 };
+  // Default: widescreen presentation viewport
+  return { width: 1920, height: 1080 };
 }
 
 const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming = false, onOpenPreview }) => {
@@ -49,35 +53,27 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
   const previewHtml = useMemo(() => {
     const doc = ensureHtmlDocument(html);
     if (!isPresentation) return doc;
-    // Inject CSS to show only the first slide in the thumbnail
+    // Hide all slides except the first for the thumbnail
     return doc.replace('</head>', '<style>.slide~.slide{display:none!important}</style></head>');
   }, [html, isPresentation]);
 
-  const thumbRef = useRef<HTMLDivElement>(null);
-  const [thumbSize, setThumbSize] = useState({ width: 0, height: 0 });
-
-  const designDims = useMemo(() => detectDesignDims(html), [html]);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+  const viewport = useMemo(() => detectDesignViewport(html), [html]);
 
   useEffect(() => {
-    const el = thumbRef.current;
+    const el = containerRef.current;
     if (!el) return;
     const observer = new ResizeObserver(entries => {
       const entry = entries[0];
-      if (entry) {
-        setThumbSize({
-          width: entry.contentRect.width,
-          height: entry.contentRect.height,
-        });
-      }
+      if (entry) setContainerWidth(entry.contentRect.width);
     });
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
 
-  const thumbScale = useMemo(() => {
-    if (!thumbSize.width) return 0.3;
-    return Math.min(thumbSize.width / designDims.width, 1);
-  }, [thumbSize, designDims]);
+  // Scale the iframe to fit the container width. Container clips the height.
+  const scale = containerWidth ? Math.min(containerWidth / viewport.width, 1) : 0.35;
 
   if (isStreaming) {
     return (
@@ -98,34 +94,33 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
     );
   }
 
-  // Unified thumbnail for both presentations and single-page designs
   return (
     <div className="my-3 w-full group">
       <div
-        ref={thumbRef}
+        ref={containerRef}
         className="relative h-72 overflow-hidden cursor-pointer rounded-xl border border-[#222] bg-white"
         onClick={() => onOpenPreview?.()}
       >
-        <div
+        {/* Iframe rendered at native design dimensions, scaled down to fit container width */}
+        <iframe
+          srcDoc={previewHtml}
+          width={viewport.width}
+          height={viewport.height}
           style={{
             position: 'absolute',
             top: 0,
             left: 0,
-            width: `${designDims.width}px`,
-            height: `${designDims.height}px`,
-            transform: `scale(${thumbScale})`,
+            width: `${viewport.width}px`,
+            height: `${viewport.height}px`,
+            border: 0,
+            transform: `scale(${scale})`,
             transformOrigin: 'top left',
           }}
-        >
-          <iframe
-            srcDoc={previewHtml}
-            style={{ width: '100%', height: '100%', border: 0 }}
-            className="pointer-events-none bg-white"
-            sandbox="allow-scripts allow-same-origin"
-            title="Miniatura"
-            tabIndex={-1}
-          />
-        </div>
+          className="pointer-events-none bg-white"
+          sandbox="allow-scripts allow-same-origin"
+          title="Miniatura"
+          tabIndex={-1}
+        />
         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all duration-200 flex items-center justify-center">
           <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1.5 px-4 py-2 rounded-lg bg-orange-500/90 text-white text-xs font-medium shadow-lg">
             <Eye size={14} />

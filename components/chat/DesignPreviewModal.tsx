@@ -146,31 +146,11 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
-  const iframeContainerRef = useRef<HTMLDivElement>(null);
-  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
   const currentHtml = designs[activeIndex] || '';
   const previewHtml = ensureHtmlDocument(currentHtml);
   const title = extractTitle(previewHtml);
   const isSlideDeck = detectSlidesFromHtml(previewHtml);
-
-  // Only use scaling when the design has a fixed canvas (max-width + max-height).
-  // Scrollable/stacked designs (no max-height) render at full container size.
-  const designDimensions = useMemo<{ width: number; height: number } | null>(() => {
-    const maxWMatch = currentHtml.match(/max-width:\s*(\d+)px\s*;/);
-    const maxHMatch = currentHtml.match(/max-height:\s*(\d+)px\s*;/);
-    if (maxWMatch && maxHMatch) {
-      return { width: parseInt(maxWMatch[1]), height: parseInt(maxHMatch[1]) };
-    }
-    return null;
-  }, [currentHtml]);
-
-  const iframeScale = useMemo(() => {
-    if (!designDimensions || !containerSize.width || !containerSize.height) return 1;
-    const scaleX = containerSize.width / designDimensions.width;
-    const scaleY = containerSize.height / designDimensions.height;
-    return Math.min(scaleX, scaleY, 1);
-  }, [containerSize, designDimensions]);
 
   const syncSlideState = (index: number) => {
     const doc = iframeRef.current?.contentDocument;
@@ -180,6 +160,7 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
     slides.forEach((slide, slideIndex) => {
       const element = slide as HTMLElement;
       if (slideIndex === index) {
+        // Remove inline display override — let the design's own CSS handle it
         element.style.display = '';
         element.classList.add('active');
         element.classList.remove('hidden');
@@ -243,22 +224,6 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
       document.body.style.overflow = '';
     };
   }, [isOpen, onClose, activeItem, items.length]);
-
-  useEffect(() => {
-    const el = iframeContainerRef.current;
-    if (!el) return;
-    const observer = new ResizeObserver(entries => {
-      const entry = entries[0];
-      if (entry) {
-        setContainerSize({
-          width: entry.contentRect.width,
-          height: entry.contentRect.height,
-        });
-      }
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
 
   useEffect(() => {
     if (!showExportMenu) return;
@@ -512,42 +477,21 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
             )}
           </div>
 
-          <div ref={iframeContainerRef} className="relative flex-1 min-h-0 bg-[#090b10] overflow-hidden">
+          {/* Iframe fills the entire container — the design's own CSS handles responsive layout */}
+          <div className="relative flex-1 min-h-0 bg-[#090b10] overflow-hidden">
             {isLoading && (
               <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[#0c0c0f]/80 backdrop-blur-sm">
                 <Loader2 size={28} className="animate-spin text-orange-400 mb-3" />
                 <p className="text-xs text-neutral-400">Renderizando HTML bruto...</p>
               </div>
             )}
-            {designDimensions ? (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '50%',
-                  left: '50%',
-                  width: `${designDimensions.width}px`,
-                  height: `${designDimensions.height}px`,
-                  transform: `translate(-50%, -50%) scale(${iframeScale})`,
-                }}
-              >
-                <iframe
-                  ref={iframeRef}
-                  srcDoc={previewHtml}
-                  className="border-0 bg-white"
-                  style={{ width: '100%', height: '100%' }}
-                  sandbox="allow-scripts allow-same-origin"
-                  title={title}
-                />
-              </div>
-            ) : (
-              <iframe
-                ref={iframeRef}
-                srcDoc={previewHtml}
-                className="h-full w-full border-0 bg-white"
-                sandbox="allow-scripts allow-same-origin"
-                title={title}
-              />
-            )}
+            <iframe
+              ref={iframeRef}
+              srcDoc={previewHtml}
+              className="h-full w-full border-0 bg-white"
+              sandbox="allow-scripts allow-same-origin"
+              title={title}
+            />
           </div>
 
           <div className="flex items-center justify-between px-5 py-2.5 border-t border-[#1e1e22] bg-[#0d0d11] shrink-0">

@@ -3,6 +3,21 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-04-14 14:00 — Claude Code (claude-opus-4-6) — Reescrita limpa do renderer de designs (PresentationCard + DesignPreviewModal)
+
+### Arquivos modificados:
+- `components/chat/PresentationCard.tsx`
+- `components/chat/DesignPreviewModal.tsx`
+
+### O que foi feito:
+1. **PresentationCard.tsx** — Reescrita completa do thumbnail. Removido wrapper div intermediario. Iframe agora recebe dimensoes explicitas via atributos `width`/`height` HTML + CSS (ex: 1920x1080), garantindo que unidades viewport-relativas (100vh, 100vw) resolvam corretamente. `transform: scale()` aplicado direto no iframe com `transformOrigin: top left`. Container `h-72` com `overflow: hidden` faz crop natural do topo.
+2. **DesignPreviewModal.tsx** — Removida toda logica de scaling condicional: `designDimensions`, `iframeScale`, `containerSize`, ResizeObserver do container, rendering condicional (scaled vs full-size). Iframe agora e simplesmente `h-full w-full` — o HTML do design ja e responsivo (usa max-width, @media queries) e se adapta ao tamanho do modal. Removida funcao `getSlideDisplayMode()`. `syncSlideState` usa `display: ''` para respeitar o CSS original do design.
+
+### Por que:
+Abordagem anterior (detectar dimensoes via regex CSS + wrapper div + scaling condicional) era fragil e quebrava com cada padrao diferente de HTML gerado pelo LLM. A nova abordagem e drasticamente mais simples: thumbnail usa iframe com viewport explicito + scale; modal deixa o design se adaptar sozinho. Elimina a causa raiz da distorcao.
+
+---
+
 ## 2026-04-14 12:00 — Claude Code (claude-opus-4-6) — Fix distorcao thumbnail + display mode slides
 
 ### Arquivos modificados:
