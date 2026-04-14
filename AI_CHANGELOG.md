@@ -3,6 +3,21 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-04-14 12:00 — Claude Code (claude-opus-4-6) — Fix distorcao thumbnail + display mode slides
+
+### Arquivos modificados:
+- `components/chat/PresentationCard.tsx`
+- `components/chat/DesignPreviewModal.tsx`
+
+### O que foi feito:
+1. **PresentationCard.tsx** — Corrigido scaling do thumbnail: agora usa apenas largura para calcular escala (`thumbSize.width / designDims.width`) em vez de `Math.min(scaleX, scaleY)` que resultava em escala minuscula (0.267) por ser limitada pela altura do container (288/1080). Posicionamento mudado de centralizado (`translate(-50%, -50%)`) para `top: 0; left: 0` com `transformOrigin: 'top left'`, mostrando o topo do design como preview.
+2. **DesignPreviewModal.tsx** — Removida funcao `getSlideDisplayMode()` que forcava `display: flex` em todos os `.slide`. Substituida por `element.style.display = ''` (string vazia) no `syncSlideState`, que remove o override inline e deixa o CSS original do design controlar o display mode. Isso corrige designs como AbbVie que usam `display: block` nos slides.
+
+### Por que:
+O thumbnail ficava minusculo porque a escala era limitada pela altura (container h-72 = 288px vs design 1080px = 0.267). Alem disso, a centralizacao desperdicava espaco. No modal, `getSlideDisplayMode` forcava flex em slides que foram desenhados como block, quebrando o layout interno (`.slide-inner` nao preenchia a largura).
+
+---
+
 ## 2026-04-13 20:00 — Claude Code (claude-opus-4-6) — Thumbnail visual para decks + scaling condicional
 
 ### Arquivos modificados:

@@ -102,11 +102,6 @@ function detectViewerItems(doc: Document, isSlideDeck: boolean): ViewerItem[] {
   });
 }
 
-function getSlideDisplayMode(el: Element): string {
-  if (el.classList.contains('slide')) return 'flex';
-  return 'block';
-}
-
 async function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -185,7 +180,7 @@ const DesignPreviewModal: React.FC<DesignPreviewModalProps> = ({ isOpen, onClose
     slides.forEach((slide, slideIndex) => {
       const element = slide as HTMLElement;
       if (slideIndex === index) {
-        element.style.display = getSlideDisplayMode(slide);
+        element.style.display = '';
         element.classList.add('active');
         element.classList.remove('hidden');
       } else {

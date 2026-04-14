@@ -75,10 +75,8 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
   }, []);
 
   const thumbScale = useMemo(() => {
-    if (!thumbSize.width || !thumbSize.height) return 0.3;
-    const scaleX = thumbSize.width / designDims.width;
-    const scaleY = thumbSize.height / designDims.height;
-    return Math.min(scaleX, scaleY);
+    if (!thumbSize.width) return 0.3;
+    return Math.min(thumbSize.width / designDims.width, 1);
   }, [thumbSize, designDims]);
 
   if (isStreaming) {
@@ -111,11 +109,12 @@ const PresentationCard: React.FC<PresentationCardProps> = ({ html, isStreaming =
         <div
           style={{
             position: 'absolute',
-            top: '50%',
-            left: '50%',
+            top: 0,
+            left: 0,
             width: `${designDims.width}px`,
             height: `${designDims.height}px`,
-            transform: `translate(-50%, -50%) scale(${thumbScale})`,
+            transform: `scale(${thumbScale})`,
+            transformOrigin: 'top left',
           }}
         >
           <iframe
