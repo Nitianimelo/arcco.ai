@@ -8,6 +8,7 @@ import io
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
@@ -20,7 +21,7 @@ _TEMPLATES_DIR = Path(__file__).parent / "pdf_templates"
 # ── Tabelas de viewport para export responsivo ────────────────────────────────
 
 _PAGE_VIEWPORTS = {
-    "widescreen":       (1280, 720),
+    "widescreen":       (1920, 1080),
     "a4-landscape":     (1122, 794),
     "a4-portrait":      (794, 1122),
     "letter-landscape": (1056, 816),
@@ -32,113 +33,188 @@ _RES_VIEWPORTS = {
     "hd-1080": (1920, 1080),
 }
 
-# JS que isola um slide para screenshot — força visibilidade, dimensão e reflow
-_SHOW_SLIDE_JS = """(slideIdx) => {
-    const slides = document.querySelectorAll('.slide, .slide-container');
-    slides.forEach((s, idx) => {
-        if (idx === slideIdx) {
-            s.style.display = '';
-            s.style.opacity = '1';
-            s.style.visibility = 'visible';
-            s.style.position = 'relative';
-            s.style.transform = 'none';
-            s.style.minHeight = '100vh';
-            s.style.width = '100%';
-            s.classList.add('active');
-        } else {
+# ── Paged.js helpers ──────────────────────────────────────────────────────────
+
+_PAGED_JS_CDN = "https://unpkg.com/pagedjs/dist/paged.polyfill.js"
+
+
+def _should_use_paged_js(html: str, page_size: Optional[str]) -> bool:
+    """
+    Retorna True se o HTML deve ser renderizado com Paged.js.
+    Aplica-se a documentos A4/Letter paginados que possuem margens, cabeçalhos
+    e rodapés (gerados pelo a4_document_creator e similares).
+    NÃO se aplica a apresentações (1920×1080) ou social media.
+    """
+    if page_size in ("a4-portrait", "a4-landscape", "letter-portrait", "letter-landscape"):
+        return True
+    # Detecta dimensões A4 portrait no CSS: width 794px + height ~1123px
+    if re.search(r"width:\s*794px", html) and re.search(r"height:\s*1\d{3}px", html):
+        return True
+    return False
+
+
+def _inject_paged_js(html: str, vw: int, vh: int) -> str:
+    """
+    Injeta Paged.js polyfill + regras CSS @page no HTML.
+    Adiciona page-break-after em section.slide para garantir uma slide por página PDF.
+    """
+    inject = (
+        "<style>\n"
+        f"@page {{ size: {vw}px {vh}px; margin: 0; }}\n"
+        "section.slide, .slide { page-break-after: always !important; break-after: page !important; }\n"
+        "</style>\n"
+        f'<script src="{_PAGED_JS_CDN}"></script>\n'
+    )
+    if "</head>" in html:
+        return html.replace("</head>", inject + "</head>", 1)
+    if "<body" in html:
+        i = html.find("<body")
+        j = html.find(">", i)
+        return html[: j + 1] + inject + html[j + 1 :]
+    return inject + html
+
+
+# JS que revela um slide no fluxo natural do documento (sem position:fixed).
+# Usado como fallback quando bounding_box() retorna None (slide estava oculto).
+_REVEAL_SLIDE_JS = """(el) => {
+    const all = document.querySelectorAll('.slide, .slide-container');
+    all.forEach(s => {
+        if (s !== el) {
             s.style.display = 'none';
-            s.style.opacity = '0';
-            s.style.visibility = 'hidden';
-            s.classList.remove('active');
         }
     });
-    // Força reflow
+    el.style.display = '';
+    el.style.visibility = 'visible';
+    el.style.opacity = '1';
+    el.style.transform = 'none';
+    el.style.position = '';
+    el.classList.add('active');
     document.body.offsetHeight;
 }"""
+
+
+def _capture_slide(page, slide_els: list, idx: int, fmt: str = "png") -> Optional[bytes]:
+    """
+    Captura um slide usando element.screenshot() — faz scroll automático e
+    captura as dimensões exatas do elemento, sem position:fixed e sem clip manual.
+    Se o elemento estiver oculto (carrossel), revela-o no fluxo natural primeiro.
+    """
+    if idx >= len(slide_els):
+        return None
+    el = slide_els[idx]
+    bbox = el.bounding_box()
+
+    if not (bbox and bbox["width"] > 0 and bbox["height"] > 0):
+        # Elemento oculto (carrossel) — revelar sem position:fixed
+        page.evaluate(_REVEAL_SLIDE_JS, el)
+        page.wait_for_timeout(300)
+        bbox = el.bounding_box()
+
+    if bbox and bbox["width"] > 0 and bbox["height"] > 0:
+        # el.screenshot() rola o elemento para a view e captura suas dimensões exatas
+        return el.screenshot(type=fmt)
+    return None
 
 
 async def generate_pdf_playwright(
     html_content: str,
     slide_index: Optional[int] = None,
+    slide_indices: Optional[list] = None,
     page_size: Optional[str] = None,
     canvas_preset: Optional[str] = None,
+    viewport_width: Optional[int] = None,
+    viewport_height: Optional[int] = None,
 ) -> bytes:
     """
-    Gera PDF de alta qualidade usando Playwright para renderizar HTML+Tailwind CSS.
-    Para apresentações multi-slide (.slide), captura cada slide como uma página separada.
-    O viewport se adapta ao page_size escolhido para export responsivo.
+    Gera PDF renderizando o HTML via Playwright.
+    Captura cada slide individualmente via el.screenshot() (igual ao PPTX) e
+    compõe um PDF multi-página com reportlab. Para documentos simples (sem .slide),
+    usa full-page screenshot.
     """
 
     def _sync_render() -> bytes:
         from playwright.sync_api import sync_playwright
+        import io as _io
+        from reportlab.lib.pagesizes import A4, letter, landscape as rl_landscape
+        from reportlab.lib.utils import ImageReader
+        from reportlab.pdfgen import canvas as pdf_canvas
 
         inject_html = _inject_tailwind_if_needed(html_content)
-        if canvas_preset and canvas_preset in CANVAS_PRESETS:
+        if viewport_width and viewport_height:
+            vw, vh = viewport_width, viewport_height
+        elif canvas_preset and canvas_preset in CANVAS_PRESETS:
             spec = CANVAS_PRESETS[canvas_preset]
             vw, vh = spec["width"], spec["height"]
         else:
-            vw, vh = _PAGE_VIEWPORTS.get(page_size or "widescreen", (1280, 720))
+            vw, vh = _PAGE_VIEWPORTS.get(page_size or "widescreen", (1920, 1080))
+
+        # ── Per-slide screenshot path (igual ao PPTX) ──
+        # Captura cada slide individualmente via _capture_slide() — imune a
+        # CSS do body (flex, padding, overflow) e garante alinhamento perfeito.
+
+        # Export CSS override: remove body flex/padding/overflow do design_contract
+        inject_html = _inject_export_css(inject_html, vw)
+
+        _PX_TO_PT = 72 / 96
+        _RL_SIZES = {
+            "widescreen":       (vw * _PX_TO_PT, vh * _PX_TO_PT),
+            "a4-landscape":     rl_landscape(A4),
+            "a4-portrait":      A4,
+            "letter-landscape": rl_landscape(letter),
+            "letter-portrait":  letter,
+        }
+        rl_size = _RL_SIZES.get(page_size or "widescreen", (vw * _PX_TO_PT, vh * _PX_TO_PT))
+        page_w_pt, page_h_pt = rl_size
+
+        screenshots: list[bytes] = []
 
         with sync_playwright() as p:
             browser = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
             page = browser.new_page(viewport={"width": vw, "height": vh})
             try:
                 page.set_content(inject_html, wait_until="networkidle", timeout=30_000)
+                page.wait_for_timeout(200)
 
-                slide_count = page.evaluate("() => document.querySelectorAll('.slide, .slide-container').length")
+                slide_count = page.evaluate(
+                    "() => document.querySelectorAll('.slide, .slide-container').length"
+                )
 
                 if slide_count and int(slide_count) > 1:
+                    slide_els = page.query_selector_all('.slide, .slide-container')
+                    total = int(slide_count)
+
                     # Determina quais slides capturar
-                    if slide_index is not None:
-                        indices = [slide_index]
+                    if slide_indices is not None:
+                        indices = sorted(set(i for i in slide_indices if 0 <= i < total))
+                    elif slide_index is not None:
+                        indices = [slide_index] if 0 <= slide_index < total else [0]
                     else:
-                        indices = list(range(int(slide_count)))
+                        indices = list(range(total))
 
-                    screenshots: list[bytes] = []
                     for i in indices:
-                        page.evaluate(_SHOW_SLIDE_JS, i)
-                        page.wait_for_timeout(600)
-                        screenshots.append(page.screenshot(full_page=False, type="png"))
-
-                    # Combina screenshots em PDF multi-página com reportlab
-                    from reportlab.lib.pagesizes import A4, letter, landscape as rl_landscape
-                    from reportlab.lib.utils import ImageReader
-                    from reportlab.pdfgen import canvas as pdf_canvas
-                    import io as _io
-
-                    _RL_SIZES = {
-                        "widescreen":       (vw, vh),
-                        "a4-landscape":     rl_landscape(A4),
-                        "a4-portrait":      A4,
-                        "letter-landscape": rl_landscape(letter),
-                        "letter-portrait":  letter,
-                    }
-                    rl_size = _RL_SIZES.get(page_size or "widescreen", (vw, vh))
-                    page_w, page_h = rl_size
-
-                    pdf_buf = _io.BytesIO()
-                    c = pdf_canvas.Canvas(pdf_buf, pagesize=rl_size)
-                    for img_bytes in screenshots:
-                        img_reader = ImageReader(_io.BytesIO(img_bytes))
-                        iw, ih = img_reader.getSize()
-                        scale = min(page_w / iw, page_h / ih)
-                        draw_w, draw_h = iw * scale, ih * scale
-                        x = (page_w - draw_w) / 2
-                        y = (page_h - draw_h) / 2
-                        c.drawImage(img_reader, x, y, draw_w, draw_h)
-                        c.showPage()
-                    c.save()
-                    return pdf_buf.getvalue()
+                        shot = _capture_slide(page, slide_els, i, "png")
+                        if shot:
+                            screenshots.append(shot)
                 else:
-                    pdf_bytes = page.pdf(
-                        width=f"{vw}px",
-                        height=f"{vh}px",
-                        print_background=True,
-                        margin={"top": "0", "right": "0", "bottom": "0", "left": "0"},
-                    )
-                    return pdf_bytes
+                    # Documento simples — screenshot full-page
+                    screenshots.append(page.screenshot(full_page=True, type="png"))
             finally:
                 browser.close()
+
+        # Monta PDF com uma página por screenshot
+        pdf_buf = _io.BytesIO()
+        c = pdf_canvas.Canvas(pdf_buf, pagesize=rl_size)
+        for shot_bytes in screenshots:
+            img_reader = ImageReader(_io.BytesIO(shot_bytes))
+            iw, ih = img_reader.getSize()
+            scale = min(page_w_pt / iw, page_h_pt / ih)
+            draw_w, draw_h = iw * scale, ih * scale
+            x = (page_w_pt - draw_w) / 2
+            y_pos = page_h_pt - draw_h  # ancora no topo
+            c.drawImage(img_reader, x, y_pos, draw_w, draw_h)
+            c.showPage()
+        c.save()
+        return pdf_buf.getvalue()
 
     return await asyncio.to_thread(_sync_render)
 
@@ -310,6 +386,24 @@ def generate_pptx(title: str, content: str) -> bytes:
     return buffer.getvalue()
 
 
+def _inject_export_css(html: str, vw: int) -> str:
+    """Injeta CSS override para export: remove body flex/padding/overflow do design_contract."""
+    css = (
+        '<style id="arcco-export-override">'
+        'html,body{margin:0!important;padding:0!important;'
+        'overflow:visible!important;display:block!important;'
+        f'width:{vw}px!important;height:auto!important;'
+        'min-height:auto!important;align-items:initial!important;'
+        'justify-content:initial!important}'
+        '</style>'
+    )
+    if re.search(r"</head>", html, re.IGNORECASE):
+        return re.sub(r"</head>", css + "</head>", html, count=1, flags=re.IGNORECASE)
+    if re.search(r"<body", html, re.IGNORECASE):
+        return re.sub(r"(<body)", css + r"\1", html, count=1, flags=re.IGNORECASE)
+    return css + html
+
+
 def _inject_tailwind_if_needed(html_content: str) -> str:
     """Injeta Tailwind CDN se o HTML não tiver estilos próprios."""
     tailwind_cdn = '<script src="https://cdn.tailwindcss.com"></script>'
@@ -326,22 +420,31 @@ async def html_to_screenshot(
     html_content: str,
     img_format: str = "png",
     slide_index: Optional[int] = None,
+    slide_indices: Optional[list] = None,
     resolution: Optional[str] = None,
     canvas_preset: Optional[str] = None,
+    viewport_width: Optional[int] = None,
+    viewport_height: Optional[int] = None,
 ) -> Union[bytes, tuple]:
     """
     Captura screenshot de um HTML via Playwright.
     - slide_index: None = todos os slides (ZIP), int = slide específico
     - resolution: viewport size ("hd-720", "hd-1080")
     Retorna bytes (imagem única) ou tuple (zip_bytes, mime, ext) para multi-slide.
+    Se viewport_width/viewport_height forem fornecidos, têm prioridade sobre resolution/canvas_preset.
     """
     inject = _inject_tailwind_if_needed(html_content)
     fmt = img_format.lower() if img_format.lower() in ("png", "jpeg") else "png"
-    if canvas_preset and canvas_preset in CANVAS_PRESETS:
+    if viewport_width and viewport_height:
+        vw, vh = viewport_width, viewport_height
+    elif canvas_preset and canvas_preset in CANVAS_PRESETS:
         spec = CANVAS_PRESETS[canvas_preset]
         vw, vh = spec["width"], spec["height"]
     else:
         vw, vh = _RES_VIEWPORTS.get(resolution or "hd-720", (1280, 720))
+
+    # Export CSS override: remove body flex/padding/overflow do design_contract
+    inject = _inject_export_css(inject, vw)
 
     def _sync() -> Union[bytes, tuple]:
         import zipfile
@@ -354,18 +457,27 @@ async def html_to_screenshot(
                 slide_count = page.evaluate("() => document.querySelectorAll('.slide, .slide-container').length")
 
                 if slide_count and int(slide_count) > 1:
-                    if slide_index is not None:
-                        # Slide específico
-                        page.evaluate(_SHOW_SLIDE_JS, slide_index)
-                        page.wait_for_timeout(600)
-                        return page.screenshot(full_page=False, type=fmt)
+                    slide_els = page.query_selector_all('.slide, .slide-container')
+                    total = int(slide_count)
+
+                    # Determina quais índices capturar
+                    if slide_indices is not None:
+                        capture_indices = sorted(set(i for i in slide_indices if 0 <= i < total))
+                    elif slide_index is not None:
+                        capture_indices = [slide_index] if 0 <= slide_index < total else []
                     else:
-                        # Todos os slides → ZIP
+                        capture_indices = list(range(total))
+
+                    if len(capture_indices) == 1:
+                        shot = _capture_slide(page, slide_els, capture_indices[0], fmt)
+                        return shot if shot else page.screenshot(full_page=False, type=fmt)
+                    else:
+                        # Múltiplos slides → ZIP
                         screenshots: list[bytes] = []
-                        for i in range(int(slide_count)):
-                            page.evaluate(_SHOW_SLIDE_JS, i)
-                            page.wait_for_timeout(600)
-                            screenshots.append(page.screenshot(full_page=False, type=fmt))
+                        for i in capture_indices:
+                            shot = _capture_slide(page, slide_els, i, fmt)
+                            if shot:
+                                screenshots.append(shot)
 
                         zip_buf = io.BytesIO()
                         with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -385,35 +497,45 @@ async def html_to_pptx(
     html_content: str,
     title: str = "Apresentação",
     slide_index: Optional[int] = None,
+    slide_indices: Optional[list] = None,
     page_size: Optional[str] = None,
     canvas_preset: Optional[str] = None,
+    viewport_width: Optional[int] = None,
+    viewport_height: Optional[int] = None,
 ) -> bytes:
     """
     Converte HTML com slides (.slide) em PPTX via screenshots Playwright.
     Cada <section class="slide"> vira um slide independente.
     Se não houver .slide, usa um único slide com screenshot full.
     O viewport e dimensões do PPTX se adaptam ao page_size escolhido.
+    Se viewport_width/viewport_height forem fornecidos, têm prioridade.
     """
     inject = _inject_tailwind_if_needed(html_content)
-    if canvas_preset and canvas_preset in CANVAS_PRESETS:
+
+    # Prioridade: viewport explícito > canvas_preset > page_size
+    if viewport_width and viewport_height:
+        vw, vh = viewport_width, viewport_height
+        emu_per_px = 9525
+        pptx_w, pptx_h = vw * emu_per_px, vh * emu_per_px
+    elif canvas_preset and canvas_preset in CANVAS_PRESETS:
         spec = CANVAS_PRESETS[canvas_preset]
         vw, vh = spec["width"], spec["height"]
-    else:
-        vw, vh = _PAGE_VIEWPORTS.get(page_size or "widescreen", (1280, 720))
-
-    # Dimensões do PPTX em EMUs (English Metric Units) — 914400 EMUs = 1 inch
-    _PPTX_DIMS = {
-        "widescreen":       (12192000, 6858000),   # 13.33 x 7.5 in
-        "a4-landscape":     (10691812, 7562088),    # 11.69 x 8.27 in
-        "a4-portrait":      (7562088, 10691812),    # 8.27 x 11.69 in
-        "letter-landscape": (10058400, 7772400),    # 11.0 x 8.5 in
-        "letter-portrait":  (7772400, 10058400),    # 8.5 x 11.0 in
-    }
-    if canvas_preset and canvas_preset in CANVAS_PRESETS:
         emu_per_px = 9525
         pptx_w, pptx_h = vw * emu_per_px, vh * emu_per_px
     else:
+        vw, vh = _PAGE_VIEWPORTS.get(page_size or "widescreen", (1920, 1080))
+        # Dimensões do PPTX em EMUs (English Metric Units) — 914400 EMUs = 1 inch
+        _PPTX_DIMS = {
+            "widescreen":       (12192000, 6858000),   # 13.33 x 7.5 in
+            "a4-landscape":     (10691812, 7562088),    # 11.69 x 8.27 in
+            "a4-portrait":      (7562088, 10691812),    # 8.27 x 11.69 in
+            "letter-landscape": (10058400, 7772400),    # 11.0 x 8.5 in
+            "letter-portrait":  (7772400, 10058400),    # 8.5 x 11.0 in
+        }
         pptx_w, pptx_h = _PPTX_DIMS.get(page_size or "widescreen", (12192000, 6858000))
+
+    # Export CSS override: remove body flex/padding/overflow do design_contract
+    inject = _inject_export_css(inject, vw)
 
     def _sync() -> bytes:
         import io as _io
@@ -431,15 +553,20 @@ async def html_to_pptx(
 
                 if slide_count and slide_count > 0:
                     # Determina quais slides capturar
-                    if slide_index is not None:
+                    if slide_indices is not None:
+                        indices = sorted(set(i for i in slide_indices if 0 <= i < int(slide_count)))
+                        if not indices:
+                            indices = [0]
+                    elif slide_index is not None:
                         indices = [slide_index] if 0 <= slide_index < slide_count else [0]
                     else:
                         indices = list(range(int(slide_count)))
 
+                    slide_els = page.query_selector_all('.slide, .slide-container')
                     for i in indices:
-                        page.evaluate(_SHOW_SLIDE_JS, i)
-                        page.wait_for_timeout(600)
-                        screenshots.append(page.screenshot(full_page=False, type="png"))
+                        shot = _capture_slide(page, slide_els, i, "png")
+                        if shot:
+                            screenshots.append(shot)
                 else:
                     screenshots.append(page.screenshot(full_page=False, type="png"))
             finally:

@@ -30,10 +30,8 @@ SKILL_META = {
         "Cria um design source para apresentação widescreen (16:9), pronto para render "
         "no Fabric.js e export backend em PNG/PDF/PPTX."
     ),
-    "keywords": [
-        "slide", "slides", "apresentação", "apresentacao", "deck", "pitch",
-        "palestra", "powerpoint", "pptx", "carrossel",
-    ],
+    # Desativado: supersedido por presentation_slides_creator (HTML direto).
+    "keywords": ["slide_design_source_internal"],
     "parameters": {
         "type": "object",
         "properties": {

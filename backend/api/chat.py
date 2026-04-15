@@ -48,8 +48,8 @@ router = APIRouter()
 # Throttle do GC de sessões: executa no máximo 1x a cada 5 minutos
 _last_gc_time: float = 0.0
 _GC_INTERVAL_SECONDS = 300.0
-_EXTRA_CONTEXT_TIMEOUT_SECONDS = 20.0
-_NORMAL_WEB_SEARCH_TIMEOUT_SECONDS = 18.0
+_EXTRA_CONTEXT_TIMEOUT_SECONDS = 35.0
+_NORMAL_WEB_SEARCH_TIMEOUT_SECONDS = 30.0
 
 
 def _maybe_run_gc() -> None:
@@ -216,9 +216,11 @@ async def _save_conversation_and_update_memory(
     completion_tokens: int = 0,
     total_tokens: int = 0,
     cost_usd: float = 0.0,
+    artifact_metadata: "dict | None" = None,
 ) -> None:
     """
     Background task: salva mensagens no Supabase + atualiza memória do usuário.
+    artifact_metadata: dict com designs[], text_doc e files[] coletados durante o stream.
     """
     try:
         db = get_supabase_client()
@@ -232,25 +234,18 @@ async def _save_conversation_and_update_memory(
                     "role": "user",
                     "content": user_message,
                     "created_at": now,
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "total_tokens": 0,
-                    "estimated_cost_usd": 0.0,
                 }
             )
         if assistant_response:
-            messages_to_save.append(
-                {
-                    "conversation_id": conv_id,
-                    "role": "assistant",
-                    "content": assistant_response,
-                    "created_at": now,
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": total_tokens,
-                    "estimated_cost_usd": round(cost_usd, 6),
-                }
-            )
+            assistant_row: dict = {
+                "conversation_id": conv_id,
+                "role": "assistant",
+                "content": assistant_response,
+                "created_at": now,
+            }
+            if artifact_metadata:
+                assistant_row["metadata"] = artifact_metadata
+            messages_to_save.append(assistant_row)
 
         if messages_to_save:
             db.insert_many("messages", messages_to_save)
@@ -291,7 +286,7 @@ _FAST_MODEL_GATE = (
     "O campo brief deve ser curto, mas completo: objetivo, formato esperado, restrições importantes e contexto do usuário apenas se isso mudar a qualidade da resposta."
 )
 _FAST_MODEL_MAX_TOKENS = 900
-_FAST_MODEL_TIMEOUT_SECONDS = 18.0
+_FAST_MODEL_TIMEOUT_SECONDS = 30.0
 
 
 def _stringify_message_content(content: Any) -> str:
@@ -502,6 +497,10 @@ async def chat_endpoint(request: Request):
 
     async def generate():
         collected_content: list[str] = []
+        # Artefatos coletados durante o stream para persistência
+        collected_designs: list[str] = []
+        collected_text_doc: "dict | None" = None
+        collected_files: list[dict] = []
         stream_failed = False
         final_error: str | None = None
         awaiting_clarification = False
@@ -511,6 +510,7 @@ async def chat_endpoint(request: Request):
         enhanced_messages = list(messages)
         extra_context = ""
         web_search_injected = False
+        search_image_urls: list[str] = []
         _prompt_t = 0
         _completion_t = 0
         _total_t = 0
@@ -545,19 +545,36 @@ async def chat_endpoint(request: Request):
 
             if mode == "normal" and web_search and user_message:
                 try:
-                    from backend.services.search_service import search_web_formatted
+                    from backend.services.search_service import search_web
 
-                    search_results = await asyncio.wait_for(
-                        search_web_formatted(user_message),
+                    raw_search = await asyncio.wait_for(
+                        search_web(user_message),
                         timeout=_NORMAL_WEB_SEARCH_TIMEOUT_SECONDS,
                     )
-                    if search_results and not search_results.startswith("ERRO") and not search_results.startswith("Erro"):
+
+                    # Extrai imagens retornadas pelo Tavily (podem ser str ou dict)
+                    raw_images = raw_search.get("images", [])
+                    search_image_urls = []
+                    for img in raw_images:
+                        url = img if isinstance(img, str) else (img.get("url", "") if isinstance(img, dict) else "")
+                        if url and url.startswith("http"):
+                            search_image_urls.append(url)
+                    search_image_urls = search_image_urls[:6]
+
+                    # Formata resultado textual
+                    answer = raw_search.get("answer", "")
+                    results_text = f"**Resumo:** {answer}\n\n**Fontes:**\n"
+                    for i, r in enumerate(raw_search.get("results", []), 1):
+                        content_snippet = r.get("content", "")[:300]
+                        results_text += f"[{i}] {r['title']} ({r['url']})\n{content_snippet}...\n\n"
+
+                    if results_text and not results_text.startswith("ERRO") and not results_text.startswith("Erro"):
                         enhanced_messages = [
                             {
                                 "role": "system",
                                 "content": (
                                     "Resultados de pesquisa web sobre a pergunta do usuário:\n\n"
-                                    f"{search_results}\n\n"
+                                    f"{results_text}\n\n"
                                     "Use essas informações para enriquecer sua resposta. Cite as fontes quando relevante."
                                 ),
                             },
@@ -628,6 +645,9 @@ async def chat_endpoint(request: Request):
             if conv_id:
                 yield f'data: {json.dumps({"type": "conversation_id", "content": conv_id})}\n\n'
 
+            if search_image_urls:
+                yield f'data: {json.dumps({"type": "search_images", "content": json.dumps(search_image_urls)})}\n\n'
+
             if mode == "normal":
                 normal_agent_id = await execution_logger.start_agent(
                     execution_id,
@@ -681,13 +701,34 @@ async def chat_endpoint(request: Request):
                 try:
                     if event_str.startswith("data: "):
                         event = json.loads(event_str[6:])
-                        if event.get("type") == "chunk":
+                        etype = event.get("type")
+                        if etype == "chunk":
                             collected_content.append(event.get("content", ""))
-                        elif event.get("type") == "error":
+                        elif etype == "error":
                             stream_failed = True
                             final_error = str(event.get("content") or "Erro desconhecido")
-                        elif event.get("type") in {"clarification", "needs_clarification"}:
+                        elif etype in {"clarification", "needs_clarification"}:
                             awaiting_clarification = True
+                        elif etype == "design_artifact":
+                            payload = json.loads(event.get("content", "{}"))
+                            for item in payload.get("designs", []):
+                                html_str = str(item)
+                                if html_str not in collected_designs:
+                                    collected_designs.append(html_str)
+                        elif etype == "text_doc":
+                            doc = json.loads(event.get("content", "{}"))
+                            collected_text_doc = {
+                                "title": doc.get("title", ""),
+                                "content": doc.get("content", ""),
+                            }
+                        elif etype == "file_artifact":
+                            data = json.loads(event.get("content", "{}"))
+                            url = str(data.get("url", "")).rstrip(".,;:!)\"'")
+                            collected_files.append({
+                                "filename": str(data.get("filename", "Arquivo")),
+                                "url": url,
+                                "type": str(data.get("type", "other")),
+                            })
                 except Exception:
                     pass
         except Exception as exc:
@@ -765,6 +806,15 @@ async def chat_endpoint(request: Request):
             )
             if conv_id and user_id and (user_message or collected_content):
                 full_response = final_response
+                artifact_metadata: "dict | None" = None
+                if collected_designs or collected_text_doc or collected_files:
+                    artifact_metadata = {}
+                    if collected_designs:
+                        artifact_metadata["designs"] = collected_designs
+                    if collected_text_doc:
+                        artifact_metadata["text_doc"] = collected_text_doc
+                    if collected_files:
+                        artifact_metadata["files"] = collected_files
                 try:
                     await _save_conversation_and_update_memory(
                         conv_id=conv_id,
@@ -775,6 +825,7 @@ async def chat_endpoint(request: Request):
                         completion_tokens=_completion_t,
                         total_tokens=_total_t,
                         cost_usd=_cost_usd,
+                        artifact_metadata=artifact_metadata,
                     )
                 except Exception:
                     logger.exception("[CHAT] Falha ao persistir histórico ao final do stream")

@@ -155,6 +155,7 @@ async def dispatch_direct_route(
     search_timeout: float,
     browser_timeout: float,
     skill_timeout: float,
+    python_timeout: float = 300.0,
 ):
     if route == "session_file":
         file_name = func_args.get("file_name", "")
@@ -227,11 +228,25 @@ async def dispatch_direct_route(
             yield sse_fn("steps", "<step>Executando código Python...</step>")
         else:
             yield sse_fn("steps", f"<step>Executando código Python ({step_label})...</step>")
-        try:
-            specialist_result = await execute_tool_fn("execute_python", func_args, user_id=user_id)
-        except Exception as exc:
-            logger.error("[DISPATCHER] Erro na execução Python (%s): %s", mode, exc)
-            specialist_result = f"Erro ao executar Python: {exc}"
+        specialist_result = None
+        async for event in exec_with_heartbeat_fn(
+            execute_tool_fn("execute_python", func_args, user_id=user_id),
+            lambda elapsed: sse_fn("steps", f"<step>Executando código Python — {int(elapsed)}s...</step>"),
+            timeout=python_timeout,
+        ):
+            if isinstance(event, dict) and "_result" in event:
+                if event.get("_timeout"):
+                    specialist_result = f"Erro: Timeout de {int(python_timeout)}s na execução Python. O código pode ser muito pesado ou o sandbox está lento."
+                    logger.error("[DISPATCHER] execute_python timeout (%s)", mode)
+                elif event.get("_error"):
+                    specialist_result = f"Erro ao executar Python: {event['_error']}"
+                    logger.error("[DISPATCHER] execute_python error (%s): %s", mode, event["_error"])
+                else:
+                    specialist_result = event["_result"]
+            else:
+                yield event
+        if specialist_result is None:
+            specialist_result = "Erro: execução Python não retornou resultado."
         async for artifact_event in emit_file_artifacts_fn(specialist_result):
             yield artifact_event
         yield {"_dispatch": _build_dispatch_payload(

@@ -21,10 +21,8 @@ SKILL_META = {
         "Gera design source para post estático de Instagram (1080x1080). "
         "Retorna estrutura pronta para Fabric.js, não HTML."
     ),
-    "keywords": [
-        "instagram post", "post instagram", "post estático", "post estatico",
-        "feed", "arte quadrada", "1080x1080", "criativo instagram",
-    ],
+    # Desativado: supersedido por instagram_carousel_creator e static_design_generator.
+    "keywords": ["instagram_canvas_source_internal"],
     "parameters": {
         "type": "object",
         "properties": {

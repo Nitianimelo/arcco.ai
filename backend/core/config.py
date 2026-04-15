@@ -43,6 +43,9 @@ class AgentConfig:
     # Apify (SimilarWeb Scraper)
     apify_api_key: str = ""
 
+    # Unsplash (imagens para design_generator)
+    unsplash_access_key: str = ""
+
     # Agent Behavior
     enable_caching: bool = True
     cache_ttl_seconds: int = 86400
@@ -101,6 +104,7 @@ class AgentConfig:
         )
         self.e2b_api_key = os.getenv("E2B_API_KEY", self.e2b_api_key)
         self.apify_api_key = os.getenv("APIFY_API_KEY", self.apify_api_key)
+        self.unsplash_access_key = os.getenv("UNSPLASH_ACCESS_KEY", self.unsplash_access_key)
         self.enable_caching = os.getenv("AGENT_CACHE", "true").lower() == "true"
         self.cache_ttl_seconds = int(os.getenv("AGENT_CACHE_TTL", str(self.cache_ttl_seconds)))
         self.web_timeout = float(os.getenv("WEB_TIMEOUT", str(self.web_timeout)))
@@ -131,10 +135,11 @@ class AgentConfig:
         needs_steel = not self.steel_api_key
         needs_e2b = not self.e2b_api_key
         needs_apify = not self.apify_api_key
+        needs_unsplash = not self.unsplash_access_key
 
         if not (needs_openrouter or needs_anthropic
                 or needs_steel
-                or needs_e2b or needs_apify):
+                or needs_e2b or needs_apify or needs_unsplash):
             logger.info("[CONFIG] All API keys loaded from environment variables.")
             return
 
@@ -188,6 +193,10 @@ class AgentConfig:
                 if needs_apify and key_map.get("apify"):
                     self.apify_api_key = key_map["apify"]
                     logger.info("[CONFIG] Apify API key loaded from Supabase.")
+
+                if needs_unsplash and key_map.get("unsplash"):
+                    self.unsplash_access_key = key_map["unsplash"]
+                    logger.info("[CONFIG] Unsplash Access Key loaded from Supabase.")
 
             if not self.openrouter_api_key and not self.api_key:
                 logger.warning("[CONFIG] No LLM API key found (env or Supabase). Agent will fail.")

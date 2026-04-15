@@ -317,6 +317,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
   const [spyPagesLoading, setSpyPagesLoading] = useState(false);
   const [spyPagesPreviewData, setSpyPagesPreviewData] = useState<SpyPagesSite[] | null>(null);
   const [spyPagesResult, setSpyPagesResult] = useState<SpyPagesSite[] | null>(null);
+  const [searchImages, setSearchImages] = useState<string[]>([]);
   const [showToolsDropdown, setShowToolsDropdown] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const notifiedFailedFilesRef = useRef<Set<string>>(new Set());
@@ -955,6 +956,8 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     }
 
     setGeneratedFiles([]);
+    setDesignArtifact(null);
+    setTextDocArtifact(null);
     setMessages([]);
     setAttachments([]);
     notifiedFailedFilesRef.current.clear();
@@ -970,6 +973,31 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
         content: m.content,
         timestamp: m.created_at,
       })));
+
+      // Restaura artefatos persistidos no metadata de cada mensagem do assistente
+      const restoredDesigns: string[] = [];
+      const restoredFiles: Array<{ filename: string; url: string; type: 'pdf' | 'excel' | 'other' }> = [];
+      let restoredTextDoc: { title: string; content: string } | null = null;
+
+      for (const m of msgs) {
+        if (m.role !== 'assistant' || !m.metadata) continue;
+        const meta = m.metadata;
+        if (meta.designs?.length) {
+          for (const d of meta.designs) {
+            if (!restoredDesigns.includes(d)) restoredDesigns.push(d);
+          }
+        }
+        if (meta.text_doc) restoredTextDoc = meta.text_doc;
+        if (meta.files?.length) {
+          for (const f of meta.files) {
+            restoredFiles.push(f as { filename: string; url: string; type: 'pdf' | 'excel' | 'other' });
+          }
+        }
+      }
+
+      if (restoredDesigns.length > 0) setDesignArtifact(restoredDesigns);
+      if (restoredTextDoc) setTextDocArtifact(restoredTextDoc);
+      if (restoredFiles.length > 0) setGeneratedFiles(restoredFiles);
     }).catch((err) => {
       if (cancelled) return;
       console.error('[ArccoChat] Falha ao carregar histórico:', err);
@@ -1126,6 +1154,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
     setDesignArtifact(null);
     setClarificationQuestions(null);
     setSpyPagesResult(null);
+    setSearchImages([]);
     clearNarrativeThinking();
     if (!isAgentMode) {
       setIsTerminalOpen(false);
@@ -1166,11 +1195,25 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
         while (queue.length > 0) {
           const chunk = queue.shift();
           if (chunk) {
-            displayContent += chunk;
-            setMessages(prev => prev.map(msg =>
-              msg.id === assistantMsgId ? { ...msg, content: displayContent } : msg
-            ));
-            await new Promise(r => setTimeout(r, 15 + Math.random() * 20));
+            if (!isAgentMode) {
+              // Modo chat: digita caractere por caractere
+              // Acelera automaticamente se a fila está acumulando (evita lag em respostas longas)
+              for (const char of chunk) {
+                displayContent += char;
+                setMessages(prev => prev.map(msg =>
+                  msg.id === assistantMsgId ? { ...msg, content: displayContent } : msg
+                ));
+                const delay = queue.length > 1 ? 4 : (10 + Math.random() * 10);
+                await new Promise(r => setTimeout(r, delay));
+              }
+            } else {
+              // Modo agente: exibe por chunk (comportamento original)
+              displayContent += chunk;
+              setMessages(prev => prev.map(msg =>
+                msg.id === assistantMsgId ? { ...msg, content: displayContent } : msg
+              ));
+              await new Promise(r => setTimeout(r, 15 + Math.random() * 20));
+            }
           }
         }
         isTyping = false;
@@ -1197,6 +1240,15 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             const label = content.replace(/<\/?step>/g, '').trim();
             if (label) {
               setAgentThoughts(prev => {
+                // Remove sufixo de heartbeat "— Xs..." para comparar base do label
+                const stripTime = (l: string) => l.replace(/\s*—\s*\d+s\.+$/, '').trim();
+                const newBase = stripTime(label);
+                const runningIdx = prev.findLastIndex(s => s.status === 'running');
+                // Se já existe um passo rodando com o mesmo base = heartbeat: atualiza in-place
+                if (runningIdx >= 0 && stripTime(prev[runningIdx].label) === newBase) {
+                  return prev.map((s, i) => i === runningIdx ? { ...s, label } : s);
+                }
+                // Novo passo: marca o running atual como done e adiciona o novo
                 const updated = prev.map(s =>
                   s.status === 'running' ? { ...s, status: 'done' as const } : s
                 );
@@ -1421,6 +1473,17 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 }];
               });
             } catch { /* ignore parse errors */ }
+            return;
+          }
+
+          // Imagens retornadas pela pesquisa Tavily
+          if (type === 'search_images') {
+            try {
+              const urls: string[] = JSON.parse(content);
+              if (Array.isArray(urls) && urls.length > 0) {
+                setSearchImages(urls);
+              }
+            } catch { /* ignore */ }
             return;
           }
 
@@ -1817,7 +1880,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
           }}
           onKeyDown={handleKeyDown}
           disabled={spyPagesLoading}
-          placeholder={spyPagesLoading ? "Coletando dados, aguarde..." : isFileLoading ? "Enviando arquivo..." : "Digite sua mensagem... (Shift+Enter para nova linha)"}
+          placeholder={spyPagesLoading ? "Coletando dados, aguarde..." : isFileLoading ? "Enviando arquivo..." : "Escreva aqui..."}
           className="flex-1 bg-transparent border-none outline-none text-white placeholder-neutral-500 focus:ring-0 resize-none overflow-hidden leading-relaxed py-0 disabled:opacity-40 disabled:cursor-not-allowed"
           autoFocus={variant === 'centered'}
         />
@@ -2051,11 +2114,11 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
 
     return (
       <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px]">
-        <div className="overflow-hidden rounded-2xl border border-[#25252d] bg-[linear-gradient(180deg,rgba(18,18,23,0.96),rgba(11,11,15,0.98))] shadow-[0_18px_48px_rgba(0,0,0,0.28)]">
+        <div className="overflow-hidden rounded-2xl border border-white/[0.07] bg-[linear-gradient(180deg,rgba(18,18,23,0.70),rgba(11,11,15,0.72))] shadow-[0_18px_48px_rgba(0,0,0,0.28)] backdrop-blur-sm">
           <div className="flex items-center justify-between px-4 py-3 border-b border-[#1e1e25]">
             <div className="flex items-center gap-2.5">
               <div className={`h-2 w-2 rounded-full ${isLoading ? 'bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.8)]' : 'bg-neutral-500'}`} />
-              <span className="text-[11px] uppercase tracking-[0.24em] text-neutral-500">Arcco Runtime</span>
+              <span className="text-[9px] font-light uppercase tracking-[0.36em] text-neutral-600">Arcco Runtime</span>
             </div>
             <div className="text-[11px] text-neutral-500 tabular-nums">{elapsedSeconds}s</div>
           </div>
@@ -2122,7 +2185,7 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
             </div>
           )}
 
-          <div className="px-4 py-3 space-y-1.5">
+          <div className="px-4 py-3 space-y-3">
           {agentThoughts.map((step, i) => {
             const isStepRunning = step.status === 'running';
             const label = step.label.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\u200d\ufe0f]/gu, '').trim();
@@ -2422,11 +2485,11 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 ) : (
                   <>
                     <div className="flex items-center gap-3 mb-2">
-                      <div className="animate-pulse duration-[3000ms]">
+                      <div className="arcco-float">
                         <img
                           src={arccoEmblemUrl}
                           alt="Arcco Emblem"
-                          className="w-[72px] h-[72px] object-contain opacity-90"
+                          className="w-[72px] h-[72px] object-contain opacity-85"
                         />
                       </div>
                       <h1 className="text-2xl md:text-3xl font-normal text-white tracking-tight leading-snug">
@@ -2444,12 +2507,13 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 {renderInputArea('centered')}
               </div>
 
-              <div className="relative z-10 flex flex-wrap gap-2 justify-center max-w-2xl mt-8 opacity-60 hover:opacity-100 transition-opacity">
-                {suggestionHints.map(hint => (
+              <div className="relative z-10 flex flex-wrap gap-2 justify-center max-w-2xl mt-8">
+                {suggestionHints.map((hint, i) => (
                   <button
                     key={hint}
                     onClick={() => handleSendMessage(hint)}
-                    className="px-3 py-1.5 bg-[#1a1a1a] hover:bg-[#222] border border-[#2a2a2a] rounded-md text-xs text-neutral-400 hover:text-neutral-200 transition-colors"
+                    className="arcco-chip-in px-3 py-1.5 bg-white/[0.04] hover:bg-white/[0.07] border border-white/[0.07] hover:border-white/[0.14] rounded-lg text-xs text-neutral-500 hover:text-neutral-200 transition-all duration-200"
+                    style={{ animationDelay: `${i * 90}ms` }}
                   >
                     {hint}
                   </button>
@@ -2480,7 +2544,23 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                         </React.Fragment>
                       );
                     }
-                    return null;
+                    // Modo chat: bolha de "pensando" com logo + pontinhos
+                    return (
+                      <div key={msg.id} className="flex items-start gap-3 animate-in fade-in duration-300">
+                        <div className="flex-shrink-0 pt-0.5">
+                          <img
+                            src={arccoEmblemUrl}
+                            alt="Arcco"
+                            className="w-8 h-8 md:w-[50px] md:h-[50px] object-contain opacity-75"
+                          />
+                        </div>
+                        <div className="flex items-center gap-[5px] px-4 py-4 md:py-5">
+                          <span className="arcco-dot" style={{ animationDelay: '0ms' }} />
+                          <span className="arcco-dot" style={{ animationDelay: '160ms' }} />
+                          <span className="arcco-dot" style={{ animationDelay: '320ms' }} />
+                        </div>
+                      </div>
+                    );
                   }
 
                   if (shouldRenderInlineDesignArtifact) {
@@ -2511,12 +2591,13 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                         )}
                         <div className={`max-w-[95%] sm:max-w-[85%] md:max-w-[80%] rounded-2xl px-5 py-4 relative group
                                     ${msg.role === 'user'
-                            ? 'bg-[#222] text-white rounded-tr-sm shadow-md'
+                            ? 'bg-white/[0.07] border border-white/[0.06] text-white rounded-tr-sm'
                             : 'bg-transparent text-neutral-200'
                           } ${msg.isError ? 'border border-red-500/30 bg-red-500/10' : ''} ${isStreaming ? 'animate-typing-border' : ''
                           }`}
                         >
                           {renderContent(msg.content)}
+                          {isStreaming && <span className="arcco-blink-cursor" />}
                         </div>
                       </div>
                     </React.Fragment>
@@ -2524,27 +2605,6 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 })}
 
                 {/* ── Activity Panel — steps do agente flutuando no chat (sem card) ── */}
-                {(() => {
-                  // Non-agent mode: indicador de thinking minimalista
-                  if (!isAgentMode && isLoading) {
-                    return (
-                      <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-0 md:pl-[62px] py-1 animate-in fade-in duration-300">
-                        <div className="flex items-center gap-2.5">
-                          <img
-                            src={arccoEmblemUrl}
-                            alt=""
-                            className="w-4 h-4 object-contain flex-shrink-0 opacity-70 animate-pulse"
-                          />
-                          {chatThinkingVisible && chatThinkingMessage ? (
-                            <span className="text-sm text-neutral-500">{chatThinkingMessage}</span>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  }
-
-                  return null;
-                })()}
 
                 {/* Browser Agent Card — mostra card estilo Manus quando o agente navega */}
                 {browserAction && (
@@ -2612,6 +2672,30 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
                 {designArtifact && designArtifact.length > 0 && !isLoading && !messages.some(msg => msg.content === DESIGN_ARTIFACT_SENTINEL) && (
                   <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%]">
                     <DesignGallery designs={designArtifact} isStreaming={false} onOpenPreview={(i) => setDesignPreviewIndex(i)} />
+                  </div>
+                )}
+
+                {/* Search Images — imagens retornadas pelo Tavily na pesquisa web */}
+                {searchImages.length > 0 && !isLoading && (
+                  <div className="w-full max-w-[95%] sm:max-w-[85%] md:max-w-[80%] pl-[44px] md:pl-[62px]">
+                    <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                      {searchImages.map((url, i) => (
+                        <a
+                          key={i}
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex-shrink-0 rounded-xl overflow-hidden border border-white/[0.08] hover:border-white/[0.18] transition-all duration-200 hover:scale-[1.02]"
+                        >
+                          <img
+                            src={url}
+                            alt=""
+                            className="h-32 w-auto object-cover"
+                            onError={(e) => { (e.target as HTMLImageElement).parentElement!.style.display = 'none'; }}
+                          />
+                        </a>
+                      ))}
+                    </div>
                   </div>
                 )}
 
@@ -2700,7 +2784,53 @@ const ArccoChatPage: React.FC<ArccoChatPageProps> = ({
           data={modalPreview}
         />
       )}
-    </div >
+
+      <style>{`
+        @keyframes arccofloat {
+          0%, 100% { transform: translateY(0px); opacity: 0.85; }
+          50%       { transform: translateY(-6px); opacity: 0.95; }
+        }
+        .arcco-float {
+          animation: arccofloat 4s ease-in-out infinite;
+        }
+
+        @keyframes arccocursorhide {
+          0%, 49%  { opacity: 1; }
+          50%, 100% { opacity: 0; }
+        }
+        .arcco-blink-cursor::after {
+          content: '▍';
+          display: inline-block;
+          margin-left: 2px;
+          font-size: 0.85em;
+          color: #6366f1;
+          animation: arccocursorhide 0.9s step-end infinite;
+          vertical-align: baseline;
+        }
+
+        @keyframes arccochiphide {
+          from { opacity: 0; transform: translateY(6px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        .arcco-chip-in {
+          opacity: 0;
+          animation: arccochiphide 0.35s ease forwards;
+        }
+
+        @keyframes arccoDotBounce {
+          0%, 60%, 100% { transform: translateY(0); opacity: 0.3; }
+          30%            { transform: translateY(-5px); opacity: 1; }
+        }
+        .arcco-dot {
+          display: inline-block;
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
+          background-color: #6366f1;
+          animation: arccoDotBounce 1.2s ease-in-out infinite;
+        }
+      `}</style>
+    </div>
   );
 };
 

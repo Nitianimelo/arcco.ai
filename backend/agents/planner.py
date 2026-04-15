@@ -20,7 +20,7 @@ from backend.agents.task_types import infer_task_type
 
 logger = logging.getLogger(__name__)
 
-_PLANNER_TIMEOUT_SECONDS = 35.0
+_PLANNER_TIMEOUT_SECONDS = 55.0
 _PLANNER_FALLBACK_MODEL = "openai/gpt-4o-mini"
 
 _JSON_BLOCK_RE = re.compile(r"\{[\s\S]*\}", re.DOTALL)

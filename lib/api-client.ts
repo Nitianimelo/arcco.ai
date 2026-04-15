@@ -16,7 +16,8 @@ export type ChatStreamEventType =
     | 'spy_pages_result'
     | 'pre_action'
     | 'thinking_upgrade'
-    | 'needs_clarification';
+    | 'needs_clarification'
+    | 'search_images';
 
 export interface ChatStreamEvent {
     type: ChatStreamEventType;
@@ -358,5 +359,43 @@ export const agentApi = {
             const errorText = await res.text();
             throw new Error(`Delete session file failed (${res.status}): ${errorText}`);
         }
-    }
+    },
+
+    /**
+     * Exporta HTML de design para PDF, PPTX, PNG ou JPEG via Playwright.
+     * Multi-slide PNG/JPEG retorna ZIP.
+     */
+    async exportHtml(
+        html: string,
+        title: string,
+        format: 'pdf' | 'pptx' | 'png' | 'jpeg',
+        slideIndex?: number | null,
+        pageSize?: string,
+        canvasPreset?: string,
+        viewportWidth?: number,
+        viewportHeight?: number,
+        /** Páginas específicas a exportar (0-based). null = todas. Tem prioridade sobre slideIndex. */
+        slideIndices?: number[] | null,
+    ): Promise<Blob> {
+        const res = await fetch(`${API_BASE}/export-html`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                html,
+                title,
+                format,
+                slide_index:     slideIndex   ?? null,
+                slide_indices:   slideIndices ?? null,
+                page_size:       pageSize     ?? null,
+                canvas_preset:   canvasPreset ?? null,
+                viewport_width:  viewportWidth  ?? null,
+                viewport_height: viewportHeight ?? null,
+            }),
+        });
+        if (!res.ok) {
+            const errorText = await res.text();
+            throw new Error(`Export falhou (${res.status}): ${errorText}`);
+        }
+        return res.blob();
+    },
 };

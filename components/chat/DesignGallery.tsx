@@ -24,13 +24,23 @@ function countSlides(html: string): number {
 
 /** Detect the intended design viewport from CSS hints in the HTML. */
 function detectViewport(html: string): { width: number; height: number } {
+  // P1: section.slide / div.slide com width e height fixos em px (novas skills)
+  const slideBlock = html.match(/(?:section|div)\.slide\s*\{([^}]*)\}/s);
+  if (slideBlock) {
+    const block = slideBlock[1];
+    const w = block.match(/\bwidth:\s*(\d+)px/)?.[1];
+    const h = block.match(/\bheight:\s*(\d+)px/)?.[1];
+    if (w && h) return { width: parseInt(w), height: parseInt(h) };
+  }
+  // P2: max-width / max-height
   const wMatch = html.match(/max-width:\s*(\d+)px/);
   const hMatch = html.match(/max-height:\s*(\d+)px/) || html.match(/min-height:\s*(\d+)px/);
   if (wMatch && hMatch) return { width: parseInt(wMatch[1]), height: parseInt(hMatch[1]) };
-  // Slide-wrapper heuristic: detect explicit width/height on .slide-wrapper
+  // P3: .slide-wrapper explícito
   const swW = html.match(/\.slide-wrapper\s*\{[^}]*width:\s*(\d+)px/);
   const swH = html.match(/\.slide-wrapper\s*\{[^}]*height:\s*(\d+)px/);
   if (swW && swH) return { width: parseInt(swW[1]), height: parseInt(swH[1]) };
+  // P4: heurística multi-slide
   if (isMultiSlide(html)) return { width: 1920, height: 1080 };
   return { width: 960, height: 960 };
 }
@@ -38,8 +48,15 @@ function detectViewport(html: string): { width: number; height: number } {
 /** For multi-slide thumbnails, hide all slides except the first. */
 function thumbnailHtml(html: string, multiSlide: boolean): string {
   const doc = normalizeHtmlDocument(html);
-  if (!multiSlide) return doc;
-  return doc.replace('</head>', '<style>.slide~.slide,.slide-wrapper~.slide-wrapper,div[style*="text-align:center"]~div[style*="text-align:center"]{display:none!important}</style></head>');
+  // Reset body margins (browser default 8px) + hide extra slides
+  const reset = '<style>html,body{margin:0;padding:0;overflow:hidden;}</style>';
+  if (!multiSlide) {
+    return doc.replace('</head>', reset + '</head>');
+  }
+  return doc.replace(
+    '</head>',
+    reset + '<style>.slide~.slide,.slide-wrapper~.slide-wrapper{display:none!important}</style></head>',
+  );
 }
 
 /* ── LazyIframe: only mounts iframe when visible ── */
@@ -78,7 +95,7 @@ const LazyIframe: React.FC<{
   const scaledHeight = viewport.height * scale;
 
   return (
-    <div ref={containerRef} className="w-full overflow-hidden rounded-xl bg-white" style={{ height: scaledHeight || 280 }}>
+    <div ref={containerRef} className="w-full overflow-hidden rounded-xl bg-[#0d0d12]" style={{ height: scaledHeight || 280 }}>
       {visible ? (
         <iframe
           srcDoc={srcDoc}
@@ -93,7 +110,7 @@ const LazyIframe: React.FC<{
             pointerEvents: 'none',
             display: 'block',
           }}
-          sandbox="allow-scripts"
+          sandbox="allow-scripts allow-same-origin"
           title="Preview"
           tabIndex={-1}
           loading="lazy"

@@ -49,10 +49,13 @@ class ExportHtmlRequest(BaseModel):
     html: str
     title: str
     format: str  # "pdf" | "pptx" | "png" | "jpeg"
-    slide_index: Optional[int] = None    # None = todos os slides, 0-based = slide específico
-    page_size: Optional[str] = None      # "widescreen", "a4-landscape", "a4-portrait", "letter-landscape", "letter-portrait"
-    resolution: Optional[str] = None     # "hd-720", "hd-1080"
-    canvas_preset: Optional[str] = None  # "instagram-square" | "instagram-portrait" | "story" | "banner" | "widescreen"
+    slide_index: Optional[int] = None          # None = todos, int = slide específico (0-based)
+    slide_indices: Optional[list[int]] = None  # Páginas específicas selecionadas pelo usuário (tem prioridade sobre slide_index)
+    page_size: Optional[str] = None            # "widescreen", "a4-landscape", "a4-portrait", "letter-*"
+    resolution: Optional[str] = None           # "hd-720", "hd-1080"
+    canvas_preset: Optional[str] = None        # preset de dimensão do canvas
+    viewport_width: Optional[int] = None       # override de dimensão detectado no frontend
+    viewport_height: Optional[int] = None
 
 
 class ExportDesignSourceRequest(BaseModel):
@@ -188,8 +191,11 @@ async def export_html(req: ExportHtmlRequest):
             file_bytes = await generate_pdf_playwright(
                 normalized_html,
                 slide_index=req.slide_index,
+                slide_indices=req.slide_indices,
                 page_size=req.page_size,
                 canvas_preset=req.canvas_preset,
+                viewport_width=req.viewport_width,
+                viewport_height=req.viewport_height,
             )
             mime = "application/pdf"
             ext = "pdf"
@@ -199,8 +205,11 @@ async def export_html(req: ExportHtmlRequest):
             file_bytes = await html_to_pptx(
                 normalized_html, title,
                 slide_index=req.slide_index,
+                slide_indices=req.slide_indices,
                 page_size=req.page_size,
                 canvas_preset=req.canvas_preset,
+                viewport_width=req.viewport_width,
+                viewport_height=req.viewport_height,
             )
             mime = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
             ext = "pptx"
@@ -211,8 +220,11 @@ async def export_html(req: ExportHtmlRequest):
             result = await html_to_screenshot(
                 normalized_html, real_fmt,
                 slide_index=req.slide_index,
+                slide_indices=req.slide_indices,
                 resolution=req.resolution,
                 canvas_preset=req.canvas_preset,
+                viewport_width=req.viewport_width,
+                viewport_height=req.viewport_height,
             )
             # Se retorno é tuple, é ZIP multi-imagem (bytes, mime, ext)
             if isinstance(result, tuple):

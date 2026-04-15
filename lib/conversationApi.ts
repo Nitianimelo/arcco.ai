@@ -16,12 +16,19 @@ export interface ConversationRecord {
   updated_at: string;
 }
 
+export interface MessageArtifactMetadata {
+  designs?: string[];
+  text_doc?: { title: string; content: string };
+  files?: Array<{ filename: string; url: string; type: string }>;
+}
+
 export interface MessageRecord {
   id: string;
   conversation_id: string;
   role: 'user' | 'assistant';
   content: string;
   created_at: string;
+  metadata?: MessageArtifactMetadata | null;
 }
 
 export const conversationApi = {

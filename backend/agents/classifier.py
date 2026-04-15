@@ -272,8 +272,7 @@ async def _call_llm_classifier(
         f"Pedido do usuário: {user_intent}"
         f"{files_context}"
         f"\n\nTipos de tarefa disponíveis:\n{catalog_summary}"
-        "\n\nRetorne APENAS o JSON com: task_type, hints[], acknowledgment."
-        " Se o pedido for ambíguo, retorne needs_clarification=true."
+        "\n\nRetorne o JSON com: task_type, needs_clarification, clarification_questions (se necessário), hints[], acknowledgment."
     )
 
     try:
@@ -286,7 +285,7 @@ async def _call_llm_classifier(
                     {"role": "user", "content": user_message},
                 ],
                 model=model,
-                max_tokens=600,
+                max_tokens=1000,
                 temperature=0.1,
             ),
             timeout=_CLASSIFIER_TIMEOUT_SECONDS,

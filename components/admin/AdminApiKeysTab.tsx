@@ -53,6 +53,7 @@ const SUGGESTED_PROVIDERS = [
   'firecrawl',
   'e2b',
   'e2b_api_key',
+  'unsplash',
 ];
 
 export const AdminApiKeysTab: React.FC<AdminApiKeysTabProps> = ({

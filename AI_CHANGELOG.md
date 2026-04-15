@@ -3,6 +3,566 @@
 > Toda IA que modificar código neste repositório DEVE registrar aqui.
 > Formato: data/hora, arquivos modificados, o que foi feito, por quê.
 
+## 2026-04-14 20:30 — Claude Sonnet 4.6
+
+### Arquivos modificados:
+- `backend/skills/instagram_carousel_creator.py`
+
+### O que foi feito:
+1. **_VISUAL_PROMPT** — Reescrito novamente: removido o visual dark neon/bento box (muito pesado visualmente), substituído por estética editorial limpa.
+   - Fontes: Playfair Display 700/900 (títulos elegantes) + Inter (corpo/labels).
+   - Paleta LIGHT padrão: fundo creme #F8F5F1, acento temático, cards brancos com borda #E7E2DC.
+   - Paleta DARK opcional: fundo #111111 com cards escuros sutis.
+   - Imagens Unsplash: background full-bleed com overlay suave (creme ou escuro conforme paleta) para manter legibilidade total.
+   - Barra de progresso: linha 2px proporcional ao frame — simples e limpa.
+   - Indicador swipe: "arraste →" em Inter 13px opacity 0.38, apenas no frame 1.
+   - Frames centrais: layout alinhado à esquerda, numeração "02/03...", separador 2px × 48px, tipografia hierárquica.
+   - max_tokens revertido para 6000.
+
+### Por quê:
+Visual dark neon com bento box ficou complexo demais e não agradou esteticamente. Revertido para estética limpa, editorial e quente — Playfair Display com paleta creme transmite qualidade sem peso visual excessivo.
+
+## 2026-04-14 20:10 — Claude Sonnet 4.6
+
+### Arquivos modificados:
+- `backend/skills/instagram_carousel_creator.py`
+
+### O que foi feito:
+1. **_VISUAL_PROMPT** — Reescrito com tendências de design 2026:
+   - Fontes atualizadas: Syne 800 para títulos (editorial/futurista) + Inter para corpo.
+   - Paleta Dark Tech + Neon: fundo #080C14 com acento neon escolhido por contexto (verde, roxo ou azul elétrico). Ruído SVG sutil (opacity 0.03).
+   - Barra de progresso real: linha preenchida proporcional ao frame (N/{slide_count} × 100%) no topo absoluto de cada frame.
+   - Frame 1 (Hook): tipografia como elemento gráfico, título 96-116px ocupando 65-75% da altura, kicker + linha acento neon.
+   - Frames centrais: Bento Box layout — grid de cards curvados (border-radius 24px, glassmorphism sutil) em vez de bullets. 2/3/4 colunas conforme o número de pontos.
+   - Frame final (CTA): botão neon com texto escuro, headline Syne 800 76px.
+   - max_tokens aumentado de 6000 para 8000 para acomodar HTML mais verboso do bento box.
+
+### Por quê:
+O prompt anterior usava bullets simples e paleta genérica. O novo padrão visual 2026 prioriza tipografia editorial extrema, dark mode com neon accent, layout de dashboard (bento box) e feedback de progresso nativo — aumentando engajamento e percepção de valor da marca.
+
+## 2026-04-14 19:50 — Claude Sonnet 4.6
+
+### Arquivos modificados:
+- `backend/skills/instagram_carousel_creator.py`
+- `backend/skills/presentation_slides_creator.py`
+- `backend/skills/story_reel_creator.py`
+- `backend/skills/a4_document_creator.py`
+
+### O que foi feito:
+1. **instagram_carousel_creator.py** — Adicionado `enrich_design_instruction(topic)` antes de construir o prompt. O bloco Unsplash é appendado ao `_VISUAL_PROMPT` formatado.
+2. **presentation_slides_creator.py** — Mesmo padrão: `enrich_design_instruction(topic)` + append no prompt.
+3. **story_reel_creator.py** — Mesmo padrão: `enrich_design_instruction(topic)` + append no prompt.
+4. **a4_document_creator.py** — Mesmo padrão: `enrich_design_instruction(topic)` + append no prompt.
+
+### Por quê:
+O `enrich_design_instruction()` só era chamado nos blocos `route == "design_generator"` do orchestrator. Skills dinâmicas como `instagram_carousel_creator` seguiam o caminho `dynamic_skill` → HTML direto → `_emit_design_artifact()` sem nunca passar pelo enriquecimento. Resultado: nenhuma imagem Unsplash aparecia nos designs gerados por skills. A correção injeta as imagens diretamente no prompt de cada skill antes da chamada ao LLM.
+
+## 2026-04-14 19:10 — Claude Sonnet 4.6
+
+### Arquivos modificados:
+- `backend/agents/prompts.py`
+- `backend/services/unsplash_service.py`
+
+### O que foi feito:
+1. **prompts.py** — `<render_rules>` do DESIGN_GENERATOR_SYSTEM_PROMPT completamente reescrito com visual language guide 2025:
+   - 4 padrões CSS explícitos para uso de imagens: background full-bleed com overlay, glass card (backdrop-filter:blur), elemento inline com object-fit e bento grid.
+   - Glassmorphism como padrão: `.glass-card { backdrop-filter: blur(24px); border: 1px solid rgba(255,255,255,0.13); border-radius: 20px; }`
+   - border-radius generoso como default (16px cards, 12px botões).
+   - Tendências 2025: editorial bold, micro-contraste, overlay diagonal 135deg, dark mode premium.
+   - Tipografia: Inter/Plus Jakarta Sans/Syne, weight 700-900, letter-spacing negativo.
+   - Regras de distribuição de imagens por tipo de slide (hero/conteúdo/detalhe/acento/encerramento).
+2. **unsplash_service.py** — `format_images_for_prompt()` atualizado: cada imagem agora recebe sugestão de uso contextual (HERO/CAPA, CONTEÚDO/glass, DETALHE/coluna, ACENTO, ENCERRAMENTO) + instruções CSS inline de como aplicar.
+
+### Por quê:
+Designs gerados estavam usando imagens somente como `<img>` inline sem aproveitamento visual. Nova abordagem guia o LLM a usar background-image, glassmorphism e bento grids alinhados com tendências 2025.
+
+## 2026-04-14 18:45 — Claude Sonnet 4.6
+
+### Arquivos modificados:
+- `components/admin/AdminUsersTab.tsx`
+- `pages/AdminPage.tsx`
+
+### O que foi feito:
+1. **AdminUsersTab.tsx** — Adicionado formulário de cadastro de usuário inline: botão "Novo usuário" toggle no header, formulário com campos nome, email, senha (toggle visibilidade), plano (select), CPF, telefone e ocupação. Chama `userService.createUser()` do `lib/supabase.ts`. Após criação com sucesso dispara `onUserCreated()` para refresh da lista. Estados locais: `showForm`, `form`, `creating`, `createError`, `createSuccess`.
+2. **AdminPage.tsx** — Adicionado prop `onUserCreated` ao `<AdminUsersTab>`: re-busca a tabela `User` do Supabase e atualiza `setUsers` sem recarregar a página inteira.
+
+### Por quê:
+Admin precisava de formulário de cadastro manual de usuários conectado ao Supabase.
+
+## 2026-04-14 18:10 — Claude Sonnet 4.6
+
+### Arquivos modificados:
+- `backend/services/unsplash_service.py` (novo)
+- `backend/core/config.py`
+- `backend/agents/orchestrator.py`
+- `backend/agents/prompts.py`
+
+### O que foi feito:
+1. **unsplash_service.py** — Novo serviço com 3 funções: `extract_design_keywords()` extrai keywords em inglês via gpt-4o-mini; `search_unsplash_images()` chama `GET /api.unsplash.com/search/photos`; `enrich_design_instruction()` é o pipeline completo. Fallback gracioso: retorna vazio se key ausente ou qualquer etapa falhar.
+2. **config.py** — Adicionado campo `unsplash_access_key` com leitura de `UNSPLASH_ACCESS_KEY` env var e fallback via Supabase (provider='unsplash').
+3. **orchestrator.py** — Dois pontos de injeção: Planner Loop (linha ~3121) e ReAct Loop (linha ~4198). Antes de chamar `_run_terminal_one_shot` do design_generator, chama `enrich_design_instruction()` e anexa o bloco de imagens ao `content`.
+4. **prompts.py** — Expandida a regra de imagens no `<render_rules>` do design_generator: instrui o LLM a usar URLs da seção "IMAGENS DISPONÍVEIS" diretamente em `<img src>` e a distribuir contextualmente.
+
+### Por quê:
+Integração com Unsplash API oficial para enriquecer designs com imagens reais. O agente extrai keywords do contexto do design via LLM leve, busca imagens relevantes e as injeta no prompt antes da geração do HTML.
+
+## 2026-04-14 22:10 — Claude Opus 4.6
+
+### Arquivos modificados:
+- `backend/agents/prompts.py`
+- `backend/agents/classifier.py`
+
+### O que foi feito:
+1. **prompts.py** — Reescreveu `CLASSIFIER_SYSTEM_PROMPT` para instruir o LLM a identificar lacunas de conhecimento reais e gerar perguntas dinâmicas type="choice" com opções concretas, option_details e helper_text. Inclui exemplos de quando perguntar (público-alvo, tom, estilo, contexto de uso) vs quando não perguntar (pedido claro/específico).
+2. **classifier.py** — Atualizou user message da chamada LLM para mencionar `clarification_questions` no formato esperado. Aumentou `max_tokens` de 600 para 1000 para acomodar perguntas estruturadas.
+
+### Por quê:
+O sistema de clarificação era rígido — só perguntava estilo visual (design) e ação de arquivo (file_transformation) via regex hardcoded. O LLM quase nunca gerava perguntas porque o prompt dizia "APENAS quando genuinamente impossível de inferir". Agora o classifier identifica lacunas que mudariam significativamente o resultado (público-alvo, tom, nível de profundidade, etc).
+
+---
+
+## 2026-04-14 17:45 — Claude Sonnet 4.6
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — Handler de `steps` SSE: heartbeat de execução atualiza o passo existente in-place em vez de criar nova linha. Extrai base do label removendo sufixo `— Xs...`; se último passo running tem mesmo base, só atualiza label. Caso contrário, comportamento original.
+
+### Por quê:
+Heartbeat a cada 5s adicionava nova linha no terminal, fazendo crescer indefinidamente. Agora mantém uma única linha com o tempo atualizado.
+
+## 2026-04-14 — Claude Opus 4.6 — Timeout de skills aumentado para 300s
+
+### Arquivos modificados:
+- `backend/agents/orchestrator.py`
+
+### O que foi feito:
+1. **orchestrator.py** — `_SKILL_TIMEOUT` de 120s → 300s. Skills como `a4_document_creator` precisam de mais tempo para gerar documentos longos (6+ páginas A4). Timeout de 120s causava falha.
+
+### Por quê:
+Execução real: `a4_document_creator` falhou com "Timeout de 120s" ao gerar apostila de 6 páginas sobre a República Velha. O LLM precisa gerar conteúdo para cada página — 120s é insuficiente.
+
+---
+
+## 2026-04-14 17:30 — Claude Sonnet 4.6
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **ArccoChat.tsx** — 3 ajustes visuais no painel Arcco Runtime (renderAgentActivityPanel):
+   - Card: opacity reduzida para ~70% (`rgba(18,18,23,0.70)`) + borda `border-white/[0.07]` + `backdrop-blur-sm`
+   - Label "Arcco Runtime": fonte ajustada para `text-[9px] font-light tracking-[0.36em] text-neutral-600`
+   - Espaçamento entre steps: `space-y-1.5` → `space-y-3`
+
+### Por quê:
+Solicitação do usuário: painel mais clean com 30% de transparência, fonte minimalista no label e mais respiro entre as linhas.
+
+
+## 2026-04-14 — Claude Opus 4.6 — Timeout + heartbeat para execute_python (300s)
+
+### Arquivos modificados:
+- `backend/agents/orchestrator.py`
+- `backend/agents/dispatcher.py`
+
+### O que foi feito:
+1. **orchestrator.py** — Adicionado `_PYTHON_TIMEOUT = 300.0` (5 min). Passado como `python_timeout` nas duas chamadas de `dispatch_direct_route` (planner loop e react loop).
+2. **dispatcher.py** — `dispatch_direct_route` agora aceita `python_timeout: float = 300.0`. O bloco `execute_python` foi reescrito para usar `exec_with_heartbeat_fn` (igual a `web_search` e `dynamic_skill`): envia heartbeat SSE a cada 5s mostrando tempo decorrido, timeout controlado de 300s, e tratamento de erro/timeout dedicado.
+
+### Por quê:
+O `execute_python` era a unica rota sem timeout nem heartbeat. Quando o E2B sandbox demorava (instalação de pacotes, processamento pesado), o SSE ficava sem eventos e o frontend podia fechar a conexao por inatividade, quebrando o fluxo. Agora envia heartbeat SSE ("Executando codigo Python - Ns...") mantendo a conexao viva, com timeout de 5 minutos.
+
+---
+
+## 2026-04-14 — Claude Opus 4.6 — Fix PDF export: per-slide screenshot + export CSS override
+
+### Arquivos modificados:
+- `backend/services/file_service.py`
+
+### O que foi feito:
+1. **generate_pdf_playwright()** — Reescrito: removido path Paged.js (dead code) e path screenshot+slice (full_page + fatia por vh). Agora usa `_capture_slide()` por elemento (igual ao PPTX) — captura cada `.slide` individualmente via `el.screenshot()`, imune a CSS do body.
+2. **_inject_export_css()** — Nova função helper. Injeta CSS override que remove `body { display:flex; padding:24px; overflow:hidden }` injetado pelo design_contract. Garante que slides fora da viewport não sejam clipados.
+3. Aplicado `_inject_export_css()` nas 3 funções de export: `generate_pdf_playwright`, `html_to_screenshot`, `html_to_pptx`.
+
+### Por quê:
+O `normalize_design_html()` (chamado em export.py) injeta CSS de design contract com `body { display:flex; align-items:center; justify-content:center; padding:24px; overflow:hidden }`. No preview do frontend esse CSS não é aplicado — o HTML é exibido cru. No export, esse CSS distorcia o layout: body flex centralizava slides com padding e clipava conteúdo com overflow:hidden. O screenshot+slice baseava-se em fatiar a imagem por vh pixels, o que falhava quando o body tinha padding/gaps. A captura per-slide via `el.screenshot()` captura as dimensões exatas do elemento independente do layout do body.
+
+---
+
+## 2026-04-14 — Claude Sonnet 4.6 — Feature: renderização de imagens da pesquisa Tavily no chat
+
+### Arquivos modificados:
+- `backend/services/search_service.py`
+- `backend/api/chat.py`
+- `lib/api-client.ts`
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **`search_service.py`** — Adicionado `"include_images": True` na chamada ao Tavily. Agora o Tavily retorna um array `images` com URLs de imagens relevantes à busca.
+2. **`chat.py`** — No modo normal com `web_search=True`: substituído `search_web_formatted()` por `search_web()` (raw dict). Extrai e normaliza URLs de imagem (str ou dict com `.url`), limita a 6. Emite evento SSE `search_images` com JSON das URLs após o `conversation_id`, antes do stream do LLM.
+3. **`api-client.ts`** — Adicionado `'search_images'` ao union type `ChatStreamEventType`.
+4. **`ArccoChat.tsx`** — Estado `searchImages: string[]` adicionado. Resetado a cada nova mensagem. Evento `search_images` recebido via SSE popula o estado. Renderização: strip horizontal scrollável com thumbnails `h-32` clicáveis (abre em nova aba), `onError` esconde imagens quebradas. Aparece alinhado à esquerda (lado do assistente) abaixo da resposta.
+
+### Por quê:
+Solicitação do usuário: aproveitar as imagens que o Tavily já retorna na pesquisa para enriquecer visualmente o chat.
+
+---
+
+## 2026-04-14 — Claude Sonnet 4.6 — Feature: efeito de digitação no modo chat
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **`processQueue`** — bifurcado por modo. No `!isAgentMode`, o chunk é iterado caractere por caractere com delay de 10–20ms/char. Se a fila acumular (resposta longa), o delay cai para 4ms/char automaticamente para evitar lag. No modo agente, comportamento original (chunk inteiro).
+
+### Por quê:
+No modo chat o backend enviava a resposta como um único chunk grande, resultando em aparição instantânea. O efeito de digitação melhora a percepção de resposta viva.
+
+---
+
+## 2026-04-14 — Claude Sonnet 4.6 — Feature: imagens da pesquisa web Tavily
+
+### Arquivos modificados:
+- `backend/services/search_service.py`
+- `backend/api/chat.py`
+- `lib/api-client.ts`
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **search_service.py** — Adicionado `"include_images": True` no body da chamada à API Tavily em `search_tavily()`.
+2. **chat.py** — Inicialização de `search_image_urls: list[str] = []`. Substituição do bloco de web search no modo normal: agora usa `search_web()` (que retorna dict bruto) ao invés de `search_web_formatted()`, extrai URLs de imagens do campo `images` do response Tavily (suporta formato str e dict), limita a 6 imagens, formata o texto manualmente e emite evento SSE `search_images` logo após o evento `conversation_id`.
+3. **api-client.ts** — Adicionado `'search_images'` ao union type `ChatStreamEventType`.
+4. **ArccoChat.tsx** — Estado `searchImages: string[]` adicionado; resetado em `handleSendMessage`; handler SSE para `type === 'search_images'` que faz parse do JSON e popula o estado; galeria de imagens renderizada acima do Spy Pages Result Card quando `searchImages.length > 0 && !isLoading`.
+
+### Por quê:
+Exibir imagens relevantes retornadas pela busca Tavily enriquece visualmente as respostas do modo chat com web search ativo.
+
+---
+
+## 2026-04-14 — Claude Opus 4.6 — Fix PDF multi-página: desativar Paged.js
+
+### Arquivos modificados:
+- `backend/services/file_service.py`
+
+### O que foi feito:
+1. **file_service.py** — Desativado o path do Paged.js em `generate_pdf_playwright()`. `use_paged` agora é sempre `False`. O `page.pdf()` do Playwright usa print mode do Chromium, que ignora o layout screen-mode do HTML e gera apenas 1 página distorcida. O path de screenshot+slice (full_page screenshot → Pillow slice → reportlab) é confiável para todos os formatos e respeita `slide_indices` corretamente.
+
+### Por quê:
+PDF exportado gerava apenas 1 página distorcida mesmo selecionando múltiplas páginas no ExportDialog. O Paged.js interceptava quando `slide_indices=null` (todas as páginas) e usava `page.pdf()` em print mode.
+
+---
+
+## 2026-04-14 — Claude Sonnet 4.6 — Polish: melhorias sutis de UX na tela principal
+
+### Arquivos modificados:
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **Balões do usuário** — `bg-[#222] shadow-md` → `bg-white/[0.07] border border-white/[0.06]`. Mais leve e coerente com o design system.
+2. **Chips de sugestão** — removido `opacity-60` global. Cada chip entra individualmente com fade+slide staggered (delay 0/90/180ms), estilo refinado com `bg-white/[0.04]`.
+3. **Cursor de streaming** — `▍` piscante (indigo) ao final da resposta enquanto o assistente gera texto.
+4. **Placeholder** — `"Digite sua mensagem... (Shift+Enter para nova linha)"` → `"Escreva aqui..."`.
+5. **Emblema da tela inicial** — `animate-pulse` substituído por animação `arccofloat` (translateY suave, 4s ease-in-out infinite).
+6. Keyframes CSS (`arccofloat`, `arccocursorhide`, `arccochiphide`) injetados via `<style>` no return.
+
+### Por quê:
+Polimento visual solicitado após análise da tela principal.
+
+---
+
+## 2026-04-14 — Claude Opus 4.6 — ExportDialog estilo Canva com seleção de páginas
+
+### Arquivos modificados:
+- `components/chat/ExportDialog.tsx` (novo)
+- `components/chat/DesignPreviewModal.tsx`
+- `lib/api-client.ts`
+- `backend/api/export.py`
+- `backend/services/file_service.py`
+
+### O que foi feito:
+1. **`ExportDialog.tsx`** — Novo modal de export estilo Canva: grid de thumbnails por slide (iframe 160px escalado), checkboxes individuais, "Todas"/"Limpar", preview único para single-page, badge por formato, botão "Baixar N páginas".
+2. **`DesignPreviewModal.tsx`** — Botões PDF/PPTX/PNG/JPEG abrem ExportDialog; `handleExport()` recebe `selectedIndices`; retorno reestruturado em Fragment.
+3. **`lib/api-client.ts`** — `exportHtml()` ganha `slideIndices?: number[] | null`.
+4. **`backend/api/export.py`** — `ExportHtmlRequest` ganha `slide_indices: Optional[list[int]]`; passado para as 3 funções.
+5. **`backend/services/file_service.py`** — `generate_pdf_playwright`, `html_to_pptx` e `html_to_screenshot` suportam `slide_indices`: filtra slices/índices pelos selecionados; Paged.js desativado quando `slide_indices` presente.
+
+### Por quê:
+Usuário pediu dialog de seleção de páginas similar ao Canva, com preview visual antes de baixar.
+
+
+## 2026-04-14 — Claude Sonnet 4.6 — Feature: Cadastro multi-step interativo
+
+### Arquivos modificados:
+- `pages/RegisterPage.tsx`
+
+### O que foi feito:
+1. **RegisterPage.tsx** — Reescrito completamente. Substituiu o formulário único por fluxo multi-step com 4 etapas: email → nome → WhatsApp → senha → sucesso.
+2. Barra de progresso segmentada (4 segmentos, preenchimento animado com `transition-all duration-500`).
+3. Contador de etapas "1 / 4" no canto superior direito.
+4. Botão "Voltar" inteligente: retorna ao step anterior, ou ao login se estiver no step 1.
+5. Cada step tem ícone próprio, título e subtítulo. Troca de step dispara re-animação via `key` no React.
+6. Animações CSS (`registerStepIn`, `registerPopIn`) injetadas via `<style>` inline — sem dependências externas.
+7. `autoFocus` em cada campo para melhor UX.
+8. `onKeyDown` com Enter avança o step automaticamente.
+9. Campo "ocupação" mantido no step de nome como campo opcional.
+10. Indicador de força de senha (Fraca / Média / Forte) com barra animada.
+11. Campo "confirmar senha" no step de password.
+12. Tela de sucesso com animação `popIn` no ícone de check.
+13. Toda lógica de validação e submissão ao Supabase preservada da versão anterior.
+
+### Por quê:
+Melhoria de UX solicitada pelo usuário — substituir o card único por um fluxo guiado passo a passo, tornando o cadastro mais interativo e menos intimidador.
+
+## 2026-04-14 — Claude Opus 4.6 — Fix: background correto no render de designs
+
+### Arquivos modificados:
+- `components/chat/DesignGallery.tsx`
+- `components/chat/DesignPreviewModal.tsx`
+
+### O que foi feito:
+1. **`LazyIframe` container** — `bg-white` → `bg-[#0d0d12]`. O branco do container aparecia como borda/fundo quando o slide não preenchía 100% (ex: margem padrão do browser de 8px).
+2. **`LazyIframe` sandbox** — `"allow-scripts"` → `"allow-scripts allow-same-origin"`. Consistente com o modal (que já usava `allow-same-origin`).
+3. **`thumbnailHtml()`** — Injeta `<style>html,body{margin:0;padding:0;overflow:hidden;}</style>` antes de `</head>` para TODOS os designs (single e multi-slide). Elimina margem padrão de 8px do browser que expunha fundo branco.
+4. **`slideHtml()`** — Mesma injeção de reset, garantindo comportamento igual no modal.
+5. **`iframeSrc` (single-slide no modal)** — Injeta reset também quando `!multiSlide` (antes usava `normalizeHtmlDocument` puro sem reset).
+
+### Por quê:
+O browser aplica `body { margin: 8px }` por padrão. Se o LLM gera HTML sem esse reset, o slide fica deslocado 8px e a cor de fundo do `body` (branco browser default) aparece ao redor, fazendo o preview mostrar cor diferente da gerada. O container `bg-white` agravava o problema.
+
+---
+
+## 2026-04-14 — Claude Opus 4.6 — Integração Paged.js para PDF paginado
+
+### Arquivos modificados:
+- `backend/services/file_service.py`
+
+### O que foi feito:
+1. **`import re`** adicionado aos imports do módulo.
+2. **`_PAGED_JS_CDN`** — constante com URL do CDN do Paged.js (`unpkg.com/pagedjs`).
+3. **`_should_use_paged_js(html, page_size)`** — detecta automaticamente quando usar Paged.js:
+   - `page_size` é `a4-portrait`, `a4-landscape`, `letter-portrait` ou `letter-landscape`
+   - OU o HTML tem `width: 794px` + `height: 1xxx px` (gerado pelo `a4_document_creator`)
+4. **`_inject_paged_js(html, vw, vh)`** — injeta no `<head>` do HTML:
+   - CSS `@page { size: Wpx Hpx; margin: 0; }`
+   - `section.slide, .slide { page-break-after: always !important; }`
+   - `<script src="...paged.polyfill.js">` (CDN unpkg)
+5. **`generate_pdf_playwright._sync_render()`** — dois caminhos automáticos:
+   - **Paged.js path** (A4/paginado, `slide_index=None`): injeta polyfill, aguarda `.pagedjs_page` no DOM (timeout 15s), chama `page.pdf()` — garante paginação correta com margens e cabeçalhos
+   - **Screenshot+slice path** (widescreen, social media, ou fallback): comportamento anterior intacto
+   - Se Paged.js falhar por qualquer motivo (rede, timeout), faz fallback automático para screenshot+slice com `logger.warning`.
+
+### Por quê:
+Apostilas e documentos A4 gerados pelo `a4_document_creator` possuem cabeçalhos, rodapés e margens que precisam de paginação correta ao exportar como PDF. Paged.js (CSS Paged Media polyfill) garante quebras de página fiéis ao design, sem distorção. Apresentações widescreen e social media continuam usando o path de screenshot+slice.
+
+## 2026-04-14 — Claude Opus 4.6 — Reorganização de skills + atualização de engenharia de contexto
+
+### Arquivos modificados:
+- `backend/skills/slide_generator.py`
+- `backend/skills/slide_presentation_generator.py`
+- `backend/skills/a4_booklet_generator.py`
+- `backend/skills/instagram_post_generator.py`
+- `backend/skills/reels_story_generator.py`
+- `backend/agents/prompts.py`
+
+### O que foi feito:
+1. **5 skills antigas desativadas** — keywords trocadas para `*_internal` (nunca matcham queries reais):
+   `slide_generator`, `slide_presentation_generator`, `a4_booklet_generator`, `instagram_post_generator`, `reels_story_generator`. Eram supersedidas pelas novas skills diretas mas competiam pelos mesmos keywords, causando ambiguidade no planner.
+
+2. **8 skills ativas** após a reorganização:
+   `presentation_slides_creator` (1920×1080), `a4_document_creator` (794×1123), `instagram_carousel_creator` (1080×1080), `story_reel_creator` (1080×1920), `static_design_generator`, `web_form_operator`, `local_lead_extractor`, `multi_doc_investigator`.
+
+3. **PLANNER_SYSTEM_PROMPT** — Seção `available_tools` e `decision_tree` atualizadas:
+   - `design_generator` agora é só para peças únicas via `static_design_generator → design_generator`
+   - Adicionados entries explícitos para `presentation_slides_creator`, `a4_document_creator`, `instagram_carousel_creator`, `story_reel_creator` com `is_terminal=true`
+   - `anti_patterns` atualizados: removido exemplo errado de `slide_generator → design_generator`; adicionados exemplos corretos
+
+4. **CHAT_SYSTEM_PROMPT** — `<tool id="ask_design_generator">` e `<tool id="dynamic_skills">` atualizados com routing explícito para as novas skills diretas.
+
+### Por quê:
+Com 13 skills carregadas e 5 delas com keywords idênticas às novas, o planner tinha ambiguidade severa: para um pedido de "apresentação", podia escolher `slide_generator`, `slide_presentation_generator` ou `presentation_slides_creator`. As novas skills geram HTML direto com `section.slide` e dimensões explícitas — alinhadas com o export PDF universal. As antigas usam pipeline canvas/JSON intermediário desnecessário.
+
+---
+
+## 2026-04-14 — Claude Opus 4.6 — PDF universal: full_page screenshot + fatiamento Pillow
+
+### Arquivos modificados:
+- `backend/services/file_service.py`
+
+### O que foi feito:
+1. **generate_pdf_playwright** — Reescrita completa. Removida toda detecção de classes CSS (`.slide`, `.format-a4`, etc.) e o branch `page.pdf()`. Nova lógica: `page.screenshot(full_page=True)` captura o documento inteiro em modo tela → Pillow fatia a imagem em segmentos de `vh` pixels cada → reportlab monta um PDF multi-página. `slide_index` seleciona um segmento específico pelo índice; `None` = todas as páginas. Funciona para qualquer HTML independente de estrutura.
+
+### Por quê:
+A abordagem anterior dependia de nomes de classe CSS específicos (`.slide`, `.slide-container`, `.format-a4`) para decidir qual branch de export usar. Cada novo tipo de documento gerado pelo LLM exigiria uma nova patch. A abordagem universal elimina essa fragilidade: screenshot em modo tela + fatiamento por viewport height funciona para qualquer estrutura HTML.
+
+---
+
+## 2026-04-14 — Claude Opus 4.6 — Persistência de artefatos nas conversas
+
+### Arquivos modificados:
+- `migrations/008_messages_metadata.sql` (novo)
+- `backend/api/chat.py`
+- `lib/conversationApi.ts`
+- `pages/ArccoChat.tsx`
+
+### O que foi feito:
+1. **008_messages_metadata.sql** — Criada migration SQL que adiciona coluna `metadata JSONB NULL` à tabela `messages`. Armazena designs, text_doc e files gerados pelo assistente.
+2. **chat.py** — `_save_conversation_and_update_memory()` aceita `artifact_metadata` e salva em `metadata` do registro da mensagem assistente. No `generate()`: coletores `collected_designs`, `collected_text_doc`, `collected_files` acumulam artefatos durante o stream (branches nos eventos SSE `design_artifact`, `text_doc`, `file_artifact`). Ao final, monta o dict e passa para `_save_conversation_and_update_memory()`.
+3. **conversationApi.ts** — Adicionada interface `MessageArtifactMetadata` e campo `metadata?` em `MessageRecord`.
+4. **ArccoChat.tsx** — No `useEffect` de carregamento de conversa: adicionados `setDesignArtifact(null)` e `setTextDocArtifact(null)` ao reset. Após `getMessages()`, escaneia todas as mensagens `assistant` com `metadata`, acumula designs únicos e files, pega o último textDoc, e restaura os states com `setDesignArtifact` / `setTextDocArtifact` / `setGeneratedFiles`.
+
+### Por quê:
+Artefatos (designs, documentos, arquivos) eram estado React volátil — perdidos ao recarregar ou trocar de conversa. A coluna `metadata JSONB` persiste esses dados no Supabase junto às mensagens, permitindo restauração completa dos cards ao retornar a qualquer conversa.
+
+### AÇÃO NECESSÁRIA (manual):
+Executar no Supabase SQL Editor:
+```sql
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS metadata JSONB NULL;
+```
+
+---
+
+## 2026-04-14 — Claude Opus 4.6 — Fix PDF A4: slide único + conversão px→pt
+
+### Arquivos modificados:
+- `backend/services/file_service.py`
+
+### O que foi feito:
+1. **generate_pdf_playwright** — Condição alterada de `slide_count > 1` para `slide_count >= 1`: documentos com um único `.slide` agora usam `el.screenshot()` + reportlab em vez de `page.pdf()` (modo impressão). Isso garante renderização idêntica ao preview e ao PNG.
+2. **_RL_SIZES "widescreen"** — Conversão de pixels para pontos: `(vw * 0.75, vh * 0.75)` em vez de `(vw, vh)`. Com 96 DPI de tela, 1pt = 72/96 px = 0.75px. Para A4 (794×1123px): resultado = 595.5×842.2pts = 210×297mm. PDF agora tem página física correta em todos os casos, mesmo sem `page_size` explícito.
+
+### Por quê:
+- `slide_count=1` caia no `else` que usava `page.pdf()` (modo impressão), que renderiza diferente do modo tela → distorção visual.
+- `(vw, vh)` usados diretamente como pontos criavam páginas desproporcional­mente grandes (794pts = 280mm, não 210mm). Convertendo por 0.75, o PDF tem dimensão física correta em todos os formatos.
+
+---
+
+## 2026-04-14 — Claude Opus 4.6 — UI: remove botões HTML do modal de design
+
+### Arquivos modificados:
+- `components/chat/DesignPreviewModal.tsx`
+
+### O que foi feito:
+1. **DesignPreviewModal.tsx** — Removidos botões "Copiar HTML" e "Baixar HTML", o separador entre eles e os botões de export, as funções `handleCopy` e `handleDownloadHtml`, e o import de `Copy` do lucide-react. Top bar agora exibe apenas: [PDF] [PPTX] [PNG] [JPEG] [×].
+
+### Por quê:
+O usuário pediu para simplificar a interface: os botões de export de arquivo (PDF, PPTX, PNG, JPEG) são suficientes; os botões HTML são desnecessários para uso final.
+
+---
+
+## 2026-04-14 — Claude Opus 4.6 — Fix crítico: el.screenshot() substitui _SHOW_SLIDE_JS + clip manual
+
+### Arquivos modificados:
+- `backend/services/file_service.py`
+
+### O que foi feito:
+1. **file_service.py** — Removido `_SHOW_SLIDE_JS` (que usava `position:fixed` — causava corte de conteúdo). Adicionada função `_capture_slide()` que usa `el.screenshot()` (Playwright). Para slides ocultos (carrossel), o novo `_REVEAL_SLIDE_JS` revela o elemento no fluxo natural (sem `position:fixed`) antes de capturar. As 3 funções de export (`generate_pdf_playwright`, `html_to_screenshot`, `html_to_pptx`) agora usam `_capture_slide()` em vez do loop antigo com `_SHOW_SLIDE_JS` + `page.screenshot(full_page=False)`.
+
+### Por quê:
+A abordagem anterior (`_SHOW_SLIDE_JS` com `position:fixed; top:0; left:0` + `page.screenshot(full_page=False)`) cortava o conteúdo lateralmente ("comendo a lateral"). Root cause: `page.screenshot(clip=bbox)` exige que a área clip esteja dentro do viewport; `el.screenshot()` rola o elemento automaticamente e captura suas dimensões exatas, independente de posição na página. Validado: slides de 794×1123px capturados como 794×1123px com MediaBox correto no PDF.
+
+---
+
+## 2026-04-14 — Claude Opus 4.6 — Export com viewport explícito + fix _SHOW_SLIDE_JS
+
+### Arquivos modificados:
+- `backend/api/export.py`
+- `backend/services/file_service.py`
+- `lib/api-client.ts`
+- `components/chat/DesignPreviewModal.tsx`
+
+### O que foi feito:
+1. **export.py** — Adicionados campos `viewport_width` e `viewport_height` em `ExportHtmlRequest`. Repassados para `generate_pdf_playwright`, `html_to_pptx` e `html_to_screenshot`.
+2. **file_service.py** — Nas 3 funções de export, o viewport explícito tem prioridade máxima sobre `page_size`/`canvas_preset`. Fix no `_SHOW_SLIDE_JS`: reseta `body` e `html` margin/padding para 0, removido `s.style.width = '100%'` (preserva CSS original do slide — ex: `width: 794px`).
+3. **api-client.ts** — `exportHtml()` recebe `viewportWidth` e `viewportHeight` e os envia como `viewport_width`/`viewport_height`.
+4. **DesignPreviewModal.tsx** — `handleExport` passa `viewport.width` e `viewport.height` ao chamar `agentApi.exportHtml()`.
+
+### Por quê:
+`inferExportParams` usava comparação exata de pixels (ex: `=== 1123`). Se o LLM gerasse `height: 1120px`, a comparação falhava e o export usava o default widescreen (paisagem 1920×1080) para um documento A4 retrato. Com viewport explícito, o backend usa exatamente as dimensões detectadas no preview — sem depender de mapeamento fixo.
+
+## 2026-04-14 — Claude Opus 4.6 — Fix export PDF: viewport widescreen corrigido para 1920×1080
+
+### Arquivos modificados:
+- `backend/services/file_service.py`
+
+### O que foi feito:
+1. **file_service.py** — Alterado `_PAGE_VIEWPORTS["widescreen"]` de `(1280, 720)` para `(1920, 1080)`. O `_RL_SIZES["widescreen"]` já era dinâmico (`(vw, vh)`), então se corrigiu automaticamente.
+
+### Por quê:
+As novas skills de apresentação geram slides com `section.slide { width: 1920px; height: 1080px }`. O Playwright renderizava com viewport 1280×720, causando `_SHOW_SLIDE_JS` setar `width: 100%` = 1280px — comprimindo conteúdo 1920px dentro de 1280px → desalinhamento visual no PDF. Com 1920×1080, `100% = 1920px` e `scale = 1.0` no reportlab → slides corretos.
+
+---
+
+## 2026-04-14 — Claude Opus 4.6 — Paginação correta de slides + export PDF/PPTX/PNG/JPEG
+
+### Arquivos modificados:
+- `components/chat/DesignGallery.tsx`
+- `components/chat/DesignPreviewModal.tsx`
+- `lib/api-client.ts`
+
+### O que foi feito:
+1. **DesignGallery.tsx** — Corrigido `detectViewport()`: adicionado como prioridade 1 a detecção de `section.slide { width: Npx; height: Npx }` via regex multiline. As novas skills usam esse padrão; sem esse fix, a Gallery escalava errado.
+2. **DesignPreviewModal.tsx** — Reescrito completamente:
+   - Adicionado `detectViewport()` (mesma lógica do Gallery) e `inferExportParams()` (mapeia viewport → page_size/canvas_preset para o backend).
+   - Substituído iframe fixo (maxWidth: 1200) por container com `ResizeObserver` + `Math.min(scaleX, scaleY) * 0.96` para fit proporcional.
+   - Iframe agora tem `width/height` iguais ao viewport + `transform: scale()` + `transformOrigin: top left` — sem overflow.
+   - Adicionado bezel visual: `borderRadius: 12, boxShadow: '0 24px 80px rgba(0,0,0,0.75), 0 0 0 1px ...'`.
+   - `key={currentIndex-slideIndex}` no iframe garante remount + re-execução do JS de isolamento ao navegar.
+   - Dots de slide agora ficam com largura animada (dot ativo = píula 5×2, inativo = círculo 2×2).
+   - Adicionados botões de export: PDF, PPTX, PNG, JPEG com loading state individual.
+3. **api-client.ts** — Adicionado método `exportHtml()` que chama `POST /api/agent/export-html` e retorna `Blob`. Multi-slide PNG/JPEG retorna ZIP automaticamente.
+
+### Por quê:
+`detectViewport()` não lia `section.slide { width: Npx }` → thumbnails e modal escalavam incorretamente. O iframe do modal não tinha escala CSS → slides de 1920px transbordavam. Usuário solicitou export integrado ao modal.
+
+---
+
+## 2026-04-14 — Claude Opus 4.6 — Skills de alta qualidade visual para 4 formatos de design
+
+### Arquivos criados:
+- `backend/skills/presentation_slides_creator.py`
+- `backend/skills/instagram_carousel_creator.py`
+- `backend/skills/story_reel_creator.py`
+- `backend/skills/a4_document_creator.py`
+
+### Arquivos modificados:
+- `backend/agents/orchestrator.py`
+
+### O que foi feito:
+1. **presentation_slides_creator.py** — Skill que gera apresentações 16:9 (1920×1080px) em HTML de alta qualidade. Chama design_generator com prompt ultra-específico: tema dark premium (#0F172A + #3B82F6), Inter 800, barra lateral azul nos slides de conteúdo, número gigante para slides de dados. Max 8000 tokens, 90s timeout.
+2. **instagram_carousel_creator.py** — Skill que gera carrosséis Instagram (1080×1080px por frame). Poppins 900, hook impactante no frame 1, 1 dica por frame, CTA no final, paleta dark ou gradiente vibrante. Max 6000 tokens, 75s.
+3. **story_reel_creator.py** — Skill que gera Stories/Reels verticais (1080×1920px). Inter 800, max 3 elementos por frame, indicador de sequência (dots) no topo, safe area 120px top/bottom, SEM animações CSS. Max 6000 tokens, 75s.
+4. **a4_document_creator.py** — Skill que gera documentos A4 (794×1123px por página). Source Sans 3, header azul (#1E40AF), hierarquia tipográfica clara, boxes de destaque (#EFF6FF + borda #2563EB), footer com numeração, clean para export PDF. Max 8000 tokens, 90s.
+5. **orchestrator.py — Planner loop e ReAct loop**: adicionado `elif _looks_like_design_html()` após o bloco `_is_design_source_json` em ambos os handlers `dynamic_skill`. Skills que retornam HTML diretamente (as 4 novas) têm seu HTML emitido como `design_artifact` sem conversão adicional.
+
+### Por quê:
+As skills design-source existentes geravam JSON procedural básico (sem LLM) que era convertido por auto_render em HTML genérico. As novas skills usam o design_generator (Claude) com prompts visuais ultra-específicos para cada formato, produzindo HTML de alta qualidade com tipografia, paleta, hierarquia e layout profissional — pronto para preview imediato no DesignGallery do chat.
+
+---
+
+## 2026-04-14 — Claude Opus 4.6 — Corrigir pipeline design-source: auto-render + sanitização de sentinel
+
+### Arquivos modificados:
+- `backend/agents/orchestrator.py`
+
+### O que foi feito:
+1. **orchestrator.py** — Adicionados 4 helpers antes de `_emit_design_artifact`:
+   - `_DESIGN_SOURCE_SCHEMA`, `_SENTINEL_STRINGS`: constantes de controle.
+   - `_sanitize_incoming_messages()`: limpa `__ARCCO_DESIGN_ARTIFACT__` do histórico recebido do frontend antes de usar.
+   - `_is_design_source_json()`: detecta JSON `arcco.design-source/v1`.
+   - `_summarize_design_source()`: gera resumo compacto para accumulated_context.
+   - `_auto_render_design_source()`: chama o design_generator para converter design-source JSON em HTML visual.
+2. **orchestrator.py — `_compact_context_entry()`**: adicionado case `dynamic_skill` — se o resultado for design-source JSON, usa `_summarize_design_source()` em vez de despejar o JSON bruto no contexto do supervisor.
+3. **orchestrator.py — `orchestrate_and_stream()` entry**: chama `_sanitize_incoming_messages(messages)` logo após o import local, antes de extrair `user_intent`.
+4. **orchestrator.py — Planner loop (dynamic_skill success)**: após confirmar sucesso, verifica `_is_design_source_json()`. Se sim, chama `_auto_render_design_source()` e emite `design_artifact`. Retorna imediatamente (terminal).
+5. **orchestrator.py — ReAct loop (dynamic_skill success)**: mesma lógica de auto-render antes da checagem `artifact_terminal`.
+
+### Por quê:
+Skills `a4_booklet_generator`, `slide_presentation_generator`, `instagram_post_generator` e `reels_story_generator` retornam `arcco.design-source/v1` JSON, não HTML. Sem esse fix, o supervisor recebia o JSON bruto no contexto, não sabia o que fazer com ele, copiava o sentinel `__ARCCO_DESIGN_ARTIFACT__` literalmente no texto da resposta, e o frontend mostrava o sentinel como texto no chat. Agora o pipeline detecta o JSON, converte para HTML via design_generator e emite o artefato visual corretamente.
+
+---
+
 ## 2026-04-14 23:30 — Claude Opus 4.6 — Restaurar preview visual de designs no chat
 
 ### Arquivos modificados:

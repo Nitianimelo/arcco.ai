@@ -52,13 +52,14 @@ from backend.skills import loader as skills_loader
 logger = logging.getLogger(__name__)
 
 # ── Timeout para ferramentas pesadas (browser, deep_research) ────────────────
-_BROWSER_TIMEOUT = 60.0   # segundos
-_SEARCH_TIMEOUT = 30.0    # segundos
-_HEARTBEAT_INTERVAL = 5.0 # segundos
-_SUPERVISOR_TIMEOUT = 60.0
-_SKILL_TIMEOUT = 60.0
-_SPECIALIST_TIMEOUT = 90.0
-_TERMINAL_TIMEOUT = 90.0
+_BROWSER_TIMEOUT = 120.0   # segundos
+_SEARCH_TIMEOUT = 45.0     # segundos
+_HEARTBEAT_INTERVAL = 5.0  # segundos
+_SUPERVISOR_TIMEOUT = 120.0
+_SKILL_TIMEOUT = 300.0     # skills podem gerar docs longos (a4_document_creator 6+ pags)
+_SPECIALIST_TIMEOUT = 180.0
+_TERMINAL_TIMEOUT = 180.0
+_PYTHON_TIMEOUT = 300.0    # E2B sandbox pode demorar — 5 min
 _MAX_CONTEXT_ENTRY_CHARS = 4000
 _MAX_ACCUMULATED_CONTEXT_CHARS = 24000
 
@@ -1156,6 +1157,13 @@ def _compact_context_entry(*, route: str, content: Any) -> str:
             return "Arquivo modificado com sucesso:\n" + "\n".join(f"[{label}]({url})" for label, url in file_links[:5])
         return _truncate_semantic_text(text, max_chars=1800)
 
+    if route == "dynamic_skill":
+        if _is_design_source_json(text):
+            # Design-source JSON não deve ser jogado bruto no contexto do supervisor.
+            # Retorna um resumo compacto para não poluir o accumulated_context.
+            return _summarize_design_source(text)
+        return _truncate_semantic_text(text, max_chars=1800)
+
     return _truncate_semantic_text(text, max_chars=_MAX_CONTEXT_ENTRY_CHARS)
 
 
@@ -1204,6 +1212,107 @@ def _render_local_design_if_possible(raw_context: str) -> str | None:
         return render_design_template_from_context(raw_context)
     except Exception:
         logger.exception("[ORCHESTRATOR] Falha ao renderizar design determinístico local.")
+        return None
+
+
+_DESIGN_SOURCE_SCHEMA = "arcco.design-source/v1"
+_SENTINEL_STRINGS = ("__ARCCO_DESIGN_ARTIFACT__",)
+
+
+def _sanitize_incoming_messages(messages: list[dict]) -> list[dict]:
+    """Remove/substitui sentinels internos que o frontend armazena como conteúdo de mensagem."""
+    cleaned = []
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            needs_clean = any(s in content for s in _SENTINEL_STRINGS)
+            if needs_clean:
+                for s in _SENTINEL_STRINGS:
+                    content = content.replace(s, "[design visual gerado pelo agente]")
+                msg = {**msg, "content": content}
+        cleaned.append(msg)
+    return cleaned
+
+
+def _is_design_source_json(text: str) -> bool:
+    """Retorna True se o texto é um JSON arcco.design-source/v1 válido."""
+    t = (text or "").strip()
+    if not t.startswith("{"):
+        return False
+    try:
+        payload = json.loads(t)
+        return payload.get("schema_version") == _DESIGN_SOURCE_SCHEMA
+    except Exception:
+        return False
+
+
+def _summarize_design_source(text: str) -> str:
+    """Retorna um resumo legível do design-source JSON para o accumulated_context."""
+    try:
+        payload = json.loads(text)
+        kind = payload.get("kind", "design")
+        title = payload.get("title", "Design")
+        frames = payload.get("frames", [])
+        canvas = payload.get("canvas", {})
+        w = canvas.get("width", "?")
+        h = canvas.get("height", "?")
+        return (
+            f"Design-source gerado: '{title}' ({kind}) — {len(frames)} frame(s), "
+            f"canvas {w}×{h}px. Schema: {_DESIGN_SOURCE_SCHEMA}."
+        )
+    except Exception:
+        return _truncate_semantic_text(text, max_chars=400)
+
+
+async def _auto_render_design_source(
+    design_source_json: str,
+    *,
+    user_id: str | None,
+) -> str | None:
+    """
+    Converte um design-source JSON em HTML chamando o design_generator.
+    Retorna o HTML extraído ou None se falhar.
+    """
+    try:
+        payload = json.loads(design_source_json)
+        kind = payload.get("kind", "design")
+        title = payload.get("title", "Design")
+        frames = payload.get("frames", [])
+        canvas = payload.get("canvas", {})
+
+        kind_labels = {
+            "slide_presentation": "apresentação de slides widescreen (16:9)",
+            "a4_booklet": "apostila A4 (formato retrato)",
+            "instagram_post": "post Instagram quadrado (1:1)",
+            "reels_story": "stories/reels vertical (9:16)",
+        }
+        kind_label = kind_labels.get(kind, kind)
+
+        instruction = (
+            f"Crie um HTML completo e visualmente rico representando esta {kind_label}: '{title}'. "
+            f"Canvas: {canvas.get('width')}×{canvas.get('height')}px, {len(frames)} frame(s)/página(s). "
+            f"Use o design-source abaixo como referência de conteúdo, estrutura, cores e layout. "
+            f"Gere um único documento HTML autocontido com CSS inline, sem dependências externas opcionais além de Google Fonts. "
+            f"Cada frame deve ser uma seção/slide visível separado.\n\n"
+            f"Design-source:\n{design_source_json[:4000]}"
+        )
+
+        design_model = registry.get_model("design_generator") or "anthropic/claude-3.5-sonnet"
+        design_prompt = registry.get_prompt("design_generator")
+        design_tools = registry.get_tools("design_generator")
+
+        temp_msgs = [{"role": "user", "content": instruction}]
+        result = await _run_terminal_one_shot(
+            temp_msgs,
+            design_model,
+            design_prompt,
+            design_tools,
+            user_id=user_id,
+        )
+        html = _extract_design_html(result)
+        return html
+    except Exception:
+        logger.exception("[ORCHESTRATOR] Falha ao renderizar design-source automaticamente.")
         return None
 
 
@@ -1904,6 +2013,10 @@ async def orchestrate_and_stream(
 
     from backend.agents.classifier import classify as classify_intent
 
+    # Limpa sentinels internos do frontend (e.g. __ARCCO_DESIGN_ARTIFACT__)
+    # que vazam para o histórico de conversação e confundem o supervisor.
+    messages = _sanitize_incoming_messages(messages)
+
     supervisor_prompt = registry.get_prompt("chat")
     supervisor_model = registry.get_model("chat") or model
     session_inventory_message = _build_session_inventory_message(session_id)
@@ -2546,6 +2659,7 @@ async def orchestrate_and_stream(
                                     search_timeout=_SEARCH_TIMEOUT,
                                     browser_timeout=_BROWSER_TIMEOUT,
                                     skill_timeout=_SKILL_TIMEOUT,
+                                    python_timeout=_PYTHON_TIMEOUT,
                                 ):
                                     if isinstance(event, dict) and "_dispatch" in event:
                                         dispatch_info = event["_dispatch"]
@@ -2921,6 +3035,24 @@ async def orchestrate_and_stream(
                                     yield sse("thought", f"Pesquisa profunda concluída para: {func_args.get('query', '')[:120]}")
                                 elif current_route == "dynamic_skill":
                                     yield sse("thought", f"Skill {current_func_name} executada com sucesso.")
+                                    # Auto-render: skills que retornam design-source/v1 (a4_booklet, slides, instagram, reels)
+                                    # devem ser convertidas em HTML pelo design_generator imediatamente.
+                                    if _is_design_source_json(str(specialist_result)):
+                                        yield sse("steps", "<step>Renderizando design visual...</step>")
+                                        rendered_html = await _auto_render_design_source(
+                                            str(specialist_result), user_id=user_id
+                                        )
+                                        if rendered_html:
+                                            async for artifact_event in _emit_design_artifact(rendered_html):
+                                                yield artifact_event
+                                            return
+                                    # Skills de alta qualidade visual (presentation_slides_creator, etc.)
+                                    # retornam HTML diretamente — emitir como design_artifact sem conversão.
+                                    elif _looks_like_design_html(str(specialist_result)):
+                                        yield sse("steps", "<step>Preview visual pronto.</step>")
+                                        async for artifact_event in _emit_design_artifact(str(specialist_result)):
+                                            yield artifact_event
+                                        return
                                     if step.is_terminal and route_semantics["artifact_terminal"]:
                                         local_rendered_design = _render_local_design_if_possible(str(specialist_result))
                                         if local_rendered_design:
@@ -2989,7 +3121,20 @@ async def orchestrate_and_stream(
                             elif route == "design_generator" and route_semantics["supports_local_design_render"]:
                                 design_context = _extract_visual_context_for_design(accumulated_context)
                                 local_rendered_design = _render_local_design_if_possible(design_context)
-                                content = f"Contexto Prévio:\n{design_context}\n\nInstruções: {func_args.get('instructions', '')}"
+                                _design_instruction = func_args.get("instructions", "")
+                                try:
+                                    from backend.services.unsplash_service import enrich_design_instruction
+                                    _unsplash_block = await enrich_design_instruction(
+                                        f"{func_args.get('title_hint', '')} {_design_instruction}"
+                                    )
+                                except Exception:
+                                    logger.warning("[ORCHESTRATOR] Falha ao enriquecer design com Unsplash (Planner). Continuando sem imagens.")
+                                    _unsplash_block = ""
+                                content = (
+                                    f"Contexto Prévio:\n{design_context}\n\n"
+                                    f"Instruções: {_design_instruction}"
+                                    f"{_unsplash_block}"
+                                )
                             else:
                                 content = json.dumps(func_args)
 
@@ -3653,6 +3798,7 @@ async def orchestrate_and_stream(
                             search_timeout=_SEARCH_TIMEOUT,
                             browser_timeout=_BROWSER_TIMEOUT,
                             skill_timeout=_SKILL_TIMEOUT,
+                            python_timeout=_PYTHON_TIMEOUT,
                         ):
                             if isinstance(event, dict) and "_dispatch" in event:
                                 dispatch_info = event["_dispatch"]
@@ -3943,6 +4089,23 @@ async def orchestrate_and_stream(
                             yield sse("thought", f"Falha na skill {func_name}.")
                         else:
                             yield sse("thought", f"Skill {func_name} executada com sucesso.")
+                            # Auto-render: skills que retornam design-source/v1 (a4_booklet, slides, instagram, reels)
+                            if _is_design_source_json(str(specialist_result)):
+                                yield sse("steps", "<step>Renderizando design visual...</step>")
+                                rendered_html = await _auto_render_design_source(
+                                    str(specialist_result), user_id=user_id
+                                )
+                                if rendered_html:
+                                    async for artifact_event in _emit_design_artifact(rendered_html):
+                                        yield artifact_event
+                                    return
+                            # Skills de alta qualidade visual (presentation_slides_creator, etc.)
+                            # retornam HTML diretamente — emitir como design_artifact sem conversão.
+                            elif _looks_like_design_html(str(specialist_result)):
+                                yield sse("steps", "<step>Preview visual pronto.</step>")
+                                async for artifact_event in _emit_design_artifact(str(specialist_result)):
+                                    yield artifact_event
+                                return
                             if route_semantics["artifact_terminal"]:
                                 local_rendered = _render_local_design_if_possible(str(specialist_result))
                                 if local_rendered:
@@ -4045,6 +4208,16 @@ async def orchestrate_and_stream(
                                     )
                             except Exception:
                                 logger.exception("[ORCHESTRATOR] Falha ao anexar contrato visual ao design_generator.")
+                        try:
+                            from backend.services.unsplash_service import enrich_design_instruction
+                            _unsplash_block = await enrich_design_instruction(
+                                f"{func_args.get('title_hint', '')} "
+                                f"{func_args.get('instructions', '')} "
+                                f"{func_args.get('design_direction', '')}"
+                            )
+                        except Exception:
+                            logger.warning("[ORCHESTRATOR] Falha ao enriquecer design com Unsplash (ReAct). Continuando sem imagens.")
+                            _unsplash_block = ""
                         content = (
                             f"Título sugerido: {func_args.get('title_hint', '')}\n"
                             "Instruções: Gere por padrão uma peça quadrada 1:1, alinhada, centralizada, "
@@ -4054,6 +4227,7 @@ async def orchestrate_and_stream(
                             f"Contexto: {func_args.get('content_brief', '')}\n"
                             f"Direção visual: {func_args.get('design_direction', '')}"
                             f"{guided_context}"
+                            f"{_unsplash_block}"
                         )
                     else:
                         step_message = "Processando..."

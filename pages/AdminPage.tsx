@@ -970,6 +970,7 @@ const PROVIDER_ICONS: Record<string, string> = {
   firecrawl: '🔥',
   e2b: '⚙️',
   e2b_api_key: '⚙️',
+  unsplash: '🖼️',
 };
 
 /** Exibe apenas inÃ­cio e fim da chave: "sk-abâ€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢ef12" */

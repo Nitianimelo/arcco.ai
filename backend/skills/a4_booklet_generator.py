@@ -30,10 +30,8 @@ SKILL_META = {
         "Cria a estrutura de design source para apostilas A4 em 300 DPI. "
         "Retorna páginas com elementos posicionados para renderização via Fabric.js."
     ),
-    "keywords": [
-        "apostila", "a4", "manual", "material didático", "material didatico",
-        "booklet", "documento a4", "diagramação a4", "diagramacao a4",
-    ],
+    # Desativado: supersedido por a4_document_creator (HTML direto).
+    "keywords": ["a4_canvas_source_internal"],
     "parameters": {
         "type": "object",
         "properties": {

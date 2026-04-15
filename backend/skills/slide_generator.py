@@ -59,11 +59,9 @@ SKILL_META = {
         "Use ANTES do design_generator para apresentações de alto impacto, pitch decks e relatórios visuais. "
         "O JSON gerado é passado automaticamente ao design_generator para renderizar o HTML final."
     ),
-    "keywords": [
-        "slide", "slides", "apresentação", "apresentacao", "pitch", "deck",
-        "powerpoint", "pptx", "keynote", "palestra", "deck de vendas", "slideshow",
-        "carrossel", "carousel", "instagram"
-    ],
+    # Desativado: supersedido por presentation_slides_creator (HTML direto).
+    # Manter para uso interno quando pipeline JSON→design_generator for preferível.
+    "keywords": ["slide_json_structure_internal"],
     "parameters": {
         "type": "object",
         "properties": {

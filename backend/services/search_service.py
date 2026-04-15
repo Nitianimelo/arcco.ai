@@ -22,6 +22,7 @@ async def search_tavily(query: str, api_key: str, max_results: int = 5) -> dict:
                 "query": query,
                 "search_depth": "basic",
                 "include_answer": True,
+                "include_images": True,
                 "max_results": max_results,
             },
         )

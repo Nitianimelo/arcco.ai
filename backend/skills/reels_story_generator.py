@@ -27,10 +27,8 @@ SKILL_META = {
         "Gera design source para formato vertical 1080x1920 (Reels e Stories), "
         "em sequência de frames quando necessário."
     ),
-    "keywords": [
-        "reels", "stories", "story", "instagram stories", "reel",
-        "vertical", "1080x1920", "conteúdo vertical", "conteudo vertical",
-    ],
+    # Desativado: supersedido por story_reel_creator (HTML direto).
+    "keywords": ["reels_canvas_source_internal"],
     "parameters": {
         "type": "object",
         "properties": {
